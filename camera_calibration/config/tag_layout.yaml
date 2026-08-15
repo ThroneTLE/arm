@@ -1,0 +1,38 @@
+schema_version: 2
+coordinate_convention:
+  id: tag_top_left_x_right_y_down_v1
+  origin: black_border_top_left
+  x_axis: top_left_to_top_right
+  y_axis: top_left_to_bottom_left
+  z_axis: x_cross_y_into_plane
+dictionary: DICT_APRILTAG_36h11
+tag_size_mm: 69.0
+workspace_frame: ruler_workspace
+camera_frame: camera_color_optical_frame
+workspace_plane_z_mm: 0.0
+calibration_tags:
+  100:
+    origin_mm:
+    - 0.0
+    - 0.0
+    - 0.0
+    yaw_deg: 0.0
+  101:
+    origin_mm:
+    - 98.57
+    - 0.0
+    - 0.0
+    yaw_deg: 0.0
+  102:
+    origin_mm:
+    - 0.0
+    - 108.43
+    - 0.0
+    yaw_deg: 0.0
+validation_tag:
+  id: 103
+  origin_mm:
+  - 98.6
+  - 108.4
+  - 0.0
+  yaw_deg: 0.0

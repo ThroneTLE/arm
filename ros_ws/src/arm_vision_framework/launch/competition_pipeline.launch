@@ -1,0 +1,13 @@
+<launch>
+  <arg name="config" default="$(find arm_vision_framework)/config/system_parameters.yaml"/>
+  <arg name="calibration" default="$(find arm_vision_framework)/config/calibration_parameters.yaml"/>
+
+  <node pkg="arm_vision_framework"
+        type="pipeline_node.py"
+        name="arm_vision_pipeline"
+        output="screen"
+        required="true">
+    <param name="config" value="$(arg config)"/>
+    <param name="calibration" value="$(arg calibration)"/>
+  </node>
+</launch>

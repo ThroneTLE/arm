@@ -1,0 +1,100 @@
+schema_version: 1
+metadata:
+  updated_at: '2026-08-15T10:01:16+08:00'
+  profile: astra_pro_algorithm_validation
+  source: /home/throne/workspaces/arm/camera_calibration/calibration_snapshots/latest/runtime_calibration.yaml
+  note: Astra Pro is only the current algorithm-validation camera.
+frames:
+  workspace: ruler_workspace
+  base: robot_base
+  gripper: tool0
+  camera_color: camera_color_optical_frame
+  camera_depth: camera_depth_optical_frame
+  object: target_can
+camera:
+  name: Astra Pro HD Camera
+  color:
+    valid: true
+    image_width: 1280
+    image_height: 720
+    pixel_format: MJPG
+    fps: 30
+    distortion_model: plumb_bob
+    camera_matrix:
+    - [1002.4182631621529, 0.0, 619.8671122479881]
+    - [0.0, 1015.3066916994853, 379.036007223375]
+    - [0.0, 0.0, 1.0]
+    distortion_coefficients:
+    - 0.1006132549156806
+    - 0.30287407254781873
+    - -0.006378222028906098
+    - -0.0066305631097934425
+    - -1.4838234189987225
+  depth:
+    valid: true
+    image_width: 640
+    image_height: 480
+    unit: millimeters_uint16
+    aligned_to_color: false
+    note: RGB-depth extrinsics are not calibrated; FoundationPose input is not ready.
+tag_map:
+  coordinate_convention:
+    id: tag_top_left_x_right_y_down_v1
+    origin: black_border_top_left
+    x_axis: top_left_to_top_right
+    y_axis: top_left_to_bottom_left
+    z_axis: x_cross_y_into_plane
+  dictionary: DICT_APRILTAG_36h11
+  tag_size_mm: 69.0
+  minimum_visible_tags: 1
+  max_rms_reprojection_error_px: 2.5
+  tags:
+    100: {origin_mm: [0.0, 0.0, 0.0], yaw_deg: 0.0}
+    101: {origin_mm: [98.57, 0.0, 0.0], yaw_deg: 0.0}
+    102: {origin_mm: [0.0, 108.43, 0.0], yaw_deg: 0.0}
+  validation_tag:
+    id: 103
+    origin_mm: [230.0, 0.0, 0.0]
+    yaw_deg: 0.0
+transforms:
+  workspace_from_base:
+    valid: false
+    description: Required only when robot base and workspace are not physically identical.
+    matrix:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  gripper_from_camera:
+    valid: false
+    description: Eye-in-hand result; p_gripper = T_gripper_camera * p_camera.
+    matrix:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  color_from_depth:
+    valid: false
+    description: Required to align Astra/OAK depth into the color optical frame.
+    matrix:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+fixed_camera_validation_reference:
+  valid: false
+  runtime_allowed_for_eye_in_hand: false
+  coordinate_convention: legacy_tag_center
+  reason: Preserved legacy reference; incompatible with the top-left-origin convention.
+  workspace_from_camera:
+  - [0.9984036709650452, 0.007659325389028561, 0.05595931145133483, 0.10773047843393391]
+  - [-0.02418501106928223, -0.8373631143884598, 0.5461118016498435, -0.39846898090977345]
+  - [0.05104111130354831, -0.5465934040914182, -0.835841166466844, 0.6636612406165089]
+  - [0.0, 0.0, 0.0, 1.0]
+quality:
+  intrinsic_rms_px: 0.5570756788032288
+  workspace_extrinsic_rms_px: 0.43022218308083626
+  workspace_extrinsic_max_error_px: 0.8766094227507759
+  validation_xy_median_error_mm: 2.1696857936395704
+  validation_xy_std_mm: [0.2776183891514344, 0.2760620896692181]
+  workspace_coordinate_convention_compatible: false

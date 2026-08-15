@@ -1,0 +1,38 @@
+schema_version: 2
+coordinate_convention:
+  id: tag_top_left_x_right_y_down_v1
+  origin: black_border_top_left
+  x_axis: top_left_to_top_right
+  y_axis: top_left_to_bottom_left
+  z_axis: x_cross_y_into_plane
+validation_tag_id: 103
+samples: 100
+expected_origin_mm:
+- 98.6
+- 108.4
+- 0.0
+median_estimate_mm:
+- -198.30798202278652
+- 17.548184112569782
+- 0.0
+mean_estimate_mm:
+- -198.31787333809854
+- 17.535842190679933
+- 0.0
+standard_deviation_mm:
+- 0.12904901904587945
+- 0.10118448576608559
+- 0.0
+median_error_xyz_mm:
+- -296.90798202278654
+- -90.85181588743022
+- 0.0
+median_error_xy_mm: 310.4970245250135
+median_error_3d_mm: 310.4970245250135
+localization_mode: dynamic_camera_pose_from_reference_tags
+reference_tag_ids:
+- 100
+- 101
+- 102
+reference_pose_rms_mean_px: 0.3868487568899392
+reference_pose_rms_max_px: 0.42683701205051416

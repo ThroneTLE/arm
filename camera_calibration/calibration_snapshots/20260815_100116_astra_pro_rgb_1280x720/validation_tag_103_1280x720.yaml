@@ -1,0 +1,24 @@
+validation_tag_id: 103
+samples: 100
+expected_center_mm:
+- 230.0
+- 0.0
+- 0.0
+median_estimate_mm:
+- 232.1649078056584
+- 0.143911904027072
+- 0.0
+mean_estimate_mm:
+- 232.22235945428548
+- 0.1927570703335897
+- 0.0
+standard_deviation_mm:
+- 0.2776183891514344
+- 0.2760620896692181
+- 0.0
+median_error_xyz_mm:
+- 2.1649078056584017
+- 0.143911904027072
+- 0.0
+median_error_xy_mm: 2.1696857936395704
+median_error_3d_mm: 2.1696857936395704

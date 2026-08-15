@@ -1,0 +1,17 @@
+# Python runtime artifacts
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# ROS/catkin generated workspaces
+/ros_ws/build/
+/ros_ws/devel/
+/ros_ws/install/
+/ros_ws/log/
+
+# Local editor settings
+/.vscode/
+
+# Large reference manuals are kept locally, outside source control.
+/docs/*.pdf
+/docs/*.PDF

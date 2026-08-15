@@ -1,0 +1,6 @@
+# rospy, sensor_msgs, and cv_bridge come from ROS Noetic.
+numpy>=1.17
+opencv-contrib-python>=4.7
+PyYAML>=5.3
+reportlab>=3.5
+# Ubuntu package: python3-pyqt5

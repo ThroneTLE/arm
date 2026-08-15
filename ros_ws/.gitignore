@@ -1,0 +1,7 @@
+/build/
+/devel/
+/install/
+**/__pycache__/
+*.py[cod]
+runs/
+src/arm_vision_framework/config/backups/

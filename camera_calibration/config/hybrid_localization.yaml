@@ -1,0 +1,32 @@
+schema_version: 1
+frames:
+  workspace: ruler_workspace
+  base: robot_base
+  gripper: tool0
+  camera: camera_color_optical_frame
+visual:
+  minimum_tags: 1
+  max_rms_reprojection_error_px: 2.5
+  tag_layout: tag_layout.yaml
+fallback:
+  hand_eye_calibrated: false
+  maximum_robot_pose_age_s: 0.25
+  workspace_from_base:
+    description: p_workspace = T_workspace_base * p_base
+    matrix:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  gripper_from_camera:
+    description: Placeholder only; replace after eye-in-hand calibration
+    matrix:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+simulation:
+  enabled: true
+  base_from_gripper_xyz_mm: [0.0, 0.0, 700.0]
+  base_from_gripper_rpy_deg: [180.0, 0.0, 0.0]
+  warning: Simulation output must never be sent to a real robot.

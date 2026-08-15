@@ -1,0 +1,39 @@
+schema_version: 1
+runtime:
+  rate_hz: 10.0
+  maximum_robot_pose_age_s: 0.25
+  log_level: INFO
+safety:
+  dry_run: true
+  allow_robot_motion: false
+  stop_on_localization_loss: true
+  maximum_target_jump_m: 0.05
+camera:
+  adapter: ros_topics
+  color_topic: /camera/color/image_raw
+  aligned_depth_topic: /camera/aligned_depth_to_color/image_raw
+  camera_info_topic: /camera/color/camera_info
+  depth_scale_to_meters: 0.001
+robot:
+  adapter: mock
+  state_pose_topic: /arm_vision/robot/state/tool_pose
+  target_pose_topic: /arm_vision/robot/command/target_pose
+  stop_service: /arm_vision/robot/stop
+segmentation:
+  backend: mock
+  weights: ''
+  target_classes: [can]
+  confidence_threshold: 0.5
+pose_estimation:
+  backend: mock
+  foundationpose_root: ''
+  mesh_path: ''
+  mesh_scale_to_meters: 1.0
+  require_aligned_depth: true
+localization:
+  visual_priority: true
+  use_robot_fallback: true
+outputs:
+  object_pose_topic: /arm_vision/object_pose
+  segmentation_mask_topic: /arm_vision/segmentation/mask
+  status_topic: /arm_vision/status

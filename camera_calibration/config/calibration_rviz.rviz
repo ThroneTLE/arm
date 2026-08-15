@@ -1,0 +1,114 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.45
+      Cell Size: 0.05
+      Class: rviz/Grid
+      Color: 150; 150; 150
+      Enabled: true
+      Name: Workspace plane
+      Normal Cell Count: 0
+      Offset: {X: 0, Y: 0, Z: 0}
+      Plane: XY
+      Plane Cell Count: 20
+      Reference Frame: ruler_workspace_rviz
+      Value: true
+    - Class: rviz/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+      Marker Scale: 0.12
+      Name: Coordinate frames
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Tree: {}
+      Update Interval: 0
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /camera_calibration/markers
+      Name: Tags and camera
+      Namespaces:
+        camera_frustum: true
+        camera_label: true
+        tag_labels: true
+        tags: true
+        validation_error: true
+        validation_measured: true
+        workspace_origin: true
+      Queue Size: 100
+      Value: true
+    - Alpha: 1
+      Buffer Length: 30
+      Class: rviz/Path
+      Color: 40; 160; 255
+      Enabled: true
+      Head Diameter: 0.02
+      Head Length: 0.02
+      Length: 0.02
+      Line Style: Lines
+      Line Width: 0.008
+      Name: Camera path
+      Offset: {X: 0, Y: 0, Z: 0}
+      Pose Color: 40; 160; 255
+      Pose Style: None
+      Radius: 0.01
+      Shaft Diameter: 0.01
+      Shaft Length: 0.01
+      Topic: /camera_calibration/camera_path
+      Value: true
+    - Alpha: 1
+      Axes Length: 0.12
+      Axes Radius: 0.008
+      Class: rviz/Pose
+      Color: 255; 80; 80
+      Enabled: true
+      Head Length: 0.04
+      Head Radius: 0.02
+      Name: Camera pose
+      Shaft Length: 0.1
+      Shaft Radius: 0.01
+      Shape: Axes
+      Topic: /camera_calibration/camera_pose
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 32; 36; 40
+    Default Light: true
+    Fixed Frame: ruler_workspace_rviz
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/Measure
+    - Class: rviz/SetInitialPose
+  Value: true
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 1.2
+      Enable Stereo Rendering: {Stereo Eye Separation: 0.06, Stereo Focal Distance: 1, Swap Stereo Eyes: false, Value: false}
+      Focal Point: {X: 0.08, Y: -0.06, Z: 0.18}
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Camera pose overview
+      Near Clip Distance: 0.01
+      Pitch: 0.55
+      Target Frame: ruler_workspace_rviz
+      Yaw: 3.9
+Window Geometry:
+  Height: 820
+  Width: 1180
+  X: 80
+  Y: 80

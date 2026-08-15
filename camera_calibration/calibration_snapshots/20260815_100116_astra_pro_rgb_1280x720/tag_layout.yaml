@@ -1,0 +1,31 @@
+dictionary: DICT_APRILTAG_36h11
+tag_size_mm: 69.0
+workspace_frame: ruler_workspace
+camera_frame: camera_color_optical_frame
+workspace_plane_z_mm: 0.0
+calibration_tags:
+  100:
+    center_mm:
+    - 0.0
+    - 0.0
+    - 0.0
+    yaw_deg: 0.0
+  101:
+    center_mm:
+    - 98.57
+    - 0.0
+    - 0.0
+    yaw_deg: 0.0
+  102:
+    center_mm:
+    - 0.0
+    - -108.43
+    - 0.0
+    yaw_deg: 0.0
+validation_tag:
+  id: 103
+  center_mm:
+  - 230.0
+  - 0.0
+  - 0.0
+  yaw_deg: 0.0
