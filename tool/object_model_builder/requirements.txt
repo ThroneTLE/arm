@@ -1,0 +1,9 @@
+# Installed in the dedicated `foundationpose` conda environment.
+numpy==1.26.4
+opencv-contrib-python==4.9.0.80
+open3d==0.18.0
+trimesh==4.2.2
+ultralytics==8.3.170
+PyYAML==6.0.1
+Pillow>=10.0
+PyQt5==5.15.10

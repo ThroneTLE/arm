@@ -2,7 +2,7 @@ schema_version: 1
 metadata:
   updated_at: '2026-08-15T10:01:16+08:00'
   profile: astra_pro_algorithm_validation
-  source: /home/throne/workspaces/arm/camera_calibration/calibration_snapshots/latest/runtime_calibration.yaml
+  source: /home/throne/workspaces/arm/tool/camera_calibration/calibration_snapshots/latest/runtime_calibration.yaml
   note: Astra Pro is only the current algorithm-validation camera.
 frames:
   workspace: ruler_workspace
@@ -21,9 +21,15 @@ camera:
     fps: 30
     distortion_model: plumb_bob
     camera_matrix:
-    - [1002.4182631621529, 0.0, 619.8671122479881]
-    - [0.0, 1015.3066916994853, 379.036007223375]
-    - [0.0, 0.0, 1.0]
+    - - 1002.4182631621529
+      - 0.0
+      - 619.8671122479881
+    - - 0.0
+      - 1015.3066916994853
+      - 379.036007223375
+    - - 0.0
+      - 0.0
+      - 1.0
     distortion_coefficients:
     - 0.1006132549156806
     - 0.30287407254781873
@@ -32,11 +38,29 @@ camera:
     - -1.4838234189987225
   depth:
     valid: true
-    image_width: 640
-    image_height: 480
+    image_width: 1280
+    image_height: 1024
     unit: millimeters_uint16
     aligned_to_color: false
     note: RGB-depth extrinsics are not calibrated; FoundationPose input is not ready.
+    distortion_model: plumb_bob
+    camera_matrix:
+    - - 1166.0765264521924
+      - 0.0
+      - 638.9007904839704
+    - - 0.0
+      - 1167.3754525205652
+      - 516.3745874407986
+    - - 0.0
+      - 0.0
+      - 1.0
+    distortion_coefficients:
+    - -0.15510907736659432
+    - 1.0157776968129952
+    - -0.003624470188655965
+    - -0.0019377251197423657
+    - -2.4760584564675248
+    intrinsics_valid: true
 tag_map:
   coordinate_convention:
     id: tag_top_left_x_right_y_down_v1
@@ -49,52 +73,121 @@ tag_map:
   minimum_visible_tags: 1
   max_rms_reprojection_error_px: 2.5
   tags:
-    100: {origin_mm: [0.0, 0.0, 0.0], yaw_deg: 0.0}
-    101: {origin_mm: [98.57, 0.0, 0.0], yaw_deg: 0.0}
-    102: {origin_mm: [0.0, 108.43, 0.0], yaw_deg: 0.0}
+    100:
+      origin_mm:
+      - 0.0
+      - 0.0
+      - 0.0
+      yaw_deg: 0.0
+    101:
+      origin_mm:
+      - 98.57
+      - 0.0
+      - 0.0
+      yaw_deg: 0.0
+    102:
+      origin_mm:
+      - 0.0
+      - 108.43
+      - 0.0
+      yaw_deg: 0.0
   validation_tag:
     id: 103
-    origin_mm: [230.0, 0.0, 0.0]
+    origin_mm:
+    - 230.0
+    - 0.0
+    - 0.0
     yaw_deg: 0.0
 transforms:
   workspace_from_base:
     valid: false
     description: Required only when robot base and workspace are not physically identical.
     matrix:
-    - [1.0, 0.0, 0.0, 0.0]
-    - [0.0, 1.0, 0.0, 0.0]
-    - [0.0, 0.0, 1.0, 0.0]
-    - [0.0, 0.0, 0.0, 1.0]
+    - - 1.0
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.0
+      - 1.0
+      - 0.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
   gripper_from_camera:
     valid: false
     description: Eye-in-hand result; p_gripper = T_gripper_camera * p_camera.
     matrix:
-    - [1.0, 0.0, 0.0, 0.0]
-    - [0.0, 1.0, 0.0, 0.0]
-    - [0.0, 0.0, 1.0, 0.0]
-    - [0.0, 0.0, 0.0, 1.0]
+    - - 1.0
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.0
+      - 1.0
+      - 0.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
   color_from_depth:
-    valid: false
-    description: Required to align Astra/OAK depth into the color optical frame.
+    valid: true
+    description: p_color = T_color_depth * p_depth
     matrix:
-    - [1.0, 0.0, 0.0, 0.0]
-    - [0.0, 1.0, 0.0, 0.0]
-    - [0.0, 0.0, 1.0, 0.0]
-    - [0.0, 0.0, 0.0, 1.0]
+    - - 0.9999023619397035
+      - 0.01387611239993193
+      - 0.0016492701617954212
+      - -0.01808711021390939
+    - - -0.013842762055546645
+      - 0.9997282828893728
+      - -0.018754688206946524
+      - 0.00107716967935211
+    - - -0.0019090641884576373
+      - 0.018730026581153494
+      - 0.9998227550812162
+      - 0.0032099129805234867
+    - - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
 fixed_camera_validation_reference:
   valid: false
   runtime_allowed_for_eye_in_hand: false
   coordinate_convention: legacy_tag_center
   reason: Preserved legacy reference; incompatible with the top-left-origin convention.
   workspace_from_camera:
-  - [0.9984036709650452, 0.007659325389028561, 0.05595931145133483, 0.10773047843393391]
-  - [-0.02418501106928223, -0.8373631143884598, 0.5461118016498435, -0.39846898090977345]
-  - [0.05104111130354831, -0.5465934040914182, -0.835841166466844, 0.6636612406165089]
-  - [0.0, 0.0, 0.0, 1.0]
+  - - 0.9984036709650452
+    - 0.007659325389028561
+    - 0.05595931145133483
+    - 0.10773047843393391
+  - - -0.02418501106928223
+    - -0.8373631143884598
+    - 0.5461118016498435
+    - -0.39846898090977345
+  - - 0.05104111130354831
+    - -0.5465934040914182
+    - -0.835841166466844
+    - 0.6636612406165089
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
 quality:
   intrinsic_rms_px: 0.5570756788032288
   workspace_extrinsic_rms_px: 0.43022218308083626
   workspace_extrinsic_max_error_px: 0.8766094227507759
   validation_xy_median_error_mm: 2.1696857936395704
-  validation_xy_std_mm: [0.2776183891514344, 0.2760620896692181]
+  validation_xy_std_mm:
+  - 0.2776183891514344
+  - 0.2760620896692181
   workspace_coordinate_convention_compatible: false
+  rgbd_stereo_rms_px: 4.290078616169168

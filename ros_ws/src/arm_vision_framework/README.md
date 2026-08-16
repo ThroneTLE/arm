@@ -68,7 +68,7 @@ arm_vision_framework/
 | `T_workspace_base` | 无效，占位单位矩阵 |
 | RGB-D 对齐 | 未标定，FoundationPose 实机输入尚不可用 |
 | YOLO / PyTorch | 当前 Python 环境未安装 |
-| FoundationPose 运行时 | 尚未接入 |
+| FoundationPose 运行时 | 已接入接口，需在 CUDA 环境和真实网格上运行 |
 | 机械臂运动 | 强制关闭 |
 
 旧的固定 Astra 外参保存在 `fixed_camera_validation_reference`，只用于追溯之前的桌面
@@ -131,18 +131,29 @@ segmentation:
   target_classes: [can]
 ```
 
-FoundationPose 接入后修改：
+FoundationPose 接入后修改（当前 ROS 节点已经提供运行时封装）：
 
 ```yaml
 pose_estimation:
   backend: foundationpose_plus_plus
+  foundationpose_root: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus
   mesh_path: /absolute/path/to/can_mesh.obj
-  mesh_scale_to_meters: 0.001  # BOP 毫米模型
+  mesh_scale_to_meters: 1.0    # 当前建模工具导出的是米；BOP 毫米模型填 0.001
+  device: cuda:0
+  est_refine_iter: 5
+  track_refine_iter: 2
+  use_mask_center_guidance: true
 ```
 
-`FoundationPoseEstimator` 要求 RGB、Mask 和深度完全同尺寸且深度已经对齐到 RGB。
-适配的运行时对象只需实现 `register_frame(**kwargs)`、`track_frame(**kwargs)` 和可选的
-`reset()`。这样 FoundationPose 原版和 FoundationPose++ 可以共用上层接口。
+`pipeline_node.py` 在选择该后端时会自动从 `foundationpose_root` 加载 CUDA 运行时、
+refiner/scorer 权重和 nvdiffrast 上下文。首帧调用 FoundationPose `register`，后续帧调用
+`track_one`；后续帧默认用 YOLO Mask 的包围盒中心修正上一帧的 XY 初值，这对应
+FoundationPose++ 的 2D tracker 接口。这样不强制启用 Cutie/SAM/Qwen 组件，仍可用现有
+分割模型验证核心 6D 算法；需要关闭该校正时把 `use_mask_center_guidance` 设为 `false`。
+
+`FoundationPoseEstimator` 要求 RGB、Mask 和深度完全同尺寸且深度已经对齐到 RGB。运行时
+会把 ROS 的 BGR 转换为算法需要的 RGB、将无效深度置零，并严格检查相机内参和 4x4 输出；
+不会把不同分辨率的深度图直接缩放。
 
 比赛若改用 OAK，相机驱动只需发布上述 RGB-D/CameraInfo 话题，并使用标定工具替换中央
 参数；Astra Pro 继续作为算法验证相机，不在业务代码中写死。

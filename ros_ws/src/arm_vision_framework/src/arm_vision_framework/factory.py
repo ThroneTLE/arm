@@ -1,6 +1,6 @@
 """Construct framework components from YAML parameters."""
 
-from .adapters.foundationpose import FoundationPoseEstimator
+from .adapters.foundationpose import FoundationPoseEstimator, FoundationPoseRuntime
 from .adapters.mock import MockPoseEstimator, MockRobotController, MockSegmenter
 from .adapters.topic_robot import TopicRobotController
 from .adapters.yolo import YoloSegmenter
@@ -38,6 +38,28 @@ def build_pose_estimator(settings, foundationpose_runtime=None):
     raise ConfigurationError("unknown pose backend: {}".format(backend))
 
 
+def build_foundationpose_runtime(settings):
+    """Construct the external CUDA runtime only for a FoundationPose backend."""
+    config = settings["pose_estimation"]
+    backend = str(config.get("backend", "mock"))
+    if backend not in ("foundationpose", "foundationpose_plus_plus"):
+        return None
+    root = str(config.get("foundationpose_root", "")).strip()
+    if not root:
+        raise ConfigurationError(
+            "pose_estimation.foundationpose_root is required for {}".format(backend)
+        )
+    return FoundationPoseRuntime(
+        root,
+        debug_dir=config.get("debug_dir", "/tmp/arm_foundationpose"),
+        debug=config.get("debug", 0),
+        est_refine_iter=config.get("est_refine_iter", 5),
+        track_refine_iter=config.get("track_refine_iter", 2),
+        device=config.get("device", "cuda:0"),
+        use_mask_center_guidance=config.get("use_mask_center_guidance", True),
+    )
+
+
 def build_robot(settings):
     config = settings["robot"]
     backend = str(config.get("adapter", "mock"))
@@ -57,6 +79,8 @@ def build_robot(settings):
 
 
 def build_pipeline(settings, calibration, foundationpose_runtime=None):
+    if foundationpose_runtime is None:
+        foundationpose_runtime = build_foundationpose_runtime(settings)
     robot = build_robot(settings)
     localizer = HybridCameraLocalizer(
         calibration,

@@ -39,6 +39,7 @@ CALIBRATION_PATH = PACKAGE_ROOT / "config" / "calibration_parameters.yaml"
 SYSTEM_PATH = PACKAGE_ROOT / "config" / "system_parameters.yaml"
 LEGACY_RUNTIME_PATH = (
     PACKAGE_ROOT.parents[2]
+    / "tool"
     / "camera_calibration"
     / "calibration_snapshots"
     / "latest"

@@ -1,0 +1,44 @@
+schema_version: 1
+
+# Reuse the camera, calibration, Tag map, YOLO, and driver settings maintained by
+# the 3D model builder. A relative path is resolved from this YAML file.
+base_config: ../../object_model_builder/config/object_model_builder.yaml
+
+runtime:
+  rate_hz: 7.0
+
+localization:
+  # The current Tag convention has +Z into the tabletop, so object-up is -Z.
+  workspace_up: [0.0, 0.0, -1.0]
+  # null reads workspace_plane_z_mm from camera_calibration/config/tag_layout.yaml.
+  workspace_plane_z_m: null
+  minimum_depth_m: 0.15
+  maximum_depth_m: 2.0
+  minimum_object_height_m: 0.004
+  maximum_object_height_m: 0.60
+  minimum_depth_coverage: 0.50
+  minimum_valid_points: 100
+  # RGB-D stereo RMS is currently about 4.3 px; erode the YOLO boundary enough
+  # to keep background depth from leaking into the object cloud.
+  mask_erosion_pixels: 4
+  keep_largest_depth_component: true
+
+  # Fill these from ruler/caliper measurements, or pass the matching CLI flags.
+  # Diameter > 0 enables a known-radius upright-cylinder fit. Height > 0 makes
+  # bottle_pose represent the measured geometric center above the table.
+  nominal_bottle_height_m: 0.0
+  nominal_bottle_diameter_m: 0.0
+
+  # With a measured diameter, fit only near the physically plausible cylinder
+  # and remove points outside its radial/height envelope from RViz and output.
+  cylinder_fit_seed_radius_multiplier: 2.0
+  maximum_radial_excess_m: 0.010
+  maximum_height_excess_m: 0.015
+
+  smoothing_alpha: 0.35
+  maximum_cloud_points: 6000
+
+visualization:
+  topic_prefix: /bottle_localization
+  bottle_frame: bottle_estimated
+  rviz_config: bottle_localization.rviz

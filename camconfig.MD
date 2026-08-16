@@ -19,6 +19,16 @@
 - 红外：`640×480 / mono16 / 约 29.6 Hz`
 - 彩色：`640×480 / YUYV / 约 30.0 Hz`
 - 彩色高清模式：`1280×720 / MJPEG / 约 30.0 Hz`（标定 UI 当前默认）
+
+设备能力补充（OrbbecSDK 日志和当前主机 V4L2 枚举结果）：
+
+- SDK 彩色流还提供 `1280×800 / UYVY / 30 Hz`，但这是 SDK 彩色通道的模式；当前工具
+  使用的独立 UVC `/dev/video2` 没有 `1280×800`，不能只把配置高度改成 800。
+- SDK 深度/红外高分辨率是 `1280×1024 / 7 Hz`，不是 `1280×800`；深度 `640×480 / 30 Hz`
+  才是当前稳定的默认档位。
+- 要使用 `1280×800` 彩色 + `1280×1024` 深度，必须启用 ROS SDK 彩色通道，确认两路能
+  同时启动，再针对这组实际分辨率重新做 RGB 内参和 RGB/IR 外参标定；不能复用当前
+  `1280×720` 标定文件。
 - Python SDK：成功识别 `1` 台设备，`pip check` 无依赖冲突
 - Viewer：正常启动并识别相机
 - 深度与彩色、红外与彩色均完成并发验证
@@ -78,14 +88,14 @@ python -c 'from pyorbbecsdk import Context; print(Context().query_devices().get_
 
 标定程序、A4 打印素材和完整操作说明位于：
 
-- `camera_calibration/README.md`
-- `camera_calibration/targets/calibration_targets_A4_2pages.pdf`
+- `tool/camera_calibration/README.md`
+- `tool/camera_calibration/targets/calibration_targets_A4_2pages.pdf`
 
 图形界面可从应用菜单中的“Astra Pro 标定工作台”启动，或运行：
 
 ```bash
-cd /home/throne/workspaces/arm/camera_calibration
-./run_ui.sh
+cd /home/throne/workspaces/arm
+./tool/camera_calibration/run_ui.sh
 ```
 
 当前无机械臂阶段得到的是 `camera_color_optical_frame` 到尺子定义的

@@ -1,0 +1,103 @@
+schema_version: 1
+paths:
+  foundationpose_root: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus
+  runtime_calibration: /home/throne/workspaces/arm/ros_ws/src/arm_vision_framework/config/calibration_parameters.yaml
+  color_intrinsics: /home/throne/workspaces/arm/tool/camera_calibration/output/astra_pro_rgb_1280x720.yaml
+  tag_layout: /home/throne/workspaces/arm/tool/camera_calibration/config/tag_layout.yaml
+  yolo_weights: ''
+  capture_root: /home/throne/workspaces/arm_data/model_sessions
+  rgbd_calibration_root: /home/throne/workspaces/arm_data/calibration_sessions
+  mesh_root: /home/throne/workspaces/arm_data/meshes
+  foundationpose_debug_root: /home/throne/workspaces/arm_data/foundationpose_debug
+rgbd_calibration_target:
+  type: checkerboard
+  model: SINE IMAGE YE0102-A540
+  # Use the uninterrupted full-width strip above the composite chart center.
+  pattern_columns: 19
+  pattern_rows: 3
+  square_size_m: 0.029
+camera:
+  backend: astra_ros
+  color_device: /dev/v4l/by-id/usb-Astra_Pro_HD_Camera_Astra_Pro_HD_Camera-video-index0
+  color_width: 1280
+  color_height: 720
+  color_fps: 30
+  preview_interval_ms: 33
+  color_fourcc: MJPG
+  depth_topic: /camera/depth/image_raw
+  depth_info_topic: /camera/depth/camera_info
+  ir_topic: /camera/ir/image_raw
+  laser_service: /camera/set_laser
+  # Legacy ChArUco key retained for older configs. The active target above
+  # uses the 57 ordinary checkerboard inner corners in the top strip.
+  minimum_common_corners: 45
+  minimum_common_charuco_corners: 10
+  rgbd_auto_capture:
+    minimum_common_corners: 45
+    target_pairs: 20
+    minimum_interval_s: 0.8
+    minimum_view_change_normalized: 0.025
+  start_ros_driver: true
+  ros_driver:
+    package: astra_camera
+    launch_file: astra.launch
+    startup_timeout_s: 2.0
+    arguments:
+      enable_color: false
+      enable_depth: true
+      enable_ir: true
+      enable_point_cloud: false
+      enable_point_cloud_xyzrgb: false
+      depth_width: 1280
+      depth_height: 1024
+      depth_fps: 7
+      ir_width: 1280
+      ir_height: 1024
+      ir_fps: 30
+  # Host-arrival timestamps include ROS/UVC transport latency. The capture
+  # button waits for the next depth pair, so 200 ms is a guard rather than a
+  # request to accept an arbitrarily stale frame.
+  maximum_sync_delta_s: 0.20
+  oak:
+    color_width: 1280
+    color_height: 720
+    fps: 30
+segmentation:
+  target_classes: [bottle]
+  confidence_threshold: 0.5
+  device: '0'
+  preview_interval_s: 0.20
+tag_pose:
+  minimum_tags: 1
+  maximum_rms_px: 2.5
+capture:
+  # Transparent/reflective surfaces must be matte-coated or opaquely wrapped.
+  minimum_mask_depth_coverage: 0.70
+  maximum_analysis_age_s: 0.75
+  capture_request_timeout_s: 5.0
+  maximum_object_centroid_shift_m: 0.07
+  minimum_translation_m: 0.025
+  minimum_rotation_deg: 8.0
+foundationpose_live:
+  # Meter-native meshes use 1.0; millimeter meshes must explicitly use 0.001.
+  mesh_path: ''
+  mesh_scale_to_meters: 1.0
+  device: cuda:0
+  est_refine_iter: 5
+  track_refine_iter: 2
+  use_mask_center_guidance: true
+  maximum_pose_age_s: 1.0
+  debug: 0
+fusion:
+  voxel_length_m: 0.002
+  sdf_trunc_m: 0.008
+  maximum_depth_m: 2.0
+  minimum_views: 12
+  mask_erosion_pixels: 1
+  simplify_triangles: 80000
+  workspace_up: [0.0, 0.0, -1.0]
+  mesh_quality:
+    # Default profile is tuned for the current bottle target; adjust for other objects.
+    minimum_dimensions_m: [0.02, 0.02, 0.12]
+    maximum_dimensions_m: [0.30, 0.30, 0.50]
+    require_watertight: true

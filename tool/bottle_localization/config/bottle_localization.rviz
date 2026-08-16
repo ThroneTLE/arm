@@ -1,0 +1,169 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.45
+      Cell Size: 0.05
+      Class: rviz/Grid
+      Color: 150; 150; 150
+      Enabled: true
+      Name: Table plane
+      Normal Cell Count: 0
+      Offset: {X: 0, Y: 0, Z: 0}
+      Plane: XY
+      Plane Cell Count: 20
+      Reference Frame: ruler_workspace_rviz
+      Value: true
+    - Class: rviz/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+      Marker Scale: 0.10
+      Name: Coordinate frames
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Tree: {}
+      Update Interval: 0
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /camera_calibration/markers
+      Name: Fixed Tags and camera
+      Namespaces:
+        camera_frustum: true
+        camera_label: true
+        tag_labels: true
+        tags: true
+        workspace_origin: true
+      Queue Size: 20
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /bottle_localization/markers
+      Name: Bottle estimate
+      Namespaces:
+        bottle: true
+        bottle_axis: true
+        bottle_base: true
+        bottle_label: true
+      Queue Size: 20
+      Value: true
+    - Alpha: 0.85
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz/PointCloud2
+      Color: 40; 225; 255
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: YOLO masked depth cloud
+      Position Transformer: XYZ
+      Queue Size: 2
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.004
+      Style: Points
+      Topic: /bottle_localization/object_cloud
+      Unreliable: false
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+    - Alpha: 1
+      Axes Length: 0.10
+      Axes Radius: 0.006
+      Class: rviz/Pose
+      Color: 255; 80; 80
+      Enabled: true
+      Head Length: 0.04
+      Head Radius: 0.02
+      Name: Camera pose
+      Shaft Length: 0.08
+      Shaft Radius: 0.008
+      Shape: Axes
+      Topic: /camera_calibration/camera_pose
+      Value: true
+    - Alpha: 1
+      Axes Length: 0.10
+      Axes Radius: 0.006
+      Class: rviz/Pose
+      Color: 40; 230; 100
+      Enabled: true
+      Head Length: 0.04
+      Head Radius: 0.02
+      Name: Bottle center pose
+      Shaft Length: 0.08
+      Shaft Radius: 0.008
+      Shape: Axes
+      Topic: /bottle_localization/bottle_pose
+      Value: true
+    - Class: rviz/Image
+      Enabled: true
+      Image Topic: /bottle_localization/annotated_image
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: RGB Tag YOLO and position
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Unreliable: false
+      Value: true
+    - Class: rviz/Image
+      Enabled: false
+      Image Topic: /bottle_localization/aligned_depth_preview
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Aligned depth in YOLO mask
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Unreliable: false
+      Value: false
+  Enabled: true
+  Global Options:
+    Background Color: 31; 35; 40
+    Default Light: true
+    Fixed Frame: ruler_workspace_rviz
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 1.15
+      Enable Stereo Rendering: {Stereo Eye Separation: 0.06, Stereo Focal Distance: 1, Swap Stereo Eyes: false, Value: false}
+      Focal Point: {X: 0.10, Y: -0.06, Z: 0.14}
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Table bottle overview
+      Near Clip Distance: 0.01
+      Pitch: 0.55
+      Target Frame: ruler_workspace_rviz
+      Yaw: 3.9
+Window Geometry:
+  Height: 900
+  Width: 1440
+  X: 60
+  Y: 40

@@ -21,7 +21,7 @@ AprilTag 定位和软件坐标链；它不是比赛最终相机。机械臂控�
 | 模块 | 状态 | 说明 |
 |---|---|---|
 | Astra Pro 环境 | 已完成 | ROS1、Orbbec SDK、Python SDK、Viewer 和 UVC 彩色取流已验证 |
-| RGB 内参标定 | 已完成 | 支持 `1280 x 720 MJPG`，当前 RMS 为 `0.5571 px` |
+| RGB 内参标定 | 已完成 | 当前运行档位为 `1280 x 720 MJPG`，RMS 为 `0.5571 px`；SDK 的 `1280 x 800` 需要单独标定 |
 | AprilTag 打印素材 | 已完成 | 提供经过尺寸校验的 A4 PDF，打印必须选择实际大小或 100% |
 | 工作平面外参 | 已实现 | ID100～102 多 Tag PnP，当前新坐标约定下 RMS 为 `0.3148 px` |
 | 移动相机绝对定位 | 已实现 | 每帧使用固定 ID100～102 重新计算相机位姿 |
@@ -30,9 +30,10 @@ AprilTag 定位和软件坐标链；它不是比赛最终相机。机械臂控�
 | ROS1 通用框架 | 骨架已完成 | 坐标链、参数入口、Mock 后端、适配器接口和安全门禁可运行 |
 | 眼在手上手眼标定 | 未完成 | 缺少真实机械臂末端位姿和多姿态采样数据 |
 | 工具坐标标定 | 未完成 | 需要确定法兰、TCP 和实际夹具几何关系 |
-| RGB-D 对齐 | 未完成 | Astra RGB 与深度没有外参，不能直接用于 FoundationPose |
-| YOLO 分割 | 未接入 | 目前只有适配接口，尚未安装运行环境和配置权重 |
-| FoundationPose 6D | 未接入 | 目前只有适配接口，缺少模型、网格和对齐深度输入 |
+| RGB-D 对齐 | 工具已实现，Astra 标定待采集 | 当前尝试使用 UVC `1280x720` 彩色、ROS 深度/IR `1280x1024`（深度约 7 FPS）；USB2 带宽不足时两路一起退回 `640x480@30`，并重新标定 |
+| YOLO 分割 | 接口和 UI 已完成 | 等待用户提供目标 `.pt/.pth`，当前没有真实目标 Mask 结果 |
+| FoundationPose 6D | 核心运行时已接入，业务待真实数据验证 | ROS 适配器会按配置加载 FoundationPose++ CUDA、mycpp、PyTorch3D、nvdiffrast、refiner/scorer 权重；仍缺真实网格、RGB-D 标定和目标数据 |
+| 物体三维建模工具 | 已完成骨架 | UI、Astra/OAK 采集后端、Tag 位姿、RGB-D 配准、TSDF 和 FoundationPose OBJ/PLY 导出已实现 |
 | 真实机械臂控制 | 未接入 | 机械臂型号和官方通信接口未确定，运动输出强制关闭 |
 
 ## 3. 坐标约定与当前标定数据
@@ -74,8 +75,8 @@ ID103: [98.60, 108.40, 0.00] mm（验证点）
 标定 UI：
 
 ```bash
-cd /home/throne/workspaces/arm/camera_calibration
-./run_ui.sh
+cd /home/throne/workspaces/arm
+./tool/camera_calibration/run_ui.sh
 ```
 
 ROS 框架构建与无硬件检查：
@@ -102,19 +103,36 @@ rosrun arm_vision_framework run_pipeline.py --check --smoke
 /home/throne/workspaces/arm/
 ├── .gitignore                         # 全仓库忽略规则
 ├── camconfig.MD                       # Astra Pro 环境和实机取流记录
-├── camera_calibration/                # 独立于业务框架的相机/Tag 标定工具
-│   ├── README.md                      # 标定操作和坐标约定
-│   ├── calibration_ui.py              # 唯一图形界面入口
-│   ├── calib_common.py                # 标定、PnP 和几何公共实现
-│   ├── calibrate_*.py                 # 可复用命令行标定入口
-│   ├── validate_workspace.py          # 工作平面独立验证入口
-│   ├── hybrid_localization.py         # Tag 优先、机器人回退定位
-│   ├── rviz_visualization.py          # 标定专用 ROS/RViz 发布
-│   ├── config/                        # 标定工具输入配置
-│   ├── targets/                       # 可打印 A4 PDF 和预览图
-│   ├── output/                        # 当前正在使用的标定结果
-│   ├── calibration_snapshots/         # 已冻结的正式标定快照
-│   └── tests/                         # 标定几何回归测试
+├── tool/                              # 独立于 ROS 业务包的通用工具
+│   ├── __init__.py                    # Python 工具包入口
+│   ├── camera_calibration/            # 相机/Tag 标定工具包
+│       ├── README.md                  # 标定操作和坐标约定
+│       ├── calibration_ui.py          # 唯一图形界面入口
+│       ├── calib_common.py            # 标定、PnP 和几何公共实现
+│       ├── calibrate_*.py             # 可复用命令行标定入口
+│       ├── validate_workspace.py      # 工作平面独立验证入口
+│       ├── hybrid_localization.py     # Tag 优先、机器人回退定位
+│       ├── rviz_visualization.py      # 标定专用 ROS/RViz 发布
+│       ├── config/                    # 标定工具输入配置
+│       ├── targets/                   # 可打印 A4 PDF 和预览图
+│       ├── output/                    # 当前正在使用的标定结果
+│       ├── calibration_snapshots/     # 已冻结的正式标定快照
+│       └── tests/                     # 标定几何回归测试
+│   └── object_model_builder/           # RGB-D 物体网格生成工具
+│       ├── README.md                   # 建模、Astra/OAK 和 FoundationPose 说明
+│       ├── model_builder_ui.py         # 唯一图形界面入口
+│       ├── camera_source.py             # Astra ROS/UVC 和 OAK DepthAI 后端
+│       ├── rgbd_geometry.py             # 三维反投影、畸变校正和 Z-buffer 对齐
+│       ├── rgbd_calibration.py          # RGB/IR ChArUco 双目标定
+│       ├── tag_pose_provider.py         # AprilTag 工作空间相机位姿
+│       ├── yolo_segmenter.py            # 用户 YOLO 实例分割接口
+│       ├── capture_session.py           # 可复现的多视角数据集格式
+│       ├── mesh_fusion.py               # Mask TSDF 融合和模型坐标系
+│       ├── foundationpose_export.py    # OBJ/PLY 和元数据导出
+│       ├── environment_check.py         # 依赖、权重和磁盘检查
+│       ├── config/                      # Astra/OAK 和 TSDF 参数
+│       ├── tests/                       # 无硬件 RGB-D/会话回归测试
+│       └── run_ui.sh                    # 唯一启动入口
 ├── ros_ws/
 │   ├── src/
 │   │   ├── CMakeLists.txt
@@ -139,13 +157,21 @@ rosrun arm_vision_framework run_pipeline.py --check --smoke
 
 ### 5.2 各类文件的唯一位置
 
+所有不依赖 ROS 节点生命周期、可独立运行的标定、数据转换、数据检查和可视化工具，统一
+建立在 `tool/<tool_name>/`。每个工具必须有自己的 `README.md`、明确入口和测试；禁止把
+零散 `.py` 文件直接堆在 `tool/` 根目录。必须通过 catkin 安装并由 `rosrun` 调用的包内
+维护命令是唯一例外，仍放在对应 ROS 包的 `tools/` 中，但通用逻辑应复用 `tool/` 或核心
+模块，不能复制实现。
+
 | 文件类型 | 固定位置 | 规则 |
 |---|---|---|
 | 项目现状和开发顺序 | `docs/readme.txt` | 只描述全局状态，不复制模块操作手册 |
-| 标定使用说明 | `camera_calibration/README.md` | 坐标约定、打印、采集和 RViz 说明放这里 |
+| 独立标定/转换/检查工具 | `tool/<tool_name>/` | 一个工具一个子目录，必须包含 README 和测试 |
+| 标定使用说明 | `tool/camera_calibration/README.md` | 坐标约定、打印、采集和 RViz 说明放这里 |
+| 物体网格生成工具 | `tool/object_model_builder/` | RGB-D 配准、Tag/YOLO 采集、TSDF 和 FoundationPose 导出统一放这里 |
 | ROS 框架说明 | `ros_ws/src/arm_vision_framework/README.md` | 话题、适配器、构建和运行说明放这里 |
-| 当前 Tag 布局 | `camera_calibration/config/tag_layout.yaml` | UI 的实测输入，禁止在 Python 中硬编码 |
-| 混合定位配置 | `camera_calibration/config/hybrid_localization.yaml` | 只服务标定 UI 和独立定位工具 |
+| 当前 Tag 布局 | `tool/camera_calibration/config/tag_layout.yaml` | UI 的实测输入，禁止在 Python 中硬编码 |
+| 混合定位配置 | `tool/camera_calibration/config/hybrid_localization.yaml` | 只服务标定 UI 和独立定位工具 |
 | 运行时标定参数 | `arm_vision_framework/config/calibration_parameters.yaml` | 业务程序唯一标定数据入口，只能用工具同步/导入 |
 | 系统和安全参数 | `arm_vision_framework/config/system_parameters.yaml` | 后端、话题、阈值和运动门禁统一放这里 |
 | ROS 启动文件 | `arm_vision_framework/launch/` | 只负责组合节点与参数，不写算法逻辑 |
@@ -153,12 +179,12 @@ rosrun arm_vision_framework run_pipeline.py --check --smoke
 | 通用算法逻辑 | `arm_vision_framework/src/arm_vision_framework/` | 不直接依赖具体机械臂 SDK |
 | YOLO/FoundationPose 适配 | `.../adapters/` | 每个外部后端一个有明确名称的适配器 |
 | 厂商机械臂驱动 | `ros_ws/src/<vendor>_robot_driver/` | 独立 ROS 包，上层只依赖 canonical topic/service |
-| 参数维护工具 | `arm_vision_framework/tools/` | 可重复运行，不包含比赛业务流程 |
+| ROS 包维护命令 | `arm_vision_framework/tools/` | 仅放必须由 catkin/rosrun 暴露的轻量入口 |
 | 单元/回归测试 | 对应模块的 `tests/test_<module>.py` | 不需要相机或机械臂，结果必须确定 |
 | 实机/精度验证脚本 | `arm_vision_framework/validation/validate_<capability>.py` | 一个脚本验证一个明确能力 |
 | 运行结果 | `ros_ws/runs/<task>/<YYYYMMDD_HHMMSS>/` | 图片、CSV、日志和临时诊断统一放这里 |
-| 正式标定快照 | `camera_calibration/calibration_snapshots/<timestamp>_<profile>/` | 创建后只读，不覆盖、不手改 |
-| 打印素材 | `camera_calibration/targets/` | 只放生成器产生且尺寸验证通过的文件 |
+| 正式标定快照 | `tool/camera_calibration/calibration_snapshots/<timestamp>_<profile>/` | 创建后只读，不覆盖、不手改 |
+| 打印素材 | `tool/camera_calibration/targets/` | 只放生成器产生且尺寸验证通过的文件 |
 | 硬件/考核资料 | `docs/` | PDF 不进入 Git，代码不得放在这里 |
 
 表格中的 `arm_vision_framework/` 均指：
@@ -177,6 +203,8 @@ YOLO 权重、FoundationPose 权重、BOP 数据集、物体网格和第三方�
 ├── models/yolo/                       # best.pt 等 YOLO 权重
 ├── models/foundationpose/             # FoundationPose 权重
 ├── meshes/                            # 易拉罐 OBJ/PLY 和纹理
+├── model_sessions/                     # 物体多视角 RGB-D 采集
+├── calibration_sessions/               # RGB/IR ChArUco 采集
 ├── datasets/bop/                      # BOP 数据集
 └── third_party/                       # FoundationPose++ 等外部源码
 ```
@@ -189,10 +217,10 @@ YOLO 权重、FoundationPose 权重、BOP 数据集、物体网格和第三方�
 标定数据存在三个阶段，不能混用：
 
 ```text
-camera_calibration/config/        实测布局和采集输入
+tool/camera_calibration/config/   实测布局和采集输入
              |
              v
-camera_calibration/output/        当前标定程序输出，可重新生成
+tool/camera_calibration/output/   当前标定程序输出，可重新生成
              |
              v
 calibration_snapshots/<timestamp> 正式冻结快照，只读
@@ -220,6 +248,8 @@ calibration_parameters.yaml       ROS 业务运行时唯一入口
 - 临时排查问题但可能复用：放 `validation/diagnose_<problem>.py`，并在
   `validation/README.md` 写清输入、输出和删除条件。
 - 生成的截图、CSV、YAML、视频和日志：只能写入 `ros_ws/runs/<task>/<timestamp>/`。
+- 物体建模的大体积标定采集、RGB-D 会话和网格是例外，固定写入仓库外
+  `/home/throne/workspaces/arm_data/{calibration_sessions,model_sessions,meshes}/`。
 - 验证稳定后，公共逻辑必须移入核心模块；不能长期复制在多个验证脚本中。
 
 `scripts/` 不是测试脚本目录，仓库根目录和 `docs/` 也禁止放测试脚本。
@@ -261,7 +291,34 @@ https://docs.oakchina.cn/en/latest/
 1. 统一 ID103 配置并重新完成动态验证，确认移动相机时误差不随视角系统性漂移。
 2. 确认比赛机械臂型号，接入只读末端位姿并明确数据是法兰还是 TCP。
 3. 完成工具坐标和 `T_gripper_camera` 眼在手上标定，再验证 Tag 不可见时的机器人回退。
-4. 完成比赛相机 RGB-D 对齐，保证 RGB、Mask 和深度具有一致坐标和尺寸。
-5. 接入 YOLO 权重、目标类别和分割 Mask。
-6. 准备易拉罐三维网格并接入 FoundationPose 6D 位姿估计。
-7. 在运动输出保持关闭的条件下完成端到端定位测试，最后再接入机械臂安全控制。
+4. 用 `tool/object_model_builder` 完成 Astra RGB/IR 外参采集，或确认 OAK-D Pro 工厂对齐输出。
+5. 接入用户 YOLO 权重、目标类别和分割 Mask，采集瓶子多视角数据。
+6. 使用已经实现的带 SHA-256 清单的采集 ZIP，在无 ROS 服务器上完成真实瓶子的 TSDF
+   重建，检查米制 OBJ/PLY、重建报告和 FoundationPose 结果 ZIP。
+7. 运行 FoundationPose++ 真实 RGB-D + Mask 的端到端定位测试。
+8. 比较 Astra 与 OAK-D Pro 的深度覆盖率、位姿稳定性和运行速度；IMU 只作为预测/诊断辅助。
+9. 在运动输出保持关闭的条件下完成定位验证，最后再接入机械臂安全控制。
+
+
+
+## 7. OAK-D Pro 兼容边界
+
+相机标定和物体建模不得绑定 Astra Pro。当前物体建模采集层已经分为 `astra_ros` 和
+`oak_depthai` 后端；DepthAI `2.32.0.0` 已安装在 `foundationpose` 环境。切换 OAK 时修改：
+
+```yaml
+camera:
+  backend: oak_depthai
+```
+
+OAK-D Pro 使用设备工厂内参、双目外参和 depth-to-RGB 对齐，可省去 Astra 独立 UVC RGB
+与 IR 之间的手工外参步骤，但仍必须验证输出分辨率、深度单位、对齐像素和尺度。现有相机
+标定 UI 可继续通过 ROS 图像话题完成 RGB/Tag 标定，业务层继续消费统一的 RGB、aligned
+depth 和 CameraInfo，不直接依赖 DepthAI。
+
+具体 OAK-D Pro 型号可能带 IMU。IMU 可用于短时姿态预测和时间同步诊断，不能替代 RGB-D
+内外参、眼在手上 `T_gripper_camera` 或 AprilTag 工作空间绝对位姿。安装约束为：
+
+```bash
+python -m pip install -U --prefer-binary 'depthai>=2.17,<3'
+```

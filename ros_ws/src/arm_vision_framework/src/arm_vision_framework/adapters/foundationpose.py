@@ -1,13 +1,354 @@
-"""FoundationPose/ FoundationPose++ runtime boundary."""
+"""FoundationPose/ FoundationPose++ runtime boundary.
 
+The vendor project stays outside this ROS package.  The runtime below imports
+it from the configured checkout and exposes the small frame-based contract used
+by :class:`FoundationPoseEstimator`.
+"""
+
+import sys
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from ..errors import BackendUnavailable
 from ..interfaces import PoseEstimator
 from ..transforms import as_transform
 from ..types import ObjectPoseEstimate
+
+
+def _fallback_bilateral_filter_depth(depth, radius=2, **_kwargs):
+    """OpenCV fallback for the optional Warp depth filter."""
+    tensor = hasattr(depth, "detach") and hasattr(depth, "device")
+    if tensor:
+        import torch
+        import torch.nn.functional as F
+
+        source = depth.float()
+        valid = torch.isfinite(source) & (source >= 0.001)
+        size = max(3, int(radius) * 2 + 1)
+        area = float(size * size)
+        filtered = F.avg_pool2d(
+            (source * valid).unsqueeze(0).unsqueeze(0),
+            size,
+            stride=1,
+            padding=int(radius),
+        )[0, 0]
+        count = F.avg_pool2d(
+            valid.float().unsqueeze(0).unsqueeze(0),
+            size,
+            stride=1,
+            padding=int(radius),
+        )[0, 0]
+        filtered = filtered / torch.clamp(count, min=1.0 / area)
+        return torch.where(valid, filtered, torch.zeros_like(filtered)).to(depth.dtype)
+    source = (
+        np.asarray(depth, dtype=np.float32)
+    )
+    valid = np.isfinite(source) & (source >= 0.001)
+    filtered = cv2.bilateralFilter(source, d=max(3, int(radius) * 2 + 1), sigmaColor=0.02, sigmaSpace=float(radius))
+    filtered[~valid] = 0.0
+    return filtered
+
+
+def _fallback_erode_depth(depth, radius=2, depth_diff_thres=0.001, ratio_thres=0.8, **_kwargs):
+    """Keep depth pixels with a locally consistent neighborhood."""
+    tensor = hasattr(depth, "detach") and hasattr(depth, "device")
+    if tensor:
+        import torch
+        import torch.nn.functional as F
+
+        source = depth.float()
+        valid = torch.isfinite(source) & (source >= 0.001)
+        size = max(3, int(radius) * 2 + 1)
+        area = float(size * size)
+        valid_count = F.avg_pool2d(
+            valid.float().unsqueeze(0).unsqueeze(0),
+            size,
+            stride=1,
+            padding=int(radius),
+        )[0, 0] * area
+        mean = F.avg_pool2d(
+            (source * valid).unsqueeze(0).unsqueeze(0),
+            size,
+            stride=1,
+            padding=int(radius),
+        )[0, 0] * area / torch.clamp(valid_count, min=1.0)
+        consistent = valid & (valid_count >= area * (1.0 - float(ratio_thres)))
+        consistent &= torch.abs(source - mean) <= float(depth_diff_thres)
+        return torch.where(consistent, source, torch.zeros_like(source)).to(depth.dtype)
+    source = (
+        np.asarray(depth, dtype=np.float32)
+    )
+    valid = np.isfinite(source) & (source >= 0.001)
+    kernel_size = max(3, int(radius) * 2 + 1)
+    median = cv2.medianBlur(np.where(valid, source, 0.0), kernel_size)
+    valid_count = cv2.boxFilter(
+        valid.astype(np.float32), -1, (kernel_size, kernel_size), normalize=False
+    )
+    consistent = valid & (valid_count >= (kernel_size * kernel_size) * (1.0 - float(ratio_thres)))
+    consistent &= np.abs(source - median) <= float(depth_diff_thres)
+    output = np.where(consistent, source, 0.0).astype(np.float32)
+    return output
+
+
+class FoundationPoseRuntime:
+    """Own one GPU FoundationPose estimator for one metric mesh."""
+
+    def __init__(
+        self,
+        foundationpose_root,
+        debug_dir="/tmp/arm_foundationpose",
+        debug=0,
+        est_refine_iter=5,
+        track_refine_iter=2,
+        device="cuda:0",
+        use_mask_center_guidance=True,
+    ):
+        self.root = Path(foundationpose_root).expanduser().resolve()
+        self.debug_dir = Path(debug_dir).expanduser().resolve()
+        self.debug = int(debug)
+        self.est_refine_iter = int(est_refine_iter)
+        self.track_refine_iter = int(track_refine_iter)
+        self.device = str(device)
+        self.use_mask_center_guidance = bool(use_mask_center_guidance)
+        self._foundation_pose = None
+        self._score_predictor = None
+        self._refine_predictor = None
+        self._trimesh = None
+        self._estimator = None
+        self._mesh_key = None
+        self._glctx = None
+        self._load_vendor_modules()
+
+    def _load_vendor_modules(self):
+        if not self.root.is_dir():
+            raise BackendUnavailable(
+                "FoundationPose root does not exist: {}".format(self.root)
+            )
+        try:
+            import torch
+        except ImportError as error:
+            raise BackendUnavailable("PyTorch is required for FoundationPose") from error
+        if not torch.cuda.is_available():
+            raise BackendUnavailable(
+                "FoundationPose requires a CUDA-enabled PyTorch environment"
+            )
+        if not self.device.startswith("cuda"):
+            raise BackendUnavailable(
+                "FoundationPose vendor code currently requires CUDA, got {}".format(
+                    self.device
+                )
+            )
+        foundationpose_dir = self.root / "FoundationPose"
+        if not (foundationpose_dir / "estimater.py").is_file():
+            raise BackendUnavailable(
+                "FoundationPose estimater.py is missing under {}".format(foundationpose_dir)
+            )
+        # estimater.py imports Utils as a top-level module, while callers use
+        # FoundationPose.estimater. Both paths are therefore required.
+        for path in (str(self.root), str(foundationpose_dir)):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        try:
+            import trimesh
+            import FoundationPose.estimater as estimater_module
+            from FoundationPose.estimater import (
+                FoundationPose,
+                PoseRefinePredictor,
+                ScorePredictor,
+                dr,
+            )
+        except Exception as error:
+            raise BackendUnavailable(
+                "failed to import FoundationPose++ from {}: {}".format(self.root, error)
+            ) from error
+        try:
+            self._glctx = dr.RasterizeCudaContext(self.device)
+        except TypeError:
+            self._glctx = dr.RasterizeCudaContext()
+        except Exception as error:
+            raise BackendUnavailable(
+                "failed to create nvdiffrast CUDA context: {}".format(error)
+            ) from error
+        # Warp is optional in the environment.  The vendor module only
+        # defines these functions when Warp imported successfully, although
+        # register()/track_one() call them unconditionally.
+        if not hasattr(estimater_module, "erode_depth"):
+            estimater_module.erode_depth = _fallback_erode_depth
+        if not hasattr(estimater_module, "bilateral_filter_depth"):
+            estimater_module.bilateral_filter_depth = _fallback_bilateral_filter_depth
+        self._foundation_pose = FoundationPose
+        self._score_predictor = ScorePredictor
+        self._refine_predictor = PoseRefinePredictor
+        self._trimesh = trimesh
+
+    @staticmethod
+    def _load_mesh(trimesh_module, mesh_path, scale_to_meters):
+        try:
+            mesh = trimesh_module.load(str(mesh_path), process=False)
+        except Exception as error:
+            raise BackendUnavailable(
+                "failed to load FoundationPose mesh: {}".format(error)
+            ) from error
+        if isinstance(mesh, trimesh_module.Scene):
+            mesh = mesh.dump(concatenate=True)
+        if mesh is None or not hasattr(mesh, "vertices") or not hasattr(mesh, "faces"):
+            raise BackendUnavailable("FoundationPose mesh is not a triangle mesh")
+        scale = float(scale_to_meters)
+        if not np.isfinite(scale) or scale <= 0.0:
+            raise BackendUnavailable("mesh_scale_to_meters must be positive")
+        mesh = mesh.copy()
+        mesh.apply_scale(scale)
+        vertices = np.asarray(mesh.vertices, dtype=np.float64)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        if len(vertices) < 4 or len(faces) < 4 or not np.isfinite(vertices).all():
+            raise BackendUnavailable(
+                "FoundationPose mesh has invalid or insufficient geometry"
+            )
+        # make_mesh_tensors expects visual data for a colorless OBJ/STL.
+        colors = getattr(mesh.visual, "vertex_colors", None)
+        if colors is None or len(colors) != len(vertices):
+            mesh.visual.vertex_colors = np.tile(
+                np.asarray([150, 150, 150, 255], dtype=np.uint8),
+                (len(vertices), 1),
+            )
+        return mesh
+
+    def _ensure_estimator(self, mesh_path, mesh_scale_to_meters):
+        mesh_path = Path(mesh_path).expanduser().resolve()
+        if not mesh_path.is_file():
+            raise BackendUnavailable(
+                "object mesh file does not exist: {}".format(mesh_path)
+            )
+        key = (str(mesh_path), float(mesh_scale_to_meters), mesh_path.stat().st_mtime_ns)
+        if self._estimator is not None and self._mesh_key == key:
+            return self._estimator
+        mesh = self._load_mesh(self._trimesh, mesh_path, mesh_scale_to_meters)
+        try:
+            estimator = self._foundation_pose(
+                model_pts=np.asarray(mesh.vertices),
+                model_normals=np.asarray(mesh.vertex_normals),
+                mesh=mesh,
+                scorer=self._score_predictor(),
+                refiner=self._refine_predictor(),
+                glctx=self._glctx,
+                debug=self.debug,
+                debug_dir=str(self.debug_dir),
+            )
+        except Exception as error:
+            raise BackendUnavailable(
+                "FoundationPose estimator initialization failed: {}".format(error)
+            ) from error
+        self.debug_dir.mkdir(parents=True, exist_ok=True)
+        self._estimator = estimator
+        self._mesh_key = key
+        return estimator
+
+    @staticmethod
+    def _prepare_inputs(rgb_bgr, depth_m, mask, camera_matrix):
+        rgb_bgr = np.asarray(rgb_bgr)
+        if rgb_bgr.ndim != 3 or rgb_bgr.shape[2] != 3:
+            raise BackendUnavailable("RGB input must have shape HxWx3")
+        rgb = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB)
+        depth = np.asarray(depth_m, dtype=np.float32)
+        depth = np.where(np.isfinite(depth) & (depth >= 0.001), depth, 0.0)
+        object_mask = (np.asarray(mask) > 0).astype(np.uint8)
+        if depth.shape != rgb.shape[:2] or object_mask.shape != rgb.shape[:2]:
+            raise BackendUnavailable(
+                "FoundationPose RGB, depth and mask shapes must match"
+            )
+        # The reference implementation keeps intrinsics in float64 (the
+        # same dtype produced by its dataset readers); retaining that dtype
+        # avoids a matmul mismatch after its CUDA default-tensor conversion.
+        K = np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3)
+        if not np.isfinite(K).all() or K[0, 0] <= 0.0 or K[1, 1] <= 0.0:
+            raise BackendUnavailable("camera intrinsics are invalid")
+        return rgb, depth, object_mask, K
+
+    @staticmethod
+    def _validate_pose(pose):
+        matrix = np.asarray(pose, dtype=np.float64).reshape(4, 4)
+        if not np.isfinite(matrix).all() or not np.allclose(
+            matrix[3], [0, 0, 0, 1], atol=1e-4
+        ):
+            raise BackendUnavailable("FoundationPose returned an invalid 4x4 pose")
+        return matrix
+
+    def register_frame(
+        self, rgb, depth_m, mask, camera_matrix, mesh_path, mesh_scale_to_meters=1.0
+    ):
+        estimator = self._ensure_estimator(mesh_path, mesh_scale_to_meters)
+        rgb, depth, object_mask, K = self._prepare_inputs(
+            rgb, depth_m, mask, camera_matrix
+        )
+        try:
+            pose = estimator.register(
+                K=K,
+                rgb=rgb,
+                depth=depth,
+                ob_mask=object_mask,
+                iteration=self.est_refine_iter,
+            )
+        except Exception as error:
+            raise BackendUnavailable(
+                "FoundationPose register failed: {}".format(error)
+            ) from error
+        return self._validate_pose(pose)
+
+    def track_frame(
+        self, rgb, depth_m, mask, camera_matrix, mesh_path, mesh_scale_to_meters=1.0
+    ):
+        estimator = self._ensure_estimator(mesh_path, mesh_scale_to_meters)
+        if getattr(estimator, "pose_last", None) is None:
+            raise BackendUnavailable("FoundationPose tracking requested before registration")
+        rgb, depth, object_mask, K = self._prepare_inputs(
+            rgb, depth_m, mask, camera_matrix
+        )
+        if self.use_mask_center_guidance:
+            self._guide_pose_xy(estimator, object_mask, K)
+        try:
+            pose = estimator.track_one(
+                rgb=rgb,
+                depth=depth,
+                K=K,
+                iteration=self.track_refine_iter,
+            )
+        except Exception as error:
+            raise BackendUnavailable(
+                "FoundationPose tracking failed: {}".format(error)
+            ) from error
+        return self._validate_pose(pose)
+
+    @staticmethod
+    def _guide_pose_xy(estimator, object_mask, camera_matrix):
+        """Use the current segmentation center as the Plus-Plus 2D cue."""
+        ys, xs = np.where(object_mask > 0)
+        if len(xs) == 0:
+            return
+        pose = getattr(estimator, "pose_last", None)
+        if pose is None or not hasattr(pose, "device"):
+            return
+        import torch
+
+        K = torch.as_tensor(camera_matrix, device=pose.device, dtype=pose.dtype)
+        center_u = float(xs.min() + xs.max()) * 0.5
+        center_v = float(ys.min() + ys.max()) * 0.5
+        corrected = pose.clone()
+        depth = corrected[2, 3]
+        corrected[0, 3] = (center_u - K[0, 2]) * depth / K[0, 0]
+        corrected[1, 3] = (center_v - K[1, 2]) * depth / K[1, 1]
+        estimator.pose_last = corrected
+
+    def reset(self):
+        if self._estimator is not None:
+            self._estimator.pose_last = None
+
+    def close(self):
+        self.reset()
+        self._estimator = None
+        self._mesh_key = None
+        self._glctx = None
 
 
 class FoundationPoseEstimator(PoseEstimator):

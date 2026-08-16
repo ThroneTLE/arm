@@ -26,10 +26,16 @@ segmentation:
   confidence_threshold: 0.5
 pose_estimation:
   backend: mock
-  foundationpose_root: ''
+  foundationpose_root: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus
   mesh_path: ''
   mesh_scale_to_meters: 1.0
   require_aligned_depth: true
+  device: cuda:0
+  debug_dir: /home/throne/workspaces/arm_data/foundationpose_debug
+  debug: 0
+  est_refine_iter: 5
+  track_refine_iter: 2
+  use_mask_center_guidance: true
 localization:
   visual_priority: true
   use_robot_fallback: true

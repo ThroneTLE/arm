@@ -15,3 +15,8 @@
 # Large reference manuals are kept locally, outside source control.
 /docs/*.pdf
 /docs/*.PDF
+
+# Runtime products and automatic parameter backups
+/Log/
+/tool/object_model_builder/output/
+/ros_ws/src/arm_vision_framework/config/*.backup_*

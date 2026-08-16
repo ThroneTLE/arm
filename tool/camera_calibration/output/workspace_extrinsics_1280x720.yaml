@@ -1,0 +1,93 @@
+schema_version: 2
+coordinate_convention:
+  id: tag_top_left_x_right_y_down_v1
+  origin: black_border_top_left
+  x_axis: top_left_to_top_right
+  y_axis: top_left_to_bottom_left
+  z_axis: x_cross_y_into_plane
+workspace_frame: ruler_workspace
+camera_frame: camera_color_optical_frame
+units: meters
+camera_from_workspace:
+  description: p_camera = R * p_workspace + t
+  rotation:
+  - - 0.9802818872195299
+    - 0.1919229345251416
+    - -0.04704262739872224
+  - - -0.13467366574767026
+    - 0.8230986886529119
+    - 0.551698787828958
+  - - 0.1446043752567729
+    - -0.5344849258315102
+    - 0.8327157010141477
+  translation:
+  - -0.28140948869046883
+  - 0.028843108314641097
+  - 0.7583783097870026
+  matrix:
+  - - 0.9802818872195299
+    - 0.1919229345251416
+    - -0.04704262739872224
+    - -0.28140948869046883
+  - - -0.13467366574767026
+    - 0.8230986886529119
+    - 0.551698787828958
+    - 0.028843108314641097
+  - - 0.1446043752567729
+    - -0.5344849258315102
+    - 0.8327157010141477
+    - 0.7583783097870026
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+workspace_from_camera:
+  description: p_workspace = R * p_camera + t
+  rotation:
+  - - 0.9802818872195299
+    - -0.13467366574767026
+    - 0.14460437525677292
+  - - 0.19192293452514164
+    - 0.823098688652912
+    - -0.5344849258315103
+  - - -0.04704262739872224
+    - 0.5516987878289579
+    - 0.8327157010141478
+  translation:
+  - 0.17008021008822866
+  - 0.4356099849009716
+  - -0.6606644754855459
+  matrix:
+  - - 0.9802818872195299
+    - -0.13467366574767026
+    - 0.14460437525677292
+    - 0.17008021008822866
+  - - 0.19192293452514164
+    - 0.823098688652912
+    - -0.5344849258315103
+    - 0.4356099849009716
+  - - -0.04704262739872224
+    - 0.5516987878289579
+    - 0.8327157010141478
+    - -0.6606644754855459
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+quality:
+  rms_reprojection_error_px: 0.31479077256114074
+  max_reprojection_error_px: 0.6878360177772789
+  mean_error_by_tag_px:
+    100: 0.1676719396129421
+    101: 0.25460188651570115
+    102: 0.3785814773291757
+  frames_used: 60
+  calibration_tag_ids:
+  - 100
+  - 101
+  - 102
+source:
+  intrinsics: /home/throne/workspaces/arm/tool/camera_calibration/output/astra_pro_rgb_1280x720.yaml
+  layout: /home/throne/workspaces/arm/tool/camera_calibration/config/tag_layout.yaml
+  tag_size_mm: 69.0
+  workspace_plane_z_mm: 0.0

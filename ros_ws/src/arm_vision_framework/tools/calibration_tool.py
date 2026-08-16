@@ -27,6 +27,7 @@ from arm_vision_framework.transforms import as_transform
 DEFAULT_PARAMETER = PACKAGE_ROOT / "config" / "calibration_parameters.yaml"
 DEFAULT_CAMERA_RUNTIME = (
     ARM_ROOT
+    / "tool"
     / "camera_calibration"
     / "calibration_snapshots"
     / "latest"
@@ -160,7 +161,7 @@ def sync_camera(parameter_path, runtime_path, tag_layout_path=None):
     parameters["quality"] = dict(runtime.get("quality", {}))
     parameters["quality"]["workspace_coordinate_convention_compatible"] = runtime_compatible
     if tag_layout_path is None:
-        live_layout = ARM_ROOT / "camera_calibration" / "config" / "tag_layout.yaml"
+        live_layout = ARM_ROOT / "tool" / "camera_calibration" / "config" / "tag_layout.yaml"
         snapshot_layout = runtime_path.parent / "tag_layout.yaml"
         tag_layout_path = (
             live_layout
@@ -291,7 +292,7 @@ def main():
     elif args.command == "invalidate":
         destination, backup = invalidate_transform(args.parameter, args.name)
     elif args.command == "camera-ui":
-        script = ARM_ROOT / "camera_calibration" / "run_ui.sh"
+        script = ARM_ROOT / "tool" / "camera_calibration" / "run_ui.sh"
         return subprocess.call([str(script)])
     else:
         raise RuntimeError("unhandled command")
