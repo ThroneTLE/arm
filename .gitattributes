@@ -1,0 +1,3 @@
+# Unified diffs encode context with a leading space, which should not be
+# interpreted as source-code whitespace errors by `git diff --check`.
+*.patch -whitespace

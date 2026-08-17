@@ -1,0 +1,11 @@
+<launch>
+  <arg name="object_id" default="competition_object"/>
+  <arg name="object_link" default="competition_object::link"/>
+  <node pkg="competition_sim_bridge" type="competition_sim_bridge_node"
+        name="competition_sim_bridge" output="screen">
+    <param name="base_frame" value="base_link"/>
+    <param name="tcp_link" value="tool0"/>
+    <param name="object_id" value="$(arg object_id)"/>
+    <param name="object_link" value="$(arg object_link)"/>
+  </node>
+</launch>

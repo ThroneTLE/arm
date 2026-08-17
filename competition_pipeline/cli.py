@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""Field CLI for RGB-D calibration, Tag mapping, hand-eye, and localization."""
+
+import argparse
+import json
+import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+import yaml
+
+from .configuration import CompetitionConfig, load_camera_intrinsics
+from .geometry import transform_from_xyz_rpy_mm, xyz_rpy_from_transform
+from .hand_eye import HandEyeCalibrator
+from .localization import HybridLocalizer
+from .sample_store import HandEyeSampleStore
+from .tag_map import TagMap
+
+
+ROOT = Path(__file__).resolve().parent
+DEFAULT_CONFIG = ROOT / "config" / "competition.yaml"
+DEFAULT_SAMPLES = None
+
+
+def _configured_samples(config, override=None):
+    return (
+        Path(override).expanduser().resolve()
+        if override
+        else config.resolve_path(config.camera["hand_eye_samples_file"])
+    )
+
+
+def _append_sample(path, config, sample, image_source):
+    return HandEyeSampleStore(path, config).append(sample, image_source)
+
+
+def _configured_intrinsics(config, override=None):
+    path = (
+        Path(override).expanduser().resolve()
+        if override
+        else config.resolve_path(config.camera["color_intrinsics_file"])
+    )
+    return load_camera_intrinsics(path)
+
+
+def _matrix_text(matrix):
+    return yaml.safe_dump(np.asarray(matrix).tolist(), sort_keys=False).strip()
+
+
+def _open_camera(device, width, height, fps):
+    capture = cv2.VideoCapture(int(device) if str(device).isdigit() else str(device), cv2.CAP_V4L2)
+    if not capture.isOpened():
+        raise RuntimeError("cannot open camera {}".format(device))
+    if width:
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    if height:
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    if fps:
+        capture.set(cv2.CAP_PROP_FPS, fps)
+    return capture
+
+
+def _hand_eye_live(args, config):
+    matrix, distortion, image_size = _configured_intrinsics(config, args.intrinsics)
+    capture_width, capture_height = image_size
+    capture = _open_camera(args.camera_device, capture_width, capture_height, args.fps)
+    calibrator = HandEyeCalibrator(config)
+    print("SPACE freeze and enter TCP X Y Z R P Y | Q quit")
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                raise RuntimeError("camera read failed")
+            if (frame.shape[1], frame.shape[0]) != image_size:
+                raise RuntimeError(
+                    "camera eye size {} does not match intrinsics {}".format(
+                        (frame.shape[1], frame.shape[0]), image_size
+                    )
+                )
+            detections = calibrator.localizer.detect(frame)
+            preview = frame.copy()
+            if detections:
+                corners = [np.asarray(points, dtype=np.float32).reshape(1, 4, 2) for points in detections.values()]
+                ids = np.asarray(sorted(detections), dtype=np.int32).reshape(-1, 1)
+                corners = [np.asarray(detections[int(tag_id)], dtype=np.float32).reshape(1, 4, 2) for tag_id in ids.reshape(-1)]
+                cv2.aruco.drawDetectedMarkers(preview, corners, ids)
+            cv2.putText(preview, "mapped={} saved={}".format(sorted(set(detections).intersection(TagMap(config).ids)), _sample_count(args.samples, config)),
+                        (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 0), 2)
+            cv2.imshow("competition hand-eye capture", preview)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                return 0
+            if key == 32:
+                text = input("TCP X Y Z R P Y (mm, deg): ").strip().split()
+                if len(text) != 6:
+                    print("rejected: enter exactly six values")
+                    continue
+                values = [float(value) for value in text]
+                base_from_tcp = transform_from_xyz_rpy_mm(values[:3], values[3:])
+                sample = calibrator.add_image_sample(frame, base_from_tcp, matrix, distortion)
+                count = _append_sample(args.samples, config, sample, "live:{}".format(args.camera_device))
+                print("saved sample {}: tags={} RMS={:.3f}px".format(count, sample.visible_tag_ids, sample.rms_reprojection_error_px))
+    finally:
+        capture.release()
+        cv2.destroyAllWindows()
+
+
+def _sample_count(path, config):
+    try:
+        return len(HandEyeSampleStore(path, config).entries())
+    except ValueError:
+        return 0
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("check")
+    commands.add_parser("tag-list")
+    tag_set = commands.add_parser("tag-set")
+    tag_set.add_argument("--id", type=int, required=True)
+    tag_set.add_argument("--bottom-right-mm", nargs=3, type=float, required=True, metavar=("X", "Y", "Z"))
+    tag_set.add_argument("--rpy-deg", nargs=3, type=float, metavar=("ROLL", "PITCH", "YAW"))
+    tag_remove = commands.add_parser("tag-remove")
+    tag_remove.add_argument("--id", type=int, required=True)
+    tag_default = commands.add_parser("tag-default-rpy")
+    tag_default.add_argument("--rpy-deg", nargs=3, type=float, required=True)
+    add = commands.add_parser("hand-eye-add")
+    add.add_argument("--image", type=Path, required=True)
+    add.add_argument("--tcp-xyz-mm", nargs=3, type=float, required=True)
+    add.add_argument("--tcp-rpy-deg", nargs=3, type=float, required=True)
+    add.add_argument("--intrinsics", type=Path)
+    add.add_argument("--samples", type=Path, default=DEFAULT_SAMPLES)
+    hand_live = commands.add_parser("hand-eye-live")
+    hand_live.add_argument("--camera-device", default="0")
+    hand_live.add_argument("--fps", type=float, default=30.0)
+    hand_live.add_argument("--intrinsics", type=Path)
+    hand_live.add_argument("--samples", type=Path, default=DEFAULT_SAMPLES)
+    solve = commands.add_parser("hand-eye-solve")
+    solve.add_argument("--samples", type=Path, default=DEFAULT_SAMPLES)
+    localize = commands.add_parser("localize-image")
+    localize.add_argument("--image", type=Path, required=True)
+    localize.add_argument("--intrinsics", type=Path)
+    localize.add_argument("--tcp-xyz-mm", nargs=3, type=float)
+    localize.add_argument("--tcp-rpy-deg", nargs=3, type=float)
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    config = CompetitionConfig(args.config)
+    if hasattr(args, "samples"):
+        args.samples = _configured_samples(config, args.samples)
+    tag_map = TagMap(config)
+    if args.command == "check":
+        intrinsics = config.camera["color_intrinsics_file"]
+        depth_calibration = config.camera.get(
+            "rgbd_calibration_file", config.camera.get("factory_calibration_file")
+        )
+        print(
+            "config: PASS\ncamera profile: {}\nTag IDs: {}\nhand-eye valid: {}\n"
+            "color intrinsics: {}\ndepth calibration: {}\nsegmentation valid: {}\n"
+            "planning valid: {}\ngrasp execution valid: {}".format(
+                config.active_camera_profile, list(tag_map.ids),
+                config.hand_eye_valid, intrinsics, depth_calibration,
+                config.segmentation_valid,
+                bool(config.data.get("planning_validation", {}).get("valid", False)),
+                bool(config.data.get("grasp_execution_validation", {}).get("valid", False)),
+            )
+        )
+        return 0
+    if args.command == "tag-list":
+        for tag_id in tag_map.ids:
+            entry = tag_map.entry(tag_id)
+            print("ID {}: BR={} mm, RPY={} deg".format(tag_id, entry["bottom_right_xyz_mm"], entry.get("base_from_tag_rpy_deg", tag_map.default_rpy_deg.tolist())))
+        return 0
+    if args.command == "tag-set":
+        tag_map.set_tag(args.id, args.bottom_right_mm, args.rpy_deg)
+        print("updated Tag {}; previous hand-eye result invalidated".format(args.id))
+        return 0
+    if args.command == "tag-remove":
+        tag_map.remove_tag(args.id)
+        print("removed Tag {}; previous hand-eye result invalidated".format(args.id))
+        return 0
+    if args.command == "tag-default-rpy":
+        tag_map.set_default_rpy(args.rpy_deg)
+        print("updated default Tag orientation; previous hand-eye result invalidated")
+        return 0
+    if args.command == "hand-eye-live":
+        return _hand_eye_live(args, config)
+    if args.command == "hand-eye-add":
+        image = cv2.imread(str(args.image.expanduser()), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("failed to read image {}".format(args.image))
+        matrix, distortion, expected_size = _configured_intrinsics(config, args.intrinsics)
+        if (image.shape[1], image.shape[0]) != expected_size:
+            raise ValueError("image size does not match intrinsics: {} != {}".format((image.shape[1], image.shape[0]), expected_size))
+        calibrator = HandEyeCalibrator(config)
+        base_from_tcp = transform_from_xyz_rpy_mm(args.tcp_xyz_mm, args.tcp_rpy_deg)
+        sample = calibrator.add_image_sample(image, base_from_tcp, matrix, distortion)
+        count = _append_sample(args.samples, config, sample, args.image.resolve())
+        print("saved sample {}: tags={} RMS={:.3f}px".format(count, sample.visible_tag_ids, sample.rms_reprojection_error_px))
+        return 0
+    if args.command == "hand-eye-solve":
+        data = HandEyeSampleStore(args.samples, config).load()
+        calibrator = HandEyeCalibrator(config)
+        for entry in data["samples"]:
+            calibrator.add_sample(entry["base_from_tcp"], entry["base_from_camera"], entry.get("visible_tag_ids", []), entry.get("rms_reprojection_error_px", 0.0))
+        result = calibrator.solve()
+        calibrator.promote(result)
+        print("T_tcp_color_camera:\n{}".format(_matrix_text(result.tcp_from_camera)))
+        print("inliers: {}/{} | translation RMS/max: {:.3f}/{:.3f} mm | rotation RMS/max: {:.3f}/{:.3f} deg".format(len(result.inlier_indices), result.total_samples, result.translation_rms_mm, result.translation_max_mm, result.rotation_rms_deg, result.rotation_max_deg))
+        return 0
+    if args.command == "localize-image":
+        image = cv2.imread(str(args.image.expanduser()), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("failed to read image {}".format(args.image))
+        matrix, distortion, expected_size = _configured_intrinsics(config, args.intrinsics)
+        if (image.shape[1], image.shape[0]) != expected_size:
+            raise ValueError("image size does not match intrinsics")
+        tcp = None
+        robot_time = None
+        if args.tcp_xyz_mm is not None or args.tcp_rpy_deg is not None:
+            if args.tcp_xyz_mm is None or args.tcp_rpy_deg is None:
+                raise ValueError("TCP XYZ and RPY must be supplied together")
+            tcp = transform_from_xyz_rpy_mm(args.tcp_xyz_mm, args.tcp_rpy_deg)
+            robot_time = time.monotonic()
+        result = HybridLocalizer(config).localize(image, matrix, distortion, tcp, robot_timestamp_s=robot_time)
+        print(json.dumps({"valid": result.valid, "source": result.source, "visible_tag_ids": result.visible_tag_ids, "used_tag_ids": result.used_tag_ids, "rms_px": result.rms_reprojection_error_px, "reason": result.reason}, ensure_ascii=False, indent=2))
+        if result.valid:
+            xyz_m, rpy_deg = xyz_rpy_from_transform(result.base_from_camera)
+            print("T_base_color_camera:\n{}".format(_matrix_text(result.base_from_camera)))
+            print("XYZ mm: {}\nRPY deg: {}".format((xyz_m * 1000.0).round(3).tolist(), rpy_deg.round(4).tolist()))
+        return 0 if result.valid else 2
+    raise RuntimeError("unhandled command")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

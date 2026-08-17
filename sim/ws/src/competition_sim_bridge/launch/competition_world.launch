@@ -1,0 +1,14 @@
+<launch>
+  <arg name="start_rviz" default="false"/>
+  <include file="$(find ur5e_robotiq_85_mtc_pkg)/launch/setup.launch">
+    <arg name="start_rviz" value="$(arg start_rviz)"/>
+  </include>
+  <!-- Competition override: the upstream file already ships this TRAC-IK
+       stanza commented out; it is more robust for Cartesian TCP targets. -->
+  <rosparam ns="robot_description_kinematics" command="load"
+            file="$(find competition_sim_bridge)/config/trac_ik.yaml"/>
+  <!-- Reuse the OSRF Gazebo model database's 5 cm wood cube. -->
+  <node pkg="gazebo_ros" type="spawn_model" name="spawn_competition_object"
+        args="-database wood_cube_5cm -sdf -model competition_object -x 0.50 -y 0.25 -z 1.015"
+        output="screen"/>
+</launch>

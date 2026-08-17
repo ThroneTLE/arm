@@ -1,0 +1,29 @@
+diff --git a/capabilities/src/execute_task_solution_capability.cpp b/capabilities/src/execute_task_solution_capability.cpp
+index af0e835..ecc2cf4 100644
+--- a/capabilities/src/execute_task_solution_capability.cpp
++++ b/capabilities/src/execute_task_solution_capability.cpp
+@@ -109,11 +109,7 @@ void ExecuteTaskSolutionCapability::goalCallback(
+ 		result.error_code = context_->plan_execution_->executeAndMonitor(plan);
+ 	}
+ 
+-#if HAVE_MOVEIT_ERROR_CODE_TO_STRING
+ 	const std::string response = moveit::core::MoveItErrorCode::toString(result.error_code);
+-#else
+-	const std::string response = context_->plan_execution_->getErrorCodeString(result.error_code);
+-#endif
+ 
+ 	if (result.error_code.val == moveit_msgs::MoveItErrorCodes::SUCCESS)
+ 		as_->setSucceeded(result, response);
+diff --git a/core/src/stages/connect.cpp b/core/src/stages/connect.cpp
+index 16e2ea8..997bac7 100644
+--- a/core/src/stages/connect.cpp
++++ b/core/src/stages/connect.cpp
+@@ -123,7 +123,7 @@ bool Connect::compatible(const InterfaceState& from_state, const InterfaceState&
+ 		const unsigned int num = jm->getVariableCount();
+ 		Eigen::Map<const Eigen::VectorXd> positions_from(from.getJointPositions(jm), num);
+ 		Eigen::Map<const Eigen::VectorXd> positions_to(to.getJointPositions(jm), num);
+-		if (!(positions_from - positions_to).isZero(1e-4)) {
++		if (!(positions_from - positions_to).isZero(1e-2)) {
+ 			ROS_INFO_STREAM_NAMED("Connect", "Deviation in joint " << jm->getName() << ": [" << positions_from.transpose()
+ 			                                                       << "] != [" << positions_to.transpose() << "]");
+ 			return false;

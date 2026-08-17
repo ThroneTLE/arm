@@ -90,3 +90,9 @@ rostopic echo /bottle_localization/bottle_base_pose
 - RGB、Mask、对齐深度使用完全相同的校正像素坐标。
 
 透明或高反光瓶身会让结构光深度产生孔洞。先查看 RViz 的对齐深度图和状态中的 `depth_coverage`；必要时使用不改变几何尺寸的消光处理，再用尺子进行坐标验收。
+
+## 抓取规划（AnyGrasp）
+
+本工具发布的 `/bottle_localization/object_cloud` 与 `/camera_calibration/camera_pose`
+同时是 AnyGrasp 抓取规划节点的输入，见 `tool/grasp_planning/`。规划节点独立运行
+（独立的 `anygraspenv` 环境），在 RViz 中叠加显示夹爪候选，不需要修改本工具。

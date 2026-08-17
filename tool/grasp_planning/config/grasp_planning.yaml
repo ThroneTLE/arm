@@ -1,0 +1,38 @@
+schema_version: 1
+
+# AnyGrasp 抓取规划节点配置。SDK/checkpoint/license 的路径按需修改。
+anygrasp:
+  sdk_grasp_dir: /home/throne/workspaces/arm_data/third_party/anygrasp_sdk/grasp_detection
+  checkpoint_path: /home/throne/workspaces/arm_data/third_party/anygrasp_sdk/grasp_detection/log/checkpoint_detection.tar
+  # 机械臂二指夹爪的最大开度（米）；SDK 限制 <= 0.1。
+  max_gripper_width_m: 0.08
+  # 手指高度，SDK 会把该值赋给每个候选并用于碰撞检测。
+  gripper_height_m: 0.03
+  dense_grasp: false
+  collision_detection: true
+  top_k: 20
+  minimum_score: 0.3
+  # 只保留"自上而下"抓取：逼近方向与桌面法线（工作系 -Z 向上，+Z 朝桌面内）
+  # 的夹角不超过该度数。
+  top_down_only: true
+  approach_cone_deg: 45.0
+  minimum_width_m: 0.02
+  maximum_width_m: 0.08
+  # SDK 加载失败（license/checkpoint 未到位）时的重试周期。
+  retry_interval_s: 10.0
+
+runtime:
+  rate_hz: 2.0
+  # 输入话题超过该时长即视为过期，不进行推理。
+  maximum_input_age_s: 0.6
+  maximum_cloud_points: 6000
+
+topics:
+  cloud: /bottle_localization/object_cloud
+  camera_pose: /camera_calibration/camera_pose
+  grasps: /grasp_planning/grasps
+  best_grasp: /grasp_planning/best_grasp
+  status: /grasp_planning/status
+
+visualization:
+  rviz_config: grasp_planning.rviz

@@ -1,0 +1,176 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.45
+      Cell Size: 0.05
+      Class: rviz/Grid
+      Color: 150; 150; 150
+      Enabled: true
+      Name: Robot base XY plane
+      Normal Cell Count: 0
+      Offset: {X: 0, Y: 0, Z: 0}
+      Plane: XY
+      Plane Cell Count: 30
+      Reference Frame: robot_base
+      Value: true
+    - Class: rviz/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+      Marker Scale: 0.10
+      Name: Coordinate frames
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Tree: {}
+      Update Interval: 0
+      Value: true
+    - Class: rviz/Axes
+      Enabled: true
+      Length: 0.18
+      Name: Camera optical axes
+      Radius: 0.008
+      Reference Frame: competition_camera_color_optical_frame
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /competition_pipeline/tag_markers
+      Name: AprilTag map
+      Queue Size: 10
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /competition_pipeline/object_markers
+      Name: Segmented object bounds
+      Queue Size: 10
+      Value: true
+    - Alpha: 0.95
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: rgb
+      Class: rviz/PointCloud2
+      Color Transformer: RGB8
+      Decay Time: 0
+      Enabled: true
+      Name: Masked RGB-D object cloud
+      Position Transformer: XYZ
+      Queue Size: 2
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.003
+      Style: Points
+      Topic: /competition_pipeline/object_cloud
+      Unreliable: false
+      Use Fixed Frame: true
+      Value: true
+    - Alpha: 1
+      Axes Length: 0.10
+      Axes Radius: 0.006
+      Class: rviz/Pose
+      Color: 80; 170; 255
+      Enabled: true
+      Name: Camera pose from AprilTag or TCP
+      Shape: Axes
+      Topic: /competition_pipeline/camera_pose
+      Value: true
+    - Class: rviz/Camera
+      Enabled: true
+      Image Rendering: background and overlay
+      Image Topic: /competition_pipeline/camera/image
+      Name: Segmentation camera view
+      Overlay Alpha: 0.45
+      Queue Size: 2
+      Transport Hint: raw
+      Unreliable: false
+      Value: true
+      Zoom Factor: 1
+    - Class: rviz/Image
+      Enabled: false
+      Image Topic: /competition_pipeline/camera/image
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Segmentation RGB image
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Unreliable: false
+      Value: false
+    - Alpha: 1
+      Axes Length: 0.08
+      Axes Radius: 0.004
+      Class: rviz/PoseArray
+      Color: 65; 230; 120
+      Enabled: true
+      Name: Segmented object centers
+      Topic: /competition_pipeline/object_poses
+      Value: true
+    - Alpha: 1
+      Axes Length: 0.10
+      Axes Radius: 0.005
+      Class: rviz/PoseArray
+      Color: 255; 90; 80
+      Enabled: true
+      Name: Future grasp candidates
+      Topic: /competition_pipeline/grasp_candidates
+      Value: true
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz/Path
+      Color: 255; 180; 40
+      Enabled: true
+      Head Diameter: 0.03
+      Head Length: 0.02
+      Line Style: Lines
+      Line Width: 0.008
+      Name: Future planned TCP path
+      Offset: {X: 0, Y: 0, Z: 0}
+      Pose Color: 255; 85; 85
+      Pose Style: Axes
+      Radius: 0.03
+      Shaft Diameter: 0.01
+      Shaft Length: 0.03
+      Topic: /competition_pipeline/planned_path
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 31; 35; 40
+    Default Light: true
+    Fixed Frame: robot_base
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 1.25
+      Focal Point: {X: -0.20, Y: -0.25, Z: 0.10}
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Competition workspace
+      Near Clip Distance: 0.01
+      Pitch: 0.65
+      Target Frame: robot_base
+      Yaw: 0.8
+Window Geometry:
+  Height: 900
+  Width: 1440
+  X: 50
+  Y: 40

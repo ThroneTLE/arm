@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+import rospy
+from geometry_msgs.msg import PoseStamped
+
+from competition_sim_bridge.bridge import (
+    GazeboObjectPoseProvider, MoveItRobotController, _pose_from_matrix,
+)
+
+
+def main():
+    rospy.init_node("competition_sim_bridge")
+    base_frame = rospy.get_param("~base_frame", "base_link")
+    tcp_link = rospy.get_param("~tcp_link", "tool0")
+    object_id = rospy.get_param("~object_id", "competition_object")
+    object_link = rospy.get_param("~object_link", "competition_object::link")
+    robot = MoveItRobotController(base_frame=base_frame, tcp_link=tcp_link)
+    objects = GazeboObjectPoseProvider(
+        {object_id: object_link}, base_frame=base_frame
+    )
+    tcp_publisher = rospy.Publisher("~tcp_pose", PoseStamped, queue_size=1)
+    object_publisher = rospy.Publisher("~object_pose", PoseStamped, queue_size=1)
+    rate = rospy.Rate(20)
+    while not rospy.is_shutdown():
+        now = rospy.Time.now()
+        tcp = robot.latest_pose()
+        if tcp is not None:
+            message = PoseStamped()
+            message.header.frame_id = base_frame
+            message.header.stamp = now
+            message.pose = _pose_from_matrix(tcp.base_from_tcp)
+            tcp_publisher.publish(message)
+        obj = objects.latest_object_pose(object_id)
+        if obj is not None:
+            message = PoseStamped()
+            message.header.frame_id = base_frame
+            message.header.stamp = now
+            message.pose = _pose_from_matrix(obj.base_from_object)
+            object_publisher.publish(message)
+        rate.sleep()
+
+
+if __name__ == "__main__":
+    main()

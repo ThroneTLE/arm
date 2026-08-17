@@ -389,7 +389,9 @@ class AstraRosSource:
                 self._color_timestamp = time.monotonic()
                 self._color_history.append((self._color_timestamp, self._color))
 
-    def latest(self, anchor: str = "depth") -> Optional[FrameBundle]:
+    def latest(
+        self, anchor: str = "depth", copy_frames: bool = True,
+    ) -> Optional[FrameBundle]:
         with self._lock:
             if not self._color_history:
                 return None
@@ -423,13 +425,14 @@ class AstraRosSource:
                 ir_timestamp, infrared = nearest_timestamped_frame(
                     self._ir_history, color_timestamp
                 )
+            clone = (lambda value: value.copy()) if copy_frames else (lambda value: value)
             return FrameBundle(
-                color_bgr=color.copy(),
+                color_bgr=clone(color),
                 color_timestamp_s=float(color_timestamp),
-                depth_m=None if depth is None else depth.copy(),
+                depth_m=None if depth is None else clone(depth),
                 depth_timestamp_s=depth_timestamp,
                 depth_intrinsics=self._depth_intrinsics,
-                ir_image=None if infrared is None else infrared.copy(),
+                ir_image=None if infrared is None else clone(infrared),
                 ir_timestamp_s=ir_timestamp,
                 color_intrinsics=None,
                 depth_aligned_to_color=False,
@@ -471,10 +474,22 @@ class AstraRosSource:
 class OakDProSource:
     """DepthAI source using device calibration and depth aligned to RGB."""
 
-    def __init__(self, color_width=1280, color_height=720, fps=30):
+    def __init__(
+        self, color_width=1280, color_height=720, fps=30,
+        dot_projector_mA=800, floodlight_mA=0, mono_resolution="800p",
+    ):
         self.color_width = int(color_width)
         self.color_height = int(color_height)
         self.fps = int(fps)
+        self.dot_projector_mA = int(dot_projector_mA)
+        self.floodlight_mA = int(floodlight_mA)
+        self.mono_resolution = str(mono_resolution).lower()
+        if self.mono_resolution not in ("400p", "800p"):
+            raise ValueError("OAK mono resolution must be 400p or 800p")
+        if not 0 <= self.dot_projector_mA <= 1200:
+            raise ValueError("OAK dot projector current must be within 0..1200 mA")
+        if not 0 <= self.floodlight_mA <= 1500:
+            raise ValueError("OAK floodlight current must be within 0..1500 mA")
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._device = None
@@ -507,8 +522,13 @@ class OakDProSource:
         color.setInterleaved(False)
         left.setBoardSocket(dai.CameraBoardSocket.LEFT)
         right.setBoardSocket(dai.CameraBoardSocket.RIGHT)
-        left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
-        right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
+        mono_mode = (
+            dai.MonoCameraProperties.SensorResolution.THE_800_P
+            if self.mono_resolution == "800p"
+            else dai.MonoCameraProperties.SensorResolution.THE_400_P
+        )
+        left.setResolution(mono_mode)
+        right.setResolution(mono_mode)
         left.setFps(self.fps)
         right.setFps(self.fps)
         stereo.setDefaultProfilePreset(
@@ -533,6 +553,8 @@ class OakDProSource:
         stereo.depth.link(depth_output.input)
         left.out.link(ir_output.input)
         self._device = dai.Device(pipeline)
+        self._device.setIrLaserDotProjectorBrightness(self.dot_projector_mA)
+        self._device.setIrFloodLightBrightness(self.floodlight_mA)
         self._queues = {
             "color": self._device.getOutputQueue("color", maxSize=2, blocking=False),
             "depth": self._device.getOutputQueue("depth", maxSize=2, blocking=False),
@@ -553,6 +575,12 @@ class OakDProSource:
         )
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
+
+    def set_laser_enabled(self, enabled: bool) -> None:
+        if self._device is None:
+            raise RuntimeError("OAK device is not started")
+        current = self.dot_projector_mA if enabled else 0
+        self._device.setIrLaserDotProjectorBrightness(current)
 
     def _capture_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -577,17 +605,20 @@ class OakDProSource:
             if not updated:
                 time.sleep(0.003)
 
-    def latest(self, anchor: str = "depth") -> Optional[FrameBundle]:
+    def latest(
+        self, anchor: str = "depth", copy_frames: bool = True,
+    ) -> Optional[FrameBundle]:
         with self._lock:
             if self._color is None:
                 return None
+            clone = (lambda value: value.copy()) if copy_frames else (lambda value: value)
             return FrameBundle(
-                color_bgr=self._color.copy(),
+                color_bgr=clone(self._color),
                 color_timestamp_s=float(self._color_timestamp),
-                depth_m=None if self._depth is None else self._depth.copy(),
+                depth_m=None if self._depth is None else clone(self._depth),
                 depth_timestamp_s=self._depth_timestamp,
                 depth_intrinsics=self._color_intrinsics,
-                ir_image=None if self._ir is None else self._ir.copy(),
+                ir_image=None if self._ir is None else clone(self._ir),
                 ir_timestamp_s=self._ir_timestamp,
                 color_intrinsics=self._color_intrinsics,
                 depth_aligned_to_color=True,
@@ -600,4 +631,10 @@ class OakDProSource:
             self._thread.join(timeout=1.0)
             self._thread = None
         self._queues = {}
+        if self._device is not None:
+            try:
+                self._device.setIrLaserDotProjectorBrightness(0)
+                self._device.setIrFloodLightBrightness(0)
+            except Exception:
+                pass
         self._device = None

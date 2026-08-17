@@ -1,0 +1,19 @@
+# Simulation-only overrides. Never copy these safety values into competition.yaml.
+object_id: competition_object
+object_link: competition_object::link
+object_dimensions_m: [0.05, 0.05, 0.05]
+place_position_base_m: [0.50, -0.10, 0.025]
+safety:
+  dry_run: false
+  allow_robot_motion: true
+  workspace_min_mm: [-800.0, -800.0, -100.0]
+  # The upstream home pose puts tool0 at about +1079 mm in base_link.
+  workspace_max_mm: [1000.0, 1000.0, 1300.0]
+  # MoveIt owns and collision-checks the full path between endpoint poses.
+  maximum_single_step_mm: 1500.0
+  maximum_single_rotation_deg: 180.0
+  maximum_speed_scale: 0.2
+  maximum_robot_pose_age_s: 0.5
+grasp_execution:
+  maximum_segment_mm: 1500.0
+  maximum_segment_rotation_deg: 180.0

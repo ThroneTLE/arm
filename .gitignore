@@ -20,3 +20,17 @@
 /Log/
 /tool/object_model_builder/output/
 /ros_ws/src/arm_vision_framework/config/*.backup_*
+/competition_pipeline/output/
+/competition_pipeline/config/backups/
+
+# Isolated Gazebo/MoveIt simulation workspace and fetched upstream sources.
+/sim/ws/build/
+/sim/ws/devel/
+/sim/ws/install/
+/sim/ws/log/
+/sim/ws/.catkin_workspace
+/sim/ws/src/CMakeLists.txt
+/sim/ws/src/ur5e_robotiq_85_mtc/
+/sim/ws/src/moveit_task_constructor/
+/sim/logs/
+/sim/.*.pid

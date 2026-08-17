@@ -1,0 +1,9 @@
+repositories:
+  ur5e_robotiq_85_mtc:
+    type: git
+    url: https://github.com/blackcoffeerobotics/ur5e_robotiq_85_mtc.git
+    version: 371f8a51ae297ec635dd10655e063a7e923fd36c
+  moveit_task_constructor:
+    type: git
+    url: https://github.com/ros-planning/moveit_task_constructor.git
+    version: 4781ed563657cb7ecfcca857649bdf9f1c8d95b9
