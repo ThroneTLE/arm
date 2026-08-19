@@ -1,7 +1,14 @@
-"""Backend-neutral grasp contracts and a deterministic top-down fallback."""
+"""Backend-neutral grasp contracts and configurable grasp backends.
+
+The deterministic top-down planner remains the competition default.  The
+AnyGrasp adapter below is deliberately lazy and optional: it is only loaded
+when the deterministic planner rejects an object and the fallback is enabled.
+This keeps the validated mainline independent of the proprietary SDK, CUDA,
+and its license files.
+"""
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 
@@ -165,6 +172,182 @@ class TopDownGraspPlanner:
         )
 
 
+@dataclass(frozen=True)
+class AnyGraspFallbackSettings:
+    """Configuration for the optional AnyGrasp candidate adapter."""
+
+    sdk_grasp_dir: str
+    checkpoint_path: str
+    minimum_score: float = 0.01
+    maximum_gripper_width_m: float = 0.08
+    gripper_height_m: float = 0.03
+    top_k: int = 20
+    maximum_approach_deviation_deg: float = 45.0
+    collision_detection: bool = True
+    dense_grasp: bool = False
+
+    def __post_init__(self):
+        if float(self.minimum_score) < 0.0:
+            raise ValueError("AnyGrasp minimum_score cannot be negative")
+        if not 0.0 < float(self.maximum_gripper_width_m) <= 0.1:
+            raise ValueError("AnyGrasp maximum_gripper_width_m must be within (0, 0.1]")
+        if float(self.gripper_height_m) <= 0.0:
+            raise ValueError("AnyGrasp gripper_height_m must be positive")
+        if int(self.top_k) < 1:
+            raise ValueError("AnyGrasp top_k must be positive")
+        if not 0.0 <= float(self.maximum_approach_deviation_deg) <= 179.0:
+            raise ValueError("AnyGrasp approach deviation must be within 0..179 degrees")
+
+
+class AnyGraspFallbackPlanner:
+    """Convert the best AnyGrasp candidate into the competition grasp frame.
+
+    ``object_cloud.points_base_m`` is transformed with ``base_from_camera``
+    before it reaches AnyGrasp.  The adapter accepts an injected ``planner``
+    in tests; production code imports the proprietary wrapper only on first
+    use.
+    """
+
+    def __init__(self, settings, planner=None):
+        self.settings = settings
+        self._planner = planner
+
+    def _backend(self):
+        if self._planner is None:
+            from tool.grasp_planning.anygrasp_planner import AnyGraspPlanner
+
+            self._planner = AnyGraspPlanner(
+                checkpoint_path=self.settings.checkpoint_path,
+                sdk_grasp_dir=self.settings.sdk_grasp_dir,
+                max_gripper_width=self.settings.maximum_gripper_width_m,
+                gripper_height=self.settings.gripper_height_m,
+            )
+        return self._planner
+
+    @staticmethod
+    def _points_in_camera(object_cloud, base_from_camera):
+        points_base = np.asarray(object_cloud.points_base_m, dtype=np.float32).reshape(-1, 3)
+        if len(points_base) < 64:
+            raise GraspPlanningError("AnyGrasp requires at least 64 object points")
+        camera_from_base = np.linalg.inv(as_transform(base_from_camera, "base_from_camera"))
+        return (
+            camera_from_base[:3, :3].dot(points_base.T).T
+            + camera_from_base[:3, 3]
+        ), camera_from_base
+
+    def target_from_object(
+        self, object_cloud, object_id=None, *, base_from_camera=None
+    ):
+        if not bool(getattr(object_cloud, "valid", False)):
+            raise GraspPlanningError(
+                "object cloud is invalid: {}".format(getattr(object_cloud, "reason", ""))
+            )
+        if base_from_camera is None:
+            raise GraspPlanningError(
+                "AnyGrasp fallback requires base_from_camera for point-cloud conversion"
+            )
+        points_camera, camera_from_base = self._points_in_camera(
+            object_cloud, base_from_camera
+        )
+        approach_camera = camera_from_base[:3, :3].dot(
+            np.asarray([0.0, 0.0, -1.0], dtype=np.float64)
+        )
+        try:
+            candidates = self._backend().plan(
+                points_camera,
+                approach_camera=approach_camera,
+                approach_thresh=np.deg2rad(
+                    self.settings.maximum_approach_deviation_deg
+                ),
+                dense_grasp=self.settings.dense_grasp,
+                collision_detection=self.settings.collision_detection,
+                top_k=self.settings.top_k,
+            )
+        except Exception as error:
+            raise GraspPlanningError("AnyGrasp fallback unavailable: {}".format(error)) from error
+        if not candidates:
+            raise GraspPlanningError("AnyGrasp fallback returned no grasp candidates")
+
+        base_from_camera = as_transform(base_from_camera, "base_from_camera")
+        downward = np.asarray([0.0, 0.0, -1.0], dtype=np.float64)
+        cosine_limit = np.cos(np.deg2rad(self.settings.maximum_approach_deviation_deg))
+        accepted = []
+        for candidate in candidates:
+            width = float(candidate.width)
+            score = float(candidate.score)
+            if not np.isfinite(width) or not np.isfinite(score) or width <= 0.0:
+                continue
+            if width > float(self.settings.maximum_gripper_width_m):
+                continue
+            if score < float(self.settings.minimum_score):
+                continue
+            rotation_camera = np.asarray(candidate.rotation, dtype=np.float64).reshape(3, 3)
+            translation_camera = np.asarray(candidate.translation, dtype=np.float64).reshape(3)
+            rotation_base = base_from_camera[:3, :3].dot(rotation_camera)
+            translation_base = (
+                base_from_camera[:3, :3].dot(translation_camera)
+                + base_from_camera[:3, 3]
+            )
+            approach_base = rotation_base[:, 0]
+            if float(np.dot(approach_base, downward)) < cosine_limit:
+                continue
+            accepted.append((score, width, rotation_base, translation_base))
+        if not accepted:
+            raise GraspPlanningError(
+                "AnyGrasp candidates did not pass score, width, or top-down filters"
+            )
+        _, width, rotation_base, translation_base = max(accepted, key=lambda item: item[0])
+
+        # AnyGrasp uses local X=approach and local Y=jaw axis.  The competition
+        # contract uses local Z=approach and local Y=jaw axis.
+        approach = rotation_base[:, 0]
+        jaw_axis = rotation_base[:, 1]
+        lateral = np.cross(jaw_axis, approach)
+        base_from_grasp = np.column_stack([lateral, jaw_axis, approach])
+        transform = np.eye(4, dtype=np.float64)
+        transform[:3, :3] = base_from_grasp
+        transform[:3, 3] = translation_base
+        return GraspTarget(
+            object_id=(
+                object_id
+                if object_id is not None
+                else getattr(object_cloud, "class_name", "object") or "object"
+            ),
+            base_from_grasp=transform,
+            width_m=width,
+            score=max(0.0, float(max(accepted, key=lambda item: item[0])[0])),
+            source="anygrasp_fallback",
+        )
+
+
+class FallbackGraspPlanner:
+    """Try the deterministic planner first, then an optional fallback."""
+
+    def __init__(self, primary, fallback=None):
+        self.primary = primary
+        self.fallback = fallback
+
+    def target_from_object(self, object_cloud, object_id=None, **context):
+        try:
+            return self.primary.target_from_object(object_cloud, object_id)
+        except GraspPlanningError as primary_error:
+            if self.fallback is None:
+                raise
+            try:
+                return self.fallback.target_from_object(
+                    object_cloud, object_id, **context
+                )
+            except GraspPlanningError as fallback_error:
+                raise GraspPlanningError(
+                    "primary deterministic planner failed ({}); AnyGrasp fallback failed ({})".format(
+                        primary_error, fallback_error
+                    )
+                ) from fallback_error
+
+    def plan(self, target, place_position_base_m):
+        return self.primary.plan(target, place_position_base_m)
+
+
 def planner_settings_from_config(config):
     data = config.data if hasattr(config, "data") else config
     entry = data["grasp_planning"]
@@ -179,7 +362,42 @@ def planner_settings_from_config(config):
     )
 
 
+def planner_from_config(config):
+    """Build the default planner and its explicitly configured fallback."""
+    data = config.data if hasattr(config, "data") else config
+    settings = planner_settings_from_config(data)
+    primary = TopDownGraspPlanner(settings)
+    fallback_config = data.get("grasp_planning", {}).get("fallback", {})
+    if not bool(fallback_config.get("enabled", False)):
+        return FallbackGraspPlanner(primary)
+    backend = str(fallback_config.get("backend", "anygrasp")).strip().lower()
+    if backend != "anygrasp":
+        raise ValueError("unsupported grasp fallback backend: {}".format(backend))
+    fallback = AnyGraspFallbackPlanner(
+        AnyGraspFallbackSettings(
+            sdk_grasp_dir=str(fallback_config.get("sdk_grasp_dir", "")),
+            checkpoint_path=str(fallback_config.get("checkpoint_path", "")),
+            minimum_score=float(fallback_config.get("minimum_score", 0.01)),
+            maximum_gripper_width_m=float(
+                min(
+                    fallback_config.get("maximum_gripper_width_m", 0.08),
+                    settings.maximum_grasp_width_m,
+                )
+            ),
+            gripper_height_m=float(fallback_config.get("gripper_height_m", 0.03)),
+            top_k=int(fallback_config.get("top_k", 20)),
+            maximum_approach_deviation_deg=float(
+                fallback_config.get("maximum_approach_deviation_deg", 45.0)
+            ),
+            collision_detection=bool(fallback_config.get("collision_detection", True)),
+            dense_grasp=bool(fallback_config.get("dense_grasp", False)),
+        )
+    )
+    return FallbackGraspPlanner(primary, fallback)
+
+
 __all__ = [
+    "AnyGraspFallbackPlanner", "AnyGraspFallbackSettings", "FallbackGraspPlanner",
     "GraspPlan", "GraspPlanningError", "GraspTarget", "TopDownGraspPlanner",
-    "TopDownPlannerSettings", "planner_settings_from_config",
+    "TopDownPlannerSettings", "planner_from_config", "planner_settings_from_config",
 ]

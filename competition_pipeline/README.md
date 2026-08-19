@@ -49,7 +49,9 @@ Astra 还可在侧栏切换 Depth/IR 模式：默认 `640×480 @ 30` 用于流�
 7. **抓取规划**：`planning.py` 将合格物体点云的接地包围框转成确定性俯视抓取。抓取局部
    `+Z` 是接近方向，因此在机器人基座中必须指向 `-Z`；程序选择较短水平尺寸作为夹爪
    闭合轴，并检查开口宽度，再生成预抓取、抓取、抬升、预放置、放置和撤离 TCP 位姿。
-   AnyGrasp 可在 license/checkpoint 到位后作为候选来源，但不阻塞当前比赛流程。
+   这条确定性策略仍是默认主线。`FallbackGraspPlanner` 只有在主线拒绝物体且
+   `grasp_planning.fallback.enabled: true` 时才惰性加载 AnyGrasp；SDK、CUDA、许可证或
+   checkpoint 不可用时，主线不会被启动阶段阻塞。
 8. **抓取执行**：`execution.py` 已实现 open→pregrasp→approach→close→lift→place→release→
    retreat 状态机，支持取消/stop、结构化结果和运动分段。若有物体追踪器，抬升高度与放置
    XY 误差是强制闭环门；只完成机械臂轨迹不会被误报为抓取成功。真实适配器未验收前仍
@@ -158,6 +160,24 @@ Depth 内参，并继续使用刚性不变的 `T_color_depth` 外参完成三维
 所有现场参数集中在 [`config/competition.yaml`](config/competition.yaml)。修改 Tag 地图会
 自动使旧手眼矩阵失效；样本文件还带 Tag 地图哈希，地图改变后不能误用旧样本。配置保存
 前会在 `config/backups/` 留一份备份。
+
+## AnyGrasp 备选抓取
+
+比赛配置默认保持 `deterministic_top_down` 主线，并预留如下备选入口：
+
+```yaml
+grasp_planning:
+  backend: deterministic_top_down
+  fallback:
+    enabled: true
+    backend: anygrasp
+```
+
+代码调用 `planner_from_config(config)` 得到组合规划器。主线成功时不会导入 `gsnet`；主线
+失败时，调用方需要把分割点云对应的 `base_from_camera` 传给
+`planner.target_from_object(cloud, base_from_camera=...)`。AnyGrasp 候选会转换为比赛坐标
+约定并重新检查分数、夹爪宽度和自上而下方向。许可证和权重仍放在仓库外，配置中的路径
+按现场机器修改；不要把 license ZIP 或 checkpoint 提交到 Git。
 
 ## CLI 辅助命令
 

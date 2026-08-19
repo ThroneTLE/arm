@@ -10,6 +10,7 @@ from competition_pipeline.geometry import interpolate_transforms
 from competition_pipeline.interfaces import ObjectPoseSample, RobotPoseSample
 from competition_pipeline.object_localization import SegmentedObjectCloud
 from competition_pipeline.planning import (
+    AnyGraspFallbackPlanner, AnyGraspFallbackSettings, FallbackGraspPlanner,
     GraspPlanningError, TopDownGraspPlanner, TopDownPlannerSettings,
 )
 
@@ -103,6 +104,59 @@ def _safe_controller(adapter):
 
 
 class GraspMainlineTest(unittest.TestCase):
+    def test_anygrasp_fallback_is_used_only_after_primary_rejection(self):
+        cloud = _cloud()
+        cloud.points_base_m = np.repeat(cloud.points_base_m, 100, axis=0)
+        primary = _planner(maximum_width=0.03)
+
+        class FakeCandidate:
+            translation = np.asarray([0.45, 0.10, 0.10])
+            # AnyGrasp convention: X=approach (base -Z), Y=jaw axis.
+            rotation = np.asarray([
+                [0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0],
+                [-1.0, 0.0, 0.0],
+            ])
+            width = 0.04
+            score = 0.5
+
+        class FakeAnyGrasp:
+            def __init__(self):
+                self.calls = 0
+
+            def plan(self, points, **kwargs):
+                self.calls += 1
+                self.points = np.asarray(points)
+                return [FakeCandidate()]
+
+        backend = FakeAnyGrasp()
+        fallback = AnyGraspFallbackPlanner(
+            AnyGraspFallbackSettings(
+                sdk_grasp_dir="unused",
+                checkpoint_path="unused",
+                minimum_score=0.1,
+                maximum_gripper_width_m=0.05,
+            ),
+            planner=backend,
+        )
+        planner = FallbackGraspPlanner(primary, fallback)
+        target = planner.target_from_object(cloud, base_from_camera=np.eye(4))
+
+        self.assertEqual(backend.calls, 1)
+        self.assertEqual(target.source, "anygrasp_fallback")
+        self.assertAlmostEqual(target.width_m, 0.04)
+        np.testing.assert_allclose(target.base_from_grasp[:3, 2], [0.0, 0.0, -1.0])
+        self.assertEqual(len(backend.points), 100)
+
+    def test_anygrasp_fallback_requires_camera_transform(self):
+        cloud = _cloud()
+        cloud.points_base_m = np.repeat(cloud.points_base_m, 100, axis=0)
+        fallback = AnyGraspFallbackPlanner(
+            AnyGraspFallbackSettings("unused", "unused"), planner=object()
+        )
+        with self.assertRaisesRegex(GraspPlanningError, "base_from_camera"):
+            fallback.target_from_object(cloud)
+
     def test_top_down_uses_negative_base_z(self):
         target = _planner().target_from_object(_cloud())
         np.testing.assert_allclose(target.base_from_grasp[:3, 2], [0, 0, -1])

@@ -21,6 +21,7 @@ from competition_pipeline.object_localization import (
     ObjectCloudSettings, localize_segmented_instance,
 )
 from competition_pipeline.interfaces import RobotPoseSample
+from competition_pipeline.planning import FallbackGraspPlanner, planner_from_config
 from competition_pipeline.sample_store import HandEyeSampleStore
 from competition_pipeline.segmentation_validation import (
     SegmentationModel, evaluate_mask_result,
@@ -50,6 +51,12 @@ class PipelineTest(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_default_grasp_planner_keeps_anygrasp_lazy_as_fallback(self):
+        planner = planner_from_config(self.config)
+        self.assertIsInstance(planner, FallbackGraspPlanner)
+        self.assertIsNotNone(planner.fallback)
+        self.assertIsNone(planner.fallback._planner)
 
     def test_bottom_right_corner_convention(self):
         corners = TagMap(self.config).corners_base_m(7)

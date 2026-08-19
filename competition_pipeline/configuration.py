@@ -204,6 +204,35 @@ class CompetitionConfig:
         if bool(grasp.get("valid", False)) and not bool(planning.get("valid", False)):
             raise ValueError("grasp execution cannot be valid before planning validation")
         grasp_planning = self.data.get("grasp_planning", {})
+        backend = str(grasp_planning.get("backend", "deterministic_top_down")).strip()
+        if backend != "deterministic_top_down":
+            raise ValueError(
+                "grasp_planning.backend must remain deterministic_top_down; "
+                "configure AnyGrasp under grasp_planning.fallback"
+            )
+        fallback = grasp_planning.get("fallback", {})
+        if not isinstance(fallback, dict):
+            raise ValueError("grasp_planning.fallback must be a mapping")
+        if bool(fallback.get("enabled", False)):
+            fallback_backend = str(fallback.get("backend", "anygrasp")).strip().lower()
+            if fallback_backend != "anygrasp":
+                raise ValueError(
+                    "unsupported grasp_planning.fallback.backend: {}".format(
+                        fallback_backend
+                    )
+                )
+            if not str(fallback.get("sdk_grasp_dir", "")).strip():
+                raise ValueError("AnyGrasp fallback sdk_grasp_dir is required when enabled")
+            if not str(fallback.get("checkpoint_path", "")).strip():
+                raise ValueError("AnyGrasp fallback checkpoint_path is required when enabled")
+            if float(fallback.get("minimum_score", -1.0)) < 0.0:
+                raise ValueError("AnyGrasp fallback minimum_score cannot be negative")
+            if not 0.0 < float(fallback.get("maximum_gripper_width_m", 0.0)) <= 0.1:
+                raise ValueError(
+                    "AnyGrasp fallback maximum_gripper_width_m must be within (0, 0.1]"
+                )
+            if int(fallback.get("top_k", 0)) < 1:
+                raise ValueError("AnyGrasp fallback top_k must be positive")
         as_transform(
             grasp_planning.get("tcp_from_grasp", {}).get("matrix"),
             "grasp_planning.tcp_from_grasp",

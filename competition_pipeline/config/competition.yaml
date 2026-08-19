@@ -197,6 +197,21 @@ grasp_execution_validation:
   requires_planning_validation: true
   requires_dry_run_first: true
 grasp_planning:
+  # The deterministic top-down planner is the validated mainline. AnyGrasp is
+  # loaded only if this planner rejects an object and the fallback is usable.
+  backend: deterministic_top_down
+  fallback:
+    enabled: true
+    backend: anygrasp
+    sdk_grasp_dir: /home/throne/workspaces/arm_data/third_party/anygrasp_sdk/grasp_detection
+    checkpoint_path: /home/throne/workspaces/arm_data/third_party/anygrasp_sdk/grasp_detection/log/checkpoint_detection.tar
+    minimum_score: 0.01
+    maximum_gripper_width_m: 0.075
+    gripper_height_m: 0.03
+    top_k: 20
+    maximum_approach_deviation_deg: 45.0
+    collision_detection: true
+    dense_grasp: false
   coordinate_convention: base_x_forward_y_left_z_up_grasp_z_approach
   minimum_grasp_width_mm: 5.0
   maximum_grasp_width_mm: 75.0

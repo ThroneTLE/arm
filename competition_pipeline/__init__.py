@@ -3,7 +3,16 @@
 from .configuration import CompetitionConfig
 from .control import MotionSafetyError, SafeRobotController
 from .execution import ExecutionResult, GraspExecutor
-from .planning import GraspPlan, GraspPlanningError, GraspTarget, TopDownGraspPlanner
+from .planning import (
+    AnyGraspFallbackPlanner,
+    AnyGraspFallbackSettings,
+    FallbackGraspPlanner,
+    GraspPlan,
+    GraspPlanningError,
+    GraspTarget,
+    TopDownGraspPlanner,
+    planner_from_config,
+)
 from .hand_eye import HandEyeCalibrator, HandEyeResult
 from .localization import HybridLocalizer, LocalizationResult
 from .runtime import CompetitionRuntime
@@ -20,9 +29,13 @@ __all__ = [
     "SafeRobotController",
     "ExecutionResult",
     "GraspExecutor",
+    "AnyGraspFallbackPlanner",
+    "AnyGraspFallbackSettings",
+    "FallbackGraspPlanner",
     "GraspPlan",
     "GraspPlanningError",
     "GraspTarget",
     "TopDownGraspPlanner",
+    "planner_from_config",
     "TagMap",
 ]

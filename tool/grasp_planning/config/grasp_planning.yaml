@@ -11,7 +11,9 @@ anygrasp:
   dense_grasp: false
   collision_detection: true
   top_k: 20
-  minimum_score: 0.3
+  # Fruit point clouds tend to receive lower AnyGrasp scores than the
+  # benchmark bottle scenes; keep the best candidates for downstream review.
+  minimum_score: 0.01
   # 只保留"自上而下"抓取：逼近方向与桌面法线（工作系 -Z 向上，+Z 朝桌面内）
   # 的夹角不超过该度数。
   top_down_only: true

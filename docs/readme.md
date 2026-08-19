@@ -1,20 +1,22 @@
 # 机械臂视觉项目现状
 
-更新时间：2026-08-15
+更新时间：2026-08-17
 
 ## 1. 项目目标
 
-本项目面向随机分配机械臂的视觉抓取任务，计划包含：
+本项目面向随机分配机械臂的视觉抓取任务，围绕“比赛现场最薄主线”和“可复用视觉工具/
+ROS 框架”两条路径展开，核心能力包括：
 
 1. 相机内参、工具坐标和眼在手上手眼标定。
 2. 机械臂状态读取、基础控制和安全停止。
-3. YOLO 实例分割识别特定易拉罐。
-4. FoundationPose / FoundationPose++ 六自由度位姿估计。
+3. YOLO 实例分割和 RGB-D 物体定位。
+4. FoundationPose / FoundationPose++ 六自由度位姿估计与 AnyGrasp 候选抓取。
 5. AprilTag 绝对定位与机械臂位姿回退相结合的定位链路。
+6. MoveIt/Gazebo 抓取规划验证，以及真实厂商控制器适配。
 
-当前处于“无机械臂实物的算法与接口验证阶段”。Astra Pro 只用于验证 RGB 标定、
-AprilTag 定位和软件坐标链；它不是比赛最终相机。机械臂控制、真实眼在手上标定和
-易拉罐抓取尚未完成。
+当前仍处于“无机械臂实物的算法与接口验证阶段”。Astra Pro 用于软件链验证，比赛相机
+配置已经支持 OAK-D Pro；UR5e + Robotiq 85 的上游 Gazebo/MoveIt 控制链和比赛闭环
+抓取仿真已经跑通。真实机械臂控制、真实眼在手上标定和实物抓取仍需到场验收。
 
 ## 2. 当前完成情况
 
@@ -34,20 +36,39 @@ AprilTag 定位和软件坐标链；它不是比赛最终相机。机械臂控�
 | YOLO 分割 | 接口和 UI 已完成 | 等待用户提供目标 `.pt/.pth`，当前没有真实目标 Mask 结果 |
 | FoundationPose 6D | 核心运行时已接入，业务待真实数据验证 | ROS 适配器会按配置加载 FoundationPose++ CUDA、mycpp、PyTorch3D、nvdiffrast、refiner/scorer 权重；仍缺真实网格、RGB-D 标定和目标数据 |
 | 物体三维建模工具 | 已完成骨架 | UI、Astra/OAK 采集后端、Tag 位姿、RGB-D 配准、TSDF 和 FoundationPose OBJ/PLY 导出已实现 |
+| 比赛主线 | 已完成软件骨架 | `competition_pipeline/` 固化 Tag/手眼/分割/定位/俯视抓取/闭环执行接口，确定性俯视为主线，AnyGrasp 为惰性加载备选，正式配置仍 fail-closed |
+| UR5e + Robotiq 仿真 | 已验证 | 固定上游版本、MoveIt 控制链、GazeboGraspFix 和 `competition_sim_bridge` 已编译；完整木块抓取放置成功 |
 | 真实机械臂控制 | 未接入 | 机械臂型号和官方通信接口未确定，运动输出强制关闭 |
 
 ## 3. 坐标约定与当前标定数据
 
-AprilTag 对外坐标统一使用黑框左上角，不再使用中心点：
+历史 `tool/camera_calibration` 资料使用黑框左上角 TL；即将用于比赛的
+`competition_pipeline` 使用用户确认的黑框右下角 BR。两套数据不能混用，切换坐标约定
+必须重新检查 Tag 地图并使旧手眼结果失效。
+
+比赛主线的 AprilTag 坐标约定为：
 
 ```text
-O  = 黑框左上角 TL
-+X = TL -> TR
-+Y = TL -> BL
-+Z = +X x +Y，指向纸面内部
+O  = 黑框右下角 BR
++X = BR -> TR，沿右侧边向上
++Y = BR -> BL，沿下侧边向左
++Z = +X x +Y，垂直 Tag 平面
 ```
 
-当前标定 UI 配置采用实测黑框边长 `69.0 mm`，参考点为：
+机器人基座统一为 `+X` 向前、`+Y` 向左、`+Z` 向上；所有 UI 输入使用毫米/度，内部
+统一使用米制 `4x4` 齐次矩阵。比赛正式配置位于：
+
+```text
+/home/throne/workspaces/arm/competition_pipeline/config/competition.yaml
+```
+
+比赛配置中的 Tag 地图、RGB 内参、手眼矩阵和运行时安全门必须通过
+`competition_pipeline` 工具维护，不能手工复制旧标定文件。
+
+以下标定数据是历史 Astra 固定相机主线，仍保留供旧工具回归使用，不是比赛主线的
+BR 坐标配置：
+
+历史标定 UI 配置采用实测黑框边长 `69.0 mm`，参考点为：
 
 ```text
 ID100: [ 0.00,   0.00, 0.00] mm
@@ -56,7 +77,7 @@ ID102: [ 0.00, 108.43, 0.00] mm
 ID103: [98.60, 108.40, 0.00] mm（验证点）
 ```
 
-当前存在两个不能忽略的数据问题：
+历史 Astra 数据存在两个不能忽略的问题：
 
 1. ROS 中央参数中的 ID103 仍为历史位置 `[230.0, 0.0, 0.0] mm`，与标定 UI 配置
    不一致。下一次正式验证前必须统一位置并执行 `calibration_tool.py sync-camera`。
@@ -64,7 +85,7 @@ ID103: [98.60, 108.40, 0.00] mm（验证点）
    最新左上角坐标约定下的 ID103 结果约为 `310.5 mm`，因此当前没有可接受的验证精度
    结论。应把 ID103 左上角准确放到配置位置，保证四个 Tag 同时可见后重新采集。
 
-标定数据唯一运行时入口为：
+历史 Astra ROS 业务的运行时入口为：
 
 ```text
 /home/throne/workspaces/arm/ros_ws/src/arm_vision_framework/config/calibration_parameters.yaml
@@ -91,6 +112,29 @@ rosrun arm_vision_framework run_pipeline.py --check --smoke
 当前默认使用 Mock 分割、Mock 位姿估计和 Mock 机械臂。`dry_run: true`、
 `allow_robot_motion: false`，框架不会向真实机械臂发送运动命令。Mock smoke 只说明接口和
 矩阵链可以运行，不代表真实识别、定位精度或抓取成功率。
+
+比赛流水线 UI 和 CLI：
+
+```bash
+cd /home/throne/workspaces/arm
+./competition_pipeline/run_ui.sh
+python3 -m competition_pipeline.cli check
+```
+
+UR5e + Robotiq 仿真：
+
+```bash
+cd /home/throne/workspaces/arm
+./sim/build.sh                         # 首次或依赖变化后执行
+./sim/run_competition_demo.sh          # 只规划，不允许运动
+./sim/run_competition_demo.sh --execute # 无界面完整抓取
+./sim/run_competition_demo.sh --execute --gui  # Gazebo + RViz
+./sim/stop.sh                           # 清理托管仿真
+```
+
+仿真不自制机器人模型，使用固定版本的上游 UR5e + Robotiq 85、MoveIt、Gazebo world
+和控制器；`sim/bootstrap.sh` 会在新机器上拉取上游源码并应用 Noetic 兼容补丁。仿真成功
+只代表规划和控制链可用，不代表真实控制器的 MOVJ/MOVL 协议已经接入。
 
 ## 5. 文件结构规范（强制）
 
@@ -133,6 +177,17 @@ rosrun arm_vision_framework run_pipeline.py --check --smoke
 │       ├── config/                      # Astra/OAK 和 TSDF 参数
 │       ├── tests/                       # 无硬件 RGB-D/会话回归测试
 │       └── run_ui.sh                    # 唯一启动入口
+├── competition_pipeline/                # 比赛现场标定、定位和抓取主线
+│   ├── config/                          # 比赛相机、Tag、手眼和安全参数
+│   ├── planning.py                      # 抓取目标和预/抓/放置位姿
+│   ├── execution.py                     # fail-closed 闭环执行状态机
+│   ├── interfaces.py                    # 机械臂、夹爪、相机和物体接口
+│   ├── tests/                           # 无硬件回归测试
+│   └── run_ui.sh                        # 比赛流水线 UI 入口
+├── sim/                                 # 固定上游 UR5e + Robotiq 仿真
+│   ├── upstream.repos                   # 上游 commit 锁定
+│   ├── bootstrap.sh / build.sh          # 拉取、补丁和 catkin 构建
+│   └── ws/src/competition_sim_bridge/   # 薄 MoveIt/Gazebo 适配层
 ├── ros_ws/
 │   ├── src/
 │   │   ├── CMakeLists.txt
@@ -165,10 +220,12 @@ rosrun arm_vision_framework run_pipeline.py --check --smoke
 
 | 文件类型 | 固定位置 | 规则 |
 |---|---|---|
-| 项目现状和开发顺序 | `docs/readme.txt` | 只描述全局状态，不复制模块操作手册 |
+| 项目现状和开发顺序 | `docs/readme.md` | 只描述全局状态，不复制模块操作手册 |
 | 独立标定/转换/检查工具 | `tool/<tool_name>/` | 一个工具一个子目录，必须包含 README 和测试 |
 | 标定使用说明 | `tool/camera_calibration/README.md` | 坐标约定、打印、采集和 RViz 说明放这里 |
 | 物体网格生成工具 | `tool/object_model_builder/` | RGB-D 配准、Tag/YOLO 采集、TSDF 和 FoundationPose 导出统一放这里 |
+| 比赛现场主线 | `competition_pipeline/` | 比赛配置、Tag/手眼、定位、抓取规划和 fail-closed 执行统一放这里 |
+| 机械臂仿真 | `sim/` | 只维护上游固定版本、补丁、薄 bridge 和启动脚本，不复制机器人模型 |
 | ROS 框架说明 | `ros_ws/src/arm_vision_framework/README.md` | 话题、适配器、构建和运行说明放这里 |
 | 当前 Tag 布局 | `tool/camera_calibration/config/tag_layout.yaml` | UI 的实测输入，禁止在 Python 中硬编码 |
 | 混合定位配置 | `tool/camera_calibration/config/hybrid_localization.yaml` | 只服务标定 UI 和独立定位工具 |
@@ -288,20 +345,166 @@ https://docs.oakchina.cn/en/latest/
 
 ## 6. 下一阶段顺序
 
-1. 统一 ID103 配置并重新完成动态验证，确认移动相机时误差不随视角系统性漂移。
-2. 确认比赛机械臂型号，接入只读末端位姿并明确数据是法兰还是 TCP。
-3. 完成工具坐标和 `T_gripper_camera` 眼在手上标定，再验证 Tag 不可见时的机器人回退。
-4. 用 `tool/object_model_builder` 完成 Astra RGB/IR 外参采集，或确认 OAK-D Pro 工厂对齐输出。
-5. 接入用户 YOLO 权重、目标类别和分割 Mask，采集瓶子多视角数据。
-6. 使用已经实现的带 SHA-256 清单的采集 ZIP，在无 ROS 服务器上完成真实瓶子的 TSDF
-   重建，检查米制 OBJ/PLY、重建报告和 FoundationPose 结果 ZIP。
-7. 运行 FoundationPose++ 真实 RGB-D + Mask 的端到端定位测试。
-8. 比较 Astra 与 OAK-D Pro 的深度覆盖率、位姿稳定性和运行速度；IMU 只作为预测/诊断辅助。
-9. 在运动输出保持关闭的条件下完成定位验证，最后再接入机械臂安全控制。
+1. 在 Gazebo 增加桌面、横梁、侧墙等复杂障碍，并将同一几何同步到 MoveIt
+   PlanningScene，验证可绕行、不可达拒绝和携物碰撞三类场景。
+2. 将真实控制边界扩展为 MoveIt 关节轨迹 + 厂商 MOVJ/MOVL：全局避障使用关节轨迹，
+   预抓取到抓取、抬升和撤退使用经过采样检查的低速 MOVL。
+3. 确认比赛机械臂型号，接入只读关节/TCP 状态，明确数据是法兰还是 TCP；在完成厂商
+   急停、限速和通信超时验收前保持 `dry_run: true`。
+4. 完成工具坐标和 `T_tcp_color_camera` 眼在手上标定，再验证 Tag 不可见时的机器人回退。
+5. 到场验证 OAK-D Pro 枚举、EEPROM、投影器、对齐深度和最终分辨率；Astra 仅作为备用
+   软件验证相机。
+6. 接入比赛正式 YOLO 权重、目标类别和分割 Mask，完成多实例、遮挡和复杂背景验证。
+7. 根据物体和比赛规则，在确定性俯视抓取、AnyGrasp 与 FoundationPose 之间选择最薄的
+   正式定位/抓取组合，不让尚未验收的模型阻塞主线。
+8. 完成真实 RGB-D、定位、规划、抓取、抬升验证和放置验证的端到端 dry-run，最后才打开
+   真实运动许可。
 
 
 
-## 7. OAK-D Pro 兼容边界
+## 7. 22/23 现场最小闭环与控制器对齐
+
+本节是无实物阶段必须提前固化的现场顺序。控制器手册为
+[`系统操作手册`](c9c6716a-f022-46a1-b5c4-3f982a816a50.pdf)；它能确认示教器中的
+TCP、用户坐标、点位和远程 IO 行为，但不包含 TCP 网络报文、端口、寄存器地址或夹爪
+厂商协议。因此真实通信适配器必须等到现场拿到对应的通信协议/SDK 后再实现，不能根据
+`MOVJ/MOVL` 名称猜测报文。
+
+### 7.1 到场后的安全和状态采集
+
+在任何自动运动前，先确认控制柜和示教器急停能够切断伺服，再以低速手动确认工作空间、
+机械臂型号、控制器 IP/接口、工具编号、用户坐标编号和当前伺服状态。第一条只读通信应
+同时记录：
+
+- 六个关节角、控制器返回的 TCP 位姿及其坐标系（基座/用户/工具）；
+- 当前 Tool ID、User ID、速度/加速度倍率和运动模式；
+- 当前形态参数，以及示教器显示的活动工具和用户坐标；
+- 远程模式、数字 IO/Modbus 是否已使能和夹爪反馈信号。
+
+### 7.2 TCP/工具坐标标定
+
+手册的七点标定要求固定一个尖锐参考点，按 `TC1`～`TC4` 取得四个不同姿态，`TC5`
+回到与 `TC1` 相同的姿态，`TC6` 在 `TC5` 基础上沿笛卡尔 X 负方向移动任意距离，
+`TC7` 再沿笛卡尔 Y 正方向移动任意距离，最后计算并用“运行至该点”复核。各姿态不能
+只绕同一方向旋转，参考点在整个过程中必须固定。
+
+关于“夹笔再减去笔尖到夹爪顶端距离”的做法：七点法计算的是实际接触参考点的 TCP，
+所以夹着笔标定得到的是**笔尖 TCP**。如果笔尖和实际抓取 TCP 共线，且笔尖只沿工具坐标
+系的 Z 轴突出，便可以直接用测得的有符号长度 `d` 修正：
+
+```text
+p_gripper_tcp = p_pen_tip - d * z_tool
+```
+
+这里 `z_tool` 是当前工具坐标系的单位 Z 轴，`d > 0` 表示笔尖位于 `+Z_tool` 方向；如果
+现场工具坐标定义相反，符号随之相反。这个修正只改变平移，不改变 A/B/C 姿态。实际操作
+可以把七点法结果写入临时 `Tool2`（笔尖），再将 `Z_tool` 减去笔尖到目标抓取 TCP 的
+距离，保存为生产 `Tool1`，并用“运行至该点”复核 TCP 是否仍固定在预期夹爪位置。
+
+只有在笔尖不与目标 TCP 共线、夹持有倾角、或目标 TCP 不是同一条 Z 轴上的点时，才需要
+记录完整三维刚体变换，而不能只减一个长度。无论采用哪种方式，笔和夹爪必须在采样期间
+保持刚性不动；拆笔、换夹具或修改 Tool 参数后，原手眼结果必须作废并重新采集。
+
+手册中的直接参数方式也可用于已知工具尺寸：X/Y/Z 是相对法兰中心的毫米偏移，A/B/C
+是相对法兰的旋转角。
+
+### 7.3 用户坐标系
+
+用户坐标应在生产 TCP 已确认后设置。按手册的三点法：
+
+1. 用 TCP 到用户坐标原点，记录“标定原点”；
+2. 沿期望的用户 X 正方向移动任意距离，记录“标定 X 轴”；
+3. 沿期望的用户 Y 正方向移动任意距离，记录“标定 Y 轴”。
+
+直接填写用户坐标参数时，X/Y/Z 是用户原点相对机器人基座的偏移，A/B/C 是绕基座轴的
+旋转且单位为**弧度**。建议保存为控制器 `User1`，同时把 `T_base_user1` 读回并写入
+现场记录。软件内部仍以 `base` 坐标规划；如果厂商命令使用 User1，在驱动适配层完成
+`base ↔ User1` 转换，不在视觉和 MoveIt 中混用两个坐标系。
+
+### 7.4 手眼标定和运行时定位策略
+
+AprilTag 在比赛主线的主要用途是采集手眼样本和验收刚体安装关系：
+
+```text
+T_base_camera = T_base_tcp × T_tcp_camera
+```
+
+每个样本必须同时保存当前活动 Tool1 的 TCP 位姿、图像时间戳、Tag PnP 结果和相机 profile。
+Tag 地图变化、Tool1 变化、相机分辨率/内参变化或刚性安装变化后，样本全部失效。
+
+实物运行时优先使用控制器反馈的毫米级 `T_base_tcp`，不要求 AprilTag 持续在视野中；
+AprilTag 视觉结果保留为开机验收、手眼质量检查和 TCP 反馈失效时的可选诊断回退。当前
+`competition_pipeline/localization.py` 仍是“视觉优先、TCP 回退”的兼容实现，后续真实
+控制器接入时应增加 `tcp_primary` 运行模式，且视觉回退默认不允许直接触发运动。
+
+### 7.5 形态参数与 MoveIt 轨迹
+
+手册定义六轴机器人的形态值为 1/3/5 轴所在区间的二进制编码：某轴角度在
+`[-90°, +90°]` 内记为 1，否则为 0，按 1/3/5 轴组成二进制数后再加 1。例如 `110₂ + 1`
+得到形态值 7。位置变量还绑定坐标系、角度/弧度标志、Tool ID 和 User ID；这些字段
+不能省略。
+
+“第一次读到的形态参数后一直复用”只有在整条轨迹保持同一构型分支时才成立。工程上应
+从 MoveIt 的每个关节点计算并校验形态值；若 1/3/5 轴跨过区间边界，或者出现关节跳变、
+接近奇异位形，就必须重新规划/拒绝执行，而不是强行发送固定形态值。
+
+运动执行的最薄方案为：
+
+- 远距离和绕障：MoveIt 生成带时间戳的关节轨迹，转换为控制器可接受的连续 MOVJ 点列；
+- 预抓取到抓取、抬升和短距离撤退：先做 Cartesian 碰撞/IK/奇异性检查，再用低速 MOVL；
+- 放置前重新规划 MOVJ，释放后用 MOVL 或安全 MOVJ 撤离；
+- 每个点带完整坐标系、Tool/User ID 和形态字段，执行后读取实际关节/TCP 做误差确认。
+
+当前仿真已验证 MoveIt/FollowJointTrajectory，但尚未验证厂商 MOVJ/MOVL 的点列、速度、
+加速度、blend、停止和错误码语义；这些必须在通信适配器和现场低速测试中单独验收。
+
+### 7.6 夹爪远程控制
+
+手册确认远程模式支持数字 IO 和 Modbus 从站，Modbus 优先级高于数字 IO；两者同时使用时
+可在 `modbusAddr.json` 中将 `coexistIOControl` 设为 `true`，示教器拔出会触发远程模式。
+但当前手册没有夹爪具体输出位、寄存器地址、动作值、完成反馈或急停语义，因此现场必须
+补齐以下表格后才能实现 `GripperController`：
+
+```text
+控制方式：数字 IO / Modbus
+输出通道或寄存器：待现场确认
+打开值、闭合值、保持值：待现场确认
+动作完成反馈/夹持反馈：待现场确认
+有效电平、超时、急停和断线行为：待现场确认
+```
+
+在没有反馈之前，不能把“命令发送成功”当成“夹住物体”；仿真中已经采用物体抬升和放置
+位置验证，真实控制器也必须保留同等的 fail-closed 验证门。
+
+### 7.7 明日（无实物准备日）执行清单
+
+明天不做任何真实机械臂运动，也不填写猜测的控制器 IP、端口、寄存器或 TCP 数值。目标
+是把到场后的一天半压缩成可执行的表单、接口和验收脚本。每项完成后必须留下可复用的
+文件或日志，而不是只在终端手工试过。
+
+| 时段 | 任务 | 产出 | 完成门槛 |
+|---|---|---|---|
+| 09:00–09:30 | 固定代码和环境基线 | `git diff`、依赖版本、仿真启动日志 | `sim/build.sh` 成功；仿真可启动、可停止，`sim/stop.sh` 后无残留 `gzserver/gzclient/roslaunch` |
+| 09:30–10:30 | 冻结比赛配置 | `competition.yaml` 的 BR Tag、基座轴向、相机 profile、`dry_run` 和工具/用户编号占位 | `python3 -m competition_pipeline.cli check` 通过；运动许可仍为关闭 |
+| 10:30–11:30 | 固化 TCP 七点法记录表 | 七个姿态记录模板、笔尖突出距离 `d`、Tool1/Tool2 关系说明 | 明确 `p_gripper_tcp = p_pen_tip - d*z_tool` 的符号和测量基准；没有实测值时留空，不用默认值 |
+| 13:30–14:30 | 固化相机与手眼采集接口 | 相机内参/Tag 地图检查命令、手眼样本 JSON/CSV 字段、质量报告入口 | 能用仿真或 mock 数据跑通 `T_base_tcp × T_tcp_camera`，并拒绝缺字段样本 |
+| 14:30–16:00 | 固化规划执行边界 | MoveIt 轨迹到 MOVJ 点列的适配接口、近距离 MOVL 接口、形态参数校验测试 | 每个点都带 Tool/User/shape；跨构型边界或奇异风险时拒绝执行；默认 `dry_run` |
+| 16:00–16:45 | 整理控制器和夹爪待确认表 | `controller现场信息.md`（IP/端口、协议、Tool/User、IO/Modbus、反馈、急停） | 所有未知项明确标记“现场确认”，不根据 MOVJ/MOVL 名称猜报文 |
+| 16:45–17:30 | 完整 dry-run 和交接包 | 一键命令、日志、问题清单、现场打印版检查表 | 从启动、定位、规划、夹爪 mock 到停止全流程可重复；形成当天唯一版本归档 |
+
+明天结束时必须得到以下五项：
+
+1. 一份不含猜测数值的 `competition.yaml`；
+2. 一份可打印的 TCP 七点法和用户坐标三点法记录表；
+3. 一份手眼采样字段和 Tag 地图检查脚本；
+4. 一套 MoveJ 远距离、MoveL 近距离的仿真/mock 回归测试；
+5. 一份现场只读采集、低速试运动、夹爪 IO 和急停确认的待办表。
+
+到场后的第一小时只执行安全确认和只读状态采集；第二小时才开始夹笔七点法。只有
+Tool1、User1、控制器返回的形态参数和 TCP 坐标全部读回并复核后，才允许打开低速运动；
+真实抓取前仍需通过“抬升保持”和“放置到目标区域”两个验证门。
+
+## 8. OAK-D Pro 兼容边界
 
 相机标定和物体建模不得绑定 Astra Pro。当前物体建模采集层已经分为 `astra_ros` 和
 `oak_depthai` 后端；DepthAI `2.32.0.0` 已安装在 `foundationpose` 环境。切换 OAK 时修改：

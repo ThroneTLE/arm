@@ -16,6 +16,7 @@ node stays alive, publishes a readable status, and retries periodically.
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -328,7 +329,25 @@ class AnyGraspNode:
             rviz_config = self.config_path.parent / rviz_config
         if shutil.which("rviz") is None:
             raise RuntimeError("rviz is not installed or is not on PATH")
-        self._rviz_process = subprocess.Popen(["rviz", "-d", str(rviz_config.resolve())])
+        # The inference node needs Conda's libraries, but RViz is a system Qt
+        # application.  Inheriting Conda's libffi makes system p11-kit fail to
+        # resolve `ffi_type_pointer` on this machine.
+        rviz_environment = os.environ.copy()
+        conda_prefix = rviz_environment.get("CONDA_PREFIX", "")
+        if conda_prefix:
+            library_paths = rviz_environment.get("LD_LIBRARY_PATH", "").split(os.pathsep)
+            system_paths = [
+                path
+                for path in library_paths
+                if path and path != conda_prefix and not path.startswith(conda_prefix + os.sep)
+            ]
+            if system_paths:
+                rviz_environment["LD_LIBRARY_PATH"] = os.pathsep.join(system_paths)
+            else:
+                rviz_environment.pop("LD_LIBRARY_PATH", None)
+        self._rviz_process = subprocess.Popen(
+            ["rviz", "-d", str(rviz_config.resolve())], env=rviz_environment
+        )
 
     def shutdown(self) -> None:
         if self._rviz_process is not None and self._rviz_process.poll() is None:

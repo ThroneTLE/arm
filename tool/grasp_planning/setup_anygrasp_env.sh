@@ -135,6 +135,9 @@ cd "${GA_DIR}"
 python -m pip install . -i "${PYPI_TUNA}"
 # gsnet 预编译扩展按 numpy 1.x ABI 构建；graspnetAPI 不锁 numpy，必须钉回 <2.0。
 python -m pip install "numpy<2" -i "${PYPI_TUNA}"
+# ROS Noetic's Python modules import rospkg, which is not included in a fresh
+# Conda environment even after sourcing /opt/ros/noetic/setup.bash.
+python -m pip install rospkg -i "${PYPI_TUNA}"
 
 echo "== [7/8] pointnet2（AnyGrasp SDK 内）"
 cd "${SDK_DIR}/pointnet2"
