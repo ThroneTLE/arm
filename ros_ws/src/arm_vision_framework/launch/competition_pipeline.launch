@@ -1,6 +1,26 @@
 <launch>
   <arg name="config" default="$(find arm_vision_framework)/config/system_parameters.yaml"/>
   <arg name="calibration" default="$(find arm_vision_framework)/config/calibration_parameters.yaml"/>
+  <!-- No hardware is available during development; enable explicitly on site. -->
+  <arg name="start_oak" default="false"/>
+  <arg name="start_controller_state" default="false"/>
+
+  <node if="$(arg start_oak)"
+        pkg="arm_vision_framework"
+        type="oak_depthai_node.py"
+        name="oak_depthai_camera"
+        output="screen"
+        required="true">
+    <param name="config" value="$(arg config)"/>
+  </node>
+
+  <node if="$(arg start_controller_state)"
+        pkg="arm_vision_framework"
+        type="controller_state_node.py"
+        name="arm_controller_state"
+        output="screen">
+    <param name="config" value="$(arg config)"/>
+  </node>
 
   <node pkg="arm_vision_framework"
         type="pipeline_node.py"

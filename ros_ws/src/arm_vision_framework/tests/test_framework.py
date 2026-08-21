@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+import copy
 from pathlib import Path
 
 import cv2
@@ -20,13 +21,14 @@ if str(SOURCE_ROOT) not in sys.path:
 from arm_vision_framework.adapters.mock import MockRobotController
 from arm_vision_framework.adapters.topic_robot import TopicRobotController
 from arm_vision_framework.errors import ConfigurationError, SafetyInterlockError
-from arm_vision_framework.factory import build_pipeline
+from arm_vision_framework.factory import build_pipeline, build_robot
 from arm_vision_framework.localization import (
     HybridCameraLocalizer,
     SOURCE_TAG_VISUAL,
     _tag_world_corners,
 )
 from arm_vision_framework.parameters import CalibrationStore, load_system_parameters
+from arm_vision_framework.object_ordering import sort_workspace_objects
 from arm_vision_framework.transforms import (
     quaternion_from_transform,
     transform_from_quaternion,
@@ -89,7 +91,7 @@ class FrameworkTest(unittest.TestCase):
         self.assertAlmostEqual(result.workspace_from_object[2, 3], 0.2, places=9)
 
     def test_visual_tag_pose_has_priority(self):
-        localizer = HybridCameraLocalizer(self.calibration)
+        localizer = HybridCameraLocalizer(self.calibration, use_visual_tags=True)
         rvec = np.asarray([[2.85], [0.18], [-0.12]], dtype=np.float64)
         tvec = np.asarray([[0.02], [-0.03], [0.72]], dtype=np.float64)
         detections = {}
@@ -131,6 +133,37 @@ class FrameworkTest(unittest.TestCase):
         with self.assertRaises(SafetyInterlockError):
             robot.move_to(np.eye(4))
 
+    def test_modbus_fallback_factory_requires_verified_state_map(self):
+        settings = copy.deepcopy(self.settings)
+        settings["robot"]["adapter"] = "modbus_global_point"
+        settings["controller"]["enabled"] = True
+        settings["controller"]["host"] = "127.0.0.1"
+        settings["controller"]["port"] = 502
+        settings["controller"]["unit_id"] = 1
+        settings["controller"]["modbus_global_point_fallback"]["enabled"] = True
+        settings["controller"]["modbus_global_point_fallback"]["local_program_verified"] = True
+        # No fake client is provided, so construction must stop before any
+        # guessed register map or network connection is attempted.
+        with self.assertRaises(ConfigurationError):
+            build_robot(settings)
+
+    def test_object_ordering_is_near_then_high_and_stable(self):
+        def pose(x, z):
+            matrix = np.eye(4)
+            matrix[0, 3], matrix[2, 3] = x, z
+            return matrix
+
+        ordered = sort_workspace_objects([
+            (pose(0.30, 0.00), "far_low"),
+            (pose(0.06, 0.08), "near_high"),
+            (pose(0.08, 0.06), "near_low"),
+            (pose(0.06, 0.08), "near_high_tie"),
+        ])
+        self.assertEqual(
+            [payload for _, payload in ordered],
+            ["near_high", "near_high_tie", "near_low", "far_low"],
+        )
+
     def test_hand_eye_parameter_can_be_promoted_in_copy(self):
         sys.path.insert(0, str(PACKAGE_ROOT / "tools"))
         import calibration_tool
@@ -148,6 +181,149 @@ class FrameworkTest(unittest.TestCase):
             )
             updated = CalibrationStore(destination)
             self.assertTrue(updated.transform_valid("gripper_from_camera"))
+            self.assertTrue(backup.is_file())
+
+    def test_competition_tcp_hand_eye_can_be_imported_once(self):
+        sys.path.insert(0, str(PACKAGE_ROOT / "tools"))
+        import calibration_tool
+
+        with tempfile.TemporaryDirectory() as directory:
+            parameter_copy = Path(directory) / "calibration.yaml"
+            hand_eye_file = Path(directory) / "competition.yaml"
+            shutil.copy2(CALIBRATION_PATH, parameter_copy)
+            hand_eye_file.write_text(
+                yaml.safe_dump({
+                    "hand_eye": {
+                        "tcp_from_color_camera": {
+                            "valid": True,
+                            "matrix": np.eye(4).tolist(),
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            destination, backup = calibration_tool.import_hand_eye(
+                parameter_copy, hand_eye_file
+            )
+            updated = CalibrationStore(destination)
+            np.testing.assert_allclose(
+                updated.transform("gripper_from_camera"), np.eye(4)
+            )
+            self.assertTrue(backup.is_file())
+
+    def test_invalid_competition_hand_eye_is_rejected(self):
+        sys.path.insert(0, str(PACKAGE_ROOT / "tools"))
+        import calibration_tool
+
+        with tempfile.TemporaryDirectory() as directory:
+            hand_eye_file = Path(directory) / "invalid.yaml"
+            hand_eye_file.write_text(
+                yaml.safe_dump({
+                    "hand_eye": {
+                        "tcp_from_color_camera": {
+                            "valid": False,
+                            "matrix": np.eye(4).tolist(),
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "marked invalid"):
+                calibration_tool.matrix_from_hand_eye_file(
+                    yaml.safe_load(hand_eye_file.read_text(encoding="utf-8"))
+                )
+
+    def test_competition_controller_and_safe_point_import_once(self):
+        sys.path.insert(0, str(PACKAGE_ROOT / "tools"))
+        import calibration_tool
+
+        with tempfile.TemporaryDirectory() as directory:
+            system_copy = Path(directory) / "system.yaml"
+            competition_file = Path(directory) / "competition.yaml"
+            shutil.copy2(SYSTEM_PATH, system_copy)
+            competition_file.write_text(yaml.safe_dump({
+                "controller": {
+                    "enabled": False, "transport": "modbus_tcp",
+                    "host": "", "port": None, "unit_id": None,
+                    "state_registers": {},
+                },
+                "safety": {"recovery": {
+                    "auto_recover": False,
+                    "safe_movej_points": [],
+                    "singularity_error_codes": [],
+                }},
+            }), encoding="utf-8")
+            destination, backup = calibration_tool.import_competition_controller(
+                system_copy, competition_file
+            )
+            updated = load_system_parameters(destination)
+            self.assertEqual(updated["controller"]["transport"], "modbus_tcp")
+            self.assertFalse(updated["safety"]["recovery"]["auto_recover"])
+            self.assertTrue(backup.is_file())
+
+    def test_official_oak_eeprom_can_be_imported_without_device(self):
+        try:
+            import depthai as dai
+        except ImportError:
+            self.skipTest("depthai is not installed")
+        sys.path.insert(0, str(PACKAGE_ROOT / "tools"))
+        import calibration_tool
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "oak_eeprom.json"
+            parameter_copy = Path(directory) / "calibration.yaml"
+            factory_copy = Path(directory) / "oak_factory.json"
+            shutil.copy2(CALIBRATION_PATH, parameter_copy)
+            calibration = dai.CalibrationHandler()
+            matrix = [
+                [910.0, 0.0, 640.0],
+                [0.0, 912.0, 360.0],
+                [0.0, 0.0, 1.0],
+            ]
+            for socket in (
+                dai.CameraBoardSocket.CAM_A,
+                dai.CameraBoardSocket.CAM_B,
+                dai.CameraBoardSocket.CAM_C,
+            ):
+                calibration.setCameraIntrinsics(socket, matrix, 1280, 800)
+                calibration.setDistortionCoefficients(
+                    socket, [0.1, -0.2, 0.01, 0.02, 0.03]
+                )
+            calibration.setBoardInfo("OAK-D-PRO", "R3M1E3")
+            calibration.setCameraExtrinsics(
+                dai.CameraBoardSocket.CAM_B, dai.CameraBoardSocket.CAM_C,
+                np.eye(3).tolist(), [-7.5, 0.0, 0.0], [-7.5, 0.0, 0.0],
+            )
+            calibration.eepromToJsonFile(str(source))
+            destination, backup = calibration_tool.import_oak_eeprom(
+                parameter_copy,
+                source,
+                color_width=1280,
+                color_height=720,
+                depth_width=1280,
+                depth_height=800,
+                factory_output=factory_copy,
+            )
+            updated = CalibrationStore(destination)
+            self.assertEqual(updated.image_size, (1280, 720))
+            self.assertTrue(updated.depth_aligned_to_color)
+            self.assertTrue(updated.data["camera"]["color"]["valid"])
+            self.assertEqual(
+                (
+                    updated.data["camera"]["depth"]["image_width"],
+                    updated.data["camera"]["depth"]["image_height"],
+                ),
+                (1280, 720),
+            )
+            self.assertEqual(
+                (
+                    updated.data["camera"]["depth"]["native_cam_c"]["image_width"],
+                    updated.data["camera"]["depth"]["native_cam_c"]["image_height"],
+                ),
+                (1280, 800),
+            )
+            self.assertIn("OAK-D", updated.data["camera"]["name"])
+            self.assertTrue(factory_copy.is_file())
             self.assertTrue(backup.is_file())
 
     def test_legacy_center_tag_map_is_rejected(self):

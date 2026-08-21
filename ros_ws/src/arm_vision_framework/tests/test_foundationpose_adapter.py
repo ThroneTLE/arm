@@ -17,7 +17,9 @@ from arm_vision_framework.adapters.foundationpose import (  # noqa: E402
     FoundationPoseEstimator,
     FoundationPoseRuntime,
 )
-from arm_vision_framework.types import FrameData, SegmentationResult  # noqa: E402
+from arm_vision_framework.types import (  # noqa: E402
+    DetectionResult, FrameData, SegmentationResult,
+)
 
 
 class FakeRuntime:
@@ -88,6 +90,42 @@ class FoundationPoseAdapterTest(unittest.TestCase):
         self.assertFalse(result.valid)
         self.assertIn("aligned", result.reason)
         self.assertEqual(runtime.register_calls, 0)
+
+    def test_detection_roi_crops_all_inputs_and_offsets_intrinsics(self):
+        runtime = FakeRuntime()
+        runtime.last_arguments = None
+        original_register = runtime.register_frame
+
+        def capture(**kwargs):
+            runtime.last_arguments = kwargs
+            return original_register(**kwargs)
+
+        runtime.register_frame = capture
+        estimator = FoundationPoseEstimator(
+            "", runtime=runtime, mesh_paths={"can": __file__},
+            roi_padding_pixels=2,
+        )
+        color = np.zeros((20, 30, 3), dtype=np.uint8)
+        frame = FrameData(
+            color_bgr=color,
+            camera_matrix=np.asarray(
+                [[100.0, 0.0, 15.0], [0.0, 100.0, 10.0], [0.0, 0.0, 1.0]]
+            ),
+            distortion=np.zeros(5), timestamp_s=1.0, frame_id="camera_color",
+            depth_m=np.ones((20, 30), dtype=np.float32),
+            depth_aligned_to_color=True,
+        )
+        mask = np.zeros((20, 30), dtype=np.uint8)
+        mask[5:15, 10:20] = 1
+        detection = DetectionResult((10, 5, 20, 15), 0, "can", 0.9, mask)
+        result = estimator.estimate_detection(frame, detection)
+        self.assertTrue(result.valid, result.reason)
+        arguments = runtime.last_arguments
+        self.assertEqual(arguments["rgb"].shape[:2], (14, 14))
+        self.assertEqual(arguments["depth_m"].shape, (14, 14))
+        self.assertEqual(arguments["mask"].shape, (14, 14))
+        self.assertAlmostEqual(arguments["camera_matrix"][0, 2], 7.0)
+        self.assertAlmostEqual(arguments["camera_matrix"][1, 2], 7.0)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 """Competition workbench for one RGB-D camera and an eye-in-hand robot."""
 
 import argparse
+from dataclasses import replace
 import glob
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import yaml
 from PyQt5.QtCore import QRectF, QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter
 from PyQt5.QtWidgets import (
@@ -24,12 +26,19 @@ from PyQt5.QtWidgets import (
 
 from tool.camera_calibration.calib_common import charuco_board, save_camera_yaml
 from tool.camera_calibration.calibrate_intrinsics import calibrate, save_report
-from tool.object_model_builder.camera_source import AstraRosSource, OakDProSource
+from tool.object_model_builder.camera_source import (
+    AstraRosSource, OakDProSource, OrbbecRosSource,
+)
 from tool.object_model_builder.rgbd_geometry import RgbdCalibration
 
 from .configuration import CompetitionConfig, load_camera_intrinsics
+from .checkerboard_target import CHECKERBOARD_TARGET, CheckerboardTarget
+from .controller_state import ControllerState
+from .controller_state_reader import ControllerStateReader
+from .controller_tcp import InexbotPoint, modbus_client_from_config
+from .shape_latch import ShapeLatch
 from .geometry import transform_from_xyz_rpy_mm, xyz_rpy_from_transform
-from .hand_eye import HandEyeCalibrator
+from .hand_eye import APRILTAG_MAP_TARGET, HandEyeCalibrator
 from .localization import (
     HybridLocalizer, SOURCE_TAG_VISUAL, SOURCE_TAG_VISUAL_HELD,
     SOURCE_TCP_FALLBACK,
@@ -167,6 +176,32 @@ class RgbdCameraWorker(QThread):
                     dot_projector_mA=int(self.camera_config.get("dot_projector_mA", 800)),
                     floodlight_mA=int(self.camera_config.get("floodlight_mA", 0)),
                     mono_resolution=str(self.camera_config.get("mono_resolution", "800p")),
+                    extended_disparity=bool(self.camera_config.get("extended_disparity", True)),
+                    subpixel=bool(self.camera_config.get("subpixel", False)),
+                    left_right_check=bool(self.camera_config.get("left_right_check", True)),
+                    focus_mode=str(self.camera_config.get("focus_mode", "device_default")),
+                    manual_focus=self.camera_config.get("manual_focus"),
+                )
+            elif backend == "orbbec_ros":
+                driver = self.camera_config.get("ros_driver", {})
+                source = OrbbecRosSource(
+                    color_topic=str(self.camera_config["color_topic"]),
+                    color_info_topic=str(self.camera_config["color_info_topic"]),
+                    depth_topic=str(self.camera_config["depth_topic"]),
+                    depth_info_topic=str(self.camera_config["depth_info_topic"]),
+                    ir_topic=str(self.camera_config["ir_topic"]),
+                    start_ros_driver=bool(self.camera_config.get("start_ros_driver", True)),
+                    driver_log_path=str(ROOT / "output" / "orbbec_driver.log"),
+                    driver_package=str(driver.get("package", "orbbec_camera")),
+                    driver_launch_file=str(driver.get("launch_file", "gemini.launch")),
+                    driver_arguments=driver.get("arguments"),
+                    driver_startup_timeout_s=float(driver.get("startup_timeout_s", 3.0)),
+                    laser_service=str(self.camera_config.get("laser_service", "/camera/set_laser")),
+                    depth_aligned_to_color=bool(
+                        self.camera_config.get("depth_aligned_to_color", True)
+                    ),
+                    expected_serial=self.camera_config.get("expected_serial"),
+                    ros_node_name="competition_orbbec_gemini",
                 )
             else:
                 raise ValueError("unsupported camera backend: {}".format(backend))
@@ -201,6 +236,62 @@ class RgbdCameraWorker(QThread):
         finally:
             if source is not None:
                 source.stop()
+
+
+class ControllerStateWorker(QThread):
+    """Read-only controller status worker used by the field test page."""
+
+    state_ready = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, settings, interval_s=0.5):
+        super().__init__()
+        self.settings = dict(settings)
+        self.interval_s = max(float(interval_s), 0.1)
+        self.stopping = False
+        self.client = None
+        self.shape_latch = ShapeLatch(settings.get("initial_shape"))
+
+    def stop(self):
+        self.stopping = True
+        if self.client is not None:
+            self.client.close()
+
+    def run(self):
+        try:
+            if not bool(self.settings.get("enabled", False)):
+                self.state_ready.emit(ControllerState(connected=False, error="controller.enabled=false（只读测试未启用）"))
+                return
+            self.client = modbus_client_from_config({"controller": self.settings})
+            if self.client is None:
+                raise RuntimeError("controller configuration is disabled or incomplete")
+            self.client.connect()
+            reader = ControllerStateReader(self.client, {"controller": self.settings})
+            while not self.stopping:
+                try:
+                    state = reader.read()
+                    latch = self.shape_latch.observe(state.shape)
+                    self.state_ready.emit(replace(
+                        state,
+                        initial_shape=latch.initial_shape,
+                        shape_changed=latch.changed,
+                        raw_registers={
+                            **state.raw_registers,
+                            "observed_shape": latch.observed_shape,
+                            "initial_shape": latch.initial_shape,
+                            "shape_changed": latch.changed,
+                        },
+                    ))
+                except Exception as error:
+                    self.state_ready.emit(ControllerState(connected=False, error=str(error)))
+                self.msleep(int(self.interval_s * 1000.0))
+        except Exception as error:
+            if not self.stopping:
+                self.failed.emit(str(error))
+        finally:
+            if self.client is not None:
+                self.client.close()
+                self.client = None
 
 
 class TagLocalizationWorker(QThread):
@@ -248,7 +339,10 @@ class TagLocalizationWorker(QThread):
                 if (frame.shape[1], frame.shape[0]) != size:
                     raise ValueError("RGB 分辨率与当前定位内参不一致")
                 started_s = time.perf_counter()
-                detections = localizer.visual.detect(frame)
+                use_tags = bool(
+                    config.data["localization"].get("use_apriltag_runtime", False)
+                )
+                detections = localizer.visual.detect(frame) if use_tags else {}
                 pose = localizer.localize(
                     frame,
                     matrix,
@@ -256,9 +350,7 @@ class TagLocalizationWorker(QThread):
                     base_from_tcp=pending["base_from_tcp"],
                     image_timestamp_s=pending["timestamp_s"],
                     robot_timestamp_s=pending["robot_timestamp_s"],
-                    detections_override=(
-                        {} if pending["hide_tags"] else detections
-                    ),
+                    detections_override={} if pending["hide_tags"] else detections,
                 )
                 self.result_ready.emit({
                     "frame": frame,
@@ -747,7 +839,7 @@ def action_button(parent, text, icon, primary=False):
 
 
 class CompetitionCalibrationWindow(QMainWindow):
-    RGB, RGBD, TAGS, HAND_EYE, LOCALIZATION, SEGMENTATION, PLANNING, GRASP = range(8)
+    RGB, RGBD, TAGS, HAND_EYE, LOCALIZATION, SEGMENTATION, PLANNING, GRASP, CONTROLLER = range(9)
 
     def __init__(self, config_path=CONFIG_PATH, initial_stage=0, auto_connect=False):
         super().__init__()
@@ -772,6 +864,8 @@ class CompetitionCalibrationWindow(QMainWindow):
         self.rviz_worker = None
         self.rviz_process = None
         self.roscore_process = None
+        self.controller_worker = None
+        self.controller_state = ControllerState()
         self.camera_connected = False
         self.bundle = None
         self.current_stage = 0
@@ -783,6 +877,7 @@ class CompetitionCalibrationWindow(QMainWindow):
         self.tag_localizer = None
         self.hybrid_localizer = None
         self.color_intrinsics_cache = None
+        self.orbbec_intrinsics_synced = False
         self.depth_aligner = None
         self.depth_aligner_source = None
         self.last_depth_stamp = None
@@ -899,12 +994,12 @@ class CompetitionCalibrationWindow(QMainWindow):
         self.stage_list = QListWidget()
         self.stage_list.setObjectName("stageList")
         self.stage_list.setSpacing(3)
-        self.stage_list.setFixedHeight(310)
+        self.stage_list.setFixedHeight(350)
         self.stage_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         for text in (
             "01  RGB 内参", "02  RGB-IR 标定", "03  Tag 地图",
             "04  眼在手上", "05  定位验证", "06  分割验证",
-            "07  抓取规划", "08  抓取执行",
+            "07  抓取规划", "08  抓取执行", "09  控制器/TCP 测试",
         ):
             item = QListWidgetItem(text)
             item.setSizeHint(QSize(210, 32))
@@ -1038,7 +1133,7 @@ class CompetitionCalibrationWindow(QMainWindow):
             self._build_rgb_page(), self._build_rgbd_page(), self._build_tag_page(),
             self._build_hand_eye_page(), self._build_localization_page(),
             self._build_segmentation_page(), self._build_planning_page(),
-            self._build_grasp_page(),
+            self._build_grasp_page(), self._build_controller_page(),
         ):
             self.stack.addWidget(self._scroll(page))
         layout.addWidget(self.stack, 1)
@@ -1070,9 +1165,13 @@ class CompetitionCalibrationWindow(QMainWindow):
 
     def _build_rgb_page(self):
         page, layout = self._page("RGB 内参", "ChArUco 5 x 7 · 36 mm 方格")
+        self.rgb_manual_controls = QWidget()
+        manual_layout = QVBoxLayout(self.rgb_manual_controls)
+        manual_layout.setContentsMargins(0, 0, 0, 0)
+        manual_layout.setSpacing(9)
         target = action_button(self, "打开 ChArUco 标定板", "SP_DialogOpenButton")
         target.clicked.connect(self.open_target)
-        layout.addWidget(target)
+        manual_layout.addWidget(target)
         box = QGroupBox("当前 RGB")
         grid = QGridLayout(box)
         self.rgb_corner_value = self._strong("0")
@@ -1081,10 +1180,10 @@ class CompetitionCalibrationWindow(QMainWindow):
         grid.addWidget(self.rgb_corner_value, 0, 1)
         grid.addWidget(QLabel("已采视角"), 1, 0)
         grid.addWidget(self.rgb_view_value, 1, 1)
-        layout.addWidget(box)
+        manual_layout.addWidget(box)
         self.rgb_progress = QProgressBar()
         self.rgb_progress.setRange(0, 40)
-        layout.addWidget(self.rgb_progress)
+        manual_layout.addWidget(self.rgb_progress)
         for text, callback, icon, primary in (
             ("采集当前 RGB 姿态", self.capture_rgb_view, "SP_DialogSaveButton", True),
             ("计算并启用 RGB 内参", self.solve_rgb_intrinsics, "SP_DialogApplyButton", True),
@@ -1092,7 +1191,14 @@ class CompetitionCalibrationWindow(QMainWindow):
         ):
             button = action_button(self, text, icon, primary)
             button.clicked.connect(callback)
-            layout.addWidget(button)
+            manual_layout.addWidget(button)
+        layout.addWidget(self.rgb_manual_controls)
+        self.rgb_factory_note = self._result(
+            "Gemini 连接后会从 /camera/color/camera_info 读取当前设备的出厂内参。"
+            "不会加载 Astra 参数，也不需要采集 ChArUco 内参图像。"
+        )
+        self.rgb_factory_note.setVisible(False)
+        layout.addWidget(self.rgb_factory_note)
         self.rgb_result = self._result("可直接复用已有 RGB 内参，也可在此重新标定")
         layout.addWidget(self.rgb_result)
         layout.addStretch()
@@ -1168,6 +1274,18 @@ class CompetitionCalibrationWindow(QMainWindow):
         self.oak_result = self._result("尚未导入比赛相机标定；无实物时可先保留为待导入状态")
         oak_layout.addWidget(self.oak_result)
         layout.addWidget(self.oak_calibration_controls)
+
+        self.orbbec_calibration_controls = QWidget()
+        orbbec_layout = QVBoxLayout(self.orbbec_calibration_controls)
+        orbbec_layout.setContentsMargins(0, 0, 0, 0)
+        orbbec_layout.setSpacing(9)
+        orbbec_layout.addWidget(self._result(
+            "Gemini 使用 Orbbec SDK 从设备读取 RGB/Depth 内参和畸变参数。"
+            "Depth 在驱动中对齐到 RGB；更换实物或分辨率后会在下次连接时刷新。"
+        ))
+        self.orbbec_result = self._result("等待连接 Gemini 并读取 CameraInfo")
+        orbbec_layout.addWidget(self.orbbec_result)
+        layout.addWidget(self.orbbec_calibration_controls)
         layout.addStretch()
         return page
 
@@ -1235,13 +1353,61 @@ class CompetitionCalibrationWindow(QMainWindow):
 
     def _build_hand_eye_page(self):
         page, layout = self._page("眼在手上", "T_tcp_color_camera · RGB 主相机")
+        target_box = QGroupBox("标定靶标（切换或改尺寸会归档旧样本）")
+        target_layout = QGridLayout(target_box)
+        self.hand_target_combo = QComboBox()
+        self.hand_target_combo.addItem("已建图 AprilTag（原有兼容流程）", APRILTAG_MAP_TARGET)
+        self.hand_target_combo.addItem("张正友棋盘格（固定板，多姿态手眼）", CHECKERBOARD_TARGET)
+        checkerboard = self.config.data["hand_eye"]["calibration_target"]["checkerboard"]
+        active_target = self.config.data["hand_eye"]["calibration_target"]["type"]
+        self.hand_target_combo.setCurrentIndex(
+            max(0, self.hand_target_combo.findData(active_target))
+        )
+        self.hand_board_width = self._spin(1, 1000, checkerboard["board_width_mm"], " mm")
+        self.hand_board_height = self._spin(1, 1000, checkerboard["board_height_mm"], " mm")
+        self.hand_square_size = self._spin(0.1, 100, checkerboard["square_size_mm"], " mm")
+        self.hand_squares_x = QSpinBox()
+        self.hand_squares_x.setRange(0, 100)
+        self.hand_squares_x.setSpecialValueText("待填写")
+        self.hand_squares_x.setValue(int(checkerboard.get("squares_x") or 0))
+        self.hand_squares_x.setButtonSymbols(QSpinBox.NoButtons)
+        self.hand_squares_y = QSpinBox()
+        self.hand_squares_y.setRange(0, 100)
+        self.hand_squares_y.setSpecialValueText("待填写")
+        self.hand_squares_y.setValue(int(checkerboard.get("squares_y") or 0))
+        self.hand_squares_y.setButtonSymbols(QSpinBox.NoButtons)
+        self.hand_target_info = self._result("")
+        apply_target = action_button(self, "应用标定靶标设置并归档样本", "SP_DialogApplyButton")
+        apply_target.clicked.connect(self.save_hand_eye_target)
+        target_layout.addWidget(QLabel("类型"), 0, 0)
+        target_layout.addWidget(self.hand_target_combo, 0, 1, 1, 2)
+        target_layout.addWidget(QLabel("外板长边"), 1, 0)
+        target_layout.addWidget(self.hand_board_width, 1, 1, 1, 2)
+        target_layout.addWidget(QLabel("外板短边"), 2, 0)
+        target_layout.addWidget(self.hand_board_height, 2, 1, 1, 2)
+        target_layout.addWidget(QLabel("单个格子"), 3, 0)
+        target_layout.addWidget(self.hand_square_size, 3, 1, 1, 2)
+        target_layout.addWidget(QLabel("长边总格数（黑+白）"), 4, 0)
+        target_layout.addWidget(self.hand_squares_x, 4, 1, 1, 2)
+        target_layout.addWidget(QLabel("短边总格数（黑+白）"), 5, 0)
+        target_layout.addWidget(self.hand_squares_y, 5, 1, 1, 2)
+        target_layout.addWidget(apply_target, 6, 0, 1, 3)
+        target_layout.addWidget(self.hand_target_info, 7, 0, 1, 3)
+        layout.addWidget(target_box)
+        self.hand_target_combo.currentIndexChanged.connect(self._refresh_hand_target_hint)
+        self.hand_board_width.valueChanged.connect(self._refresh_hand_target_hint)
+        self.hand_board_height.valueChanged.connect(self._refresh_hand_target_hint)
+        self.hand_square_size.valueChanged.connect(self._refresh_hand_target_hint)
+        self.hand_squares_x.valueChanged.connect(self._refresh_hand_target_hint)
+        self.hand_squares_y.valueChanged.connect(self._refresh_hand_target_hint)
+        self._refresh_hand_target_hint()
         box, self.hand_pose_spins = self._pose_box("当前 T_base_tcp")
         layout.addWidget(box)
         capture = action_button(self, "采集当前 RGB 与 TCP", "SP_DialogSaveButton", True)
         capture.clicked.connect(self.capture_hand_eye)
         layout.addWidget(capture)
         self.hand_table = QTableWidget(0, 3)
-        self.hand_table.setHorizontalHeaderLabels(("序号", "Tag", "RMS / px"))
+        self.hand_table.setHorizontalHeaderLabels(("序号", "靶标", "RMS / px"))
         self.hand_table.verticalHeader().setVisible(False)
         self.hand_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.hand_table.setMinimumHeight(175)
@@ -1257,8 +1423,94 @@ class CompetitionCalibrationWindow(QMainWindow):
         layout.addStretch()
         return page
 
+    def _hand_eye_ui_target_settings(self, require_complete=False):
+        target_type = str(self.hand_target_combo.currentData())
+        checkerboard = dict(
+            self.config.data["hand_eye"]["calibration_target"]["checkerboard"]
+        )
+        width = float(self.hand_board_width.value())
+        height = float(self.hand_board_height.value())
+        square = float(self.hand_square_size.value())
+        squares_x = int(self.hand_squares_x.value())
+        squares_y = int(self.hand_squares_y.value())
+        configured = squares_x >= 3 and squares_y >= 3
+        checkerboard.update({
+            "board_width_mm": width,
+            "board_height_mm": height,
+            "square_size_mm": square,
+            "configured": configured,
+            "squares_x": squares_x if configured else None,
+            "squares_y": squares_y if configured else None,
+            "inner_corners": [squares_x - 1, squares_y - 1] if configured else None,
+        })
+        if target_type == CHECKERBOARD_TARGET and require_complete and not configured:
+            raise ValueError("请先填写长边和短边的黑白方格总数（每边至少 3 格）")
+        if configured:
+            CheckerboardTarget(checkerboard)
+        return {"type": target_type, "checkerboard": checkerboard}
+
+    def _refresh_hand_target_hint(self, *_unused):
+        target_type = self.hand_target_combo.currentData()
+        if target_type == CHECKERBOARD_TARGET:
+            squares_x = int(self.hand_squares_x.value())
+            squares_y = int(self.hand_squares_y.value())
+            if squares_x < 3 or squares_y < 3:
+                self.hand_target_info.setText(
+                    "待填写：现场数长边、短边的黑白格总数；不是只数黑格。填完后实时预览立即按该棋盘识别。"
+                )
+                return
+            try:
+                settings = self._hand_eye_ui_target_settings(require_complete=True)
+                checkerboard = settings["checkerboard"]
+                inner = checkerboard["inner_corners"]
+                self.hand_target_info.setText(
+                    "外板 {:.1f}×{:.1f} mm；印刷网格 {}×{} 格 = {:.1f}×{:.1f} mm；OpenCV 内角点 {}×{}（共 {} 个）".format(
+                        checkerboard["board_width_mm"], checkerboard["board_height_mm"],
+                        squares_x, squares_y,
+                        squares_x * checkerboard["square_size_mm"],
+                        squares_y * checkerboard["square_size_mm"],
+                        inner[0], inner[1], inner[0] * inner[1],
+                    )
+                )
+            except Exception as error:
+                self.hand_target_info.setText("棋盘参数无效：{}".format(error))
+        else:
+            self.hand_target_info.setText(
+                "沿用已登记 AprilTag 地图：每帧 PnP 需可见至少一个已登记 Tag"
+            )
+
+    def _apply_hand_eye_target_settings(self):
+        settings = self._hand_eye_ui_target_settings(require_complete=True)
+        current = self.config.data["hand_eye"]["calibration_target"]
+        if current == settings:
+            return None, False
+        current.clear()
+        current.update(settings)
+        self.config.data["hand_eye"]["tcp_from_color_camera"]["valid"] = False
+        self.config.save()
+        backup = self.sample_store.reset()
+        self.tag_localizer = None
+        self.hybrid_localizer = None
+        self._restart_live_processing_workers()
+        self._refresh_samples()
+        self._refresh_readiness()
+        return backup, True
+
+    def save_hand_eye_target(self):
+        try:
+            backup, changed = self._apply_hand_eye_target_settings()
+            if changed:
+                self.hand_result.setText(
+                    "标定靶标已应用；旧样本已归档 {}".format(backup or "（无旧样本）")
+                )
+            else:
+                self.hand_result.setText("标定靶标设置未变化")
+            self._refresh_hand_target_hint()
+        except Exception as error:
+            self._show_error("保存手眼标定靶标失败", error)
+
     def _build_localization_page(self):
-        page, layout = self._page("定位验证", "RGB Tag 优先 · TCP 实时回退")
+        page, layout = self._page("定位验证", "TCP + 手眼实时定位 · Tag 仅标定/诊断")
         self.robot_available = QCheckBox("提供当前 TCP 数据")
         self.robot_available.setChecked(True)
         self.hide_tags = QCheckBox("模拟 Tag 丢失")
@@ -1473,6 +1725,89 @@ class CompetitionCalibrationWindow(QMainWindow):
             "fail-closed。接入真实 RobotController/GripperController 并完成 dry-run 后才能启用。"
         )
         layout.addWidget(self.grasp_result)
+        layout.addStretch()
+        return page
+
+    def _build_controller_page(self):
+        page, layout = self._page(
+            "控制器/TCP 测试", "现场接入前的只读通信与状态验收；不会发送 MOVJ/MOVL 或 IO 写入"
+        )
+        box = QGroupBox("连接参数（来自 competition.yaml）")
+        grid = QGridLayout(box)
+        controller = self.config.data.get("controller", {})
+        self.controller_enabled = QCheckBox("启用 Modbus-TCP 只读测试")
+        self.controller_enabled.setChecked(bool(controller.get("enabled", False)))
+        self.controller_host = QLineEdit(str(controller.get("host") or ""))
+        self.controller_host.setPlaceholderText("控制器 IP，例如 192.168.1.10")
+        self.controller_port = QSpinBox()
+        self.controller_port.setRange(1, 65535)
+        self.controller_port.setValue(int(controller.get("port") or 502))
+        self.controller_unit = QSpinBox()
+        self.controller_unit.setRange(1, 247)
+        self.controller_unit.setValue(int(controller.get("unit_id") or 1))
+        self.controller_connect_button = action_button(self, "保存并开始只读测试", "SP_MediaPlay", True)
+        self.controller_connect_button.clicked.connect(self.toggle_controller_test)
+        for row, (title, value) in enumerate((("协议", self.controller_enabled), ("IP", self.controller_host), ("Port", self.controller_port), ("Unit ID", self.controller_unit))):
+            grid.addWidget(QLabel(title), row, 0)
+            grid.addWidget(value, row, 1)
+        grid.addWidget(self.controller_connect_button, 4, 0, 1, 2)
+        layout.addWidget(box)
+        mapping_box = QGroupBox("状态寄存器映射（YAML，只读）")
+        mapping_layout = QVBoxLayout(mapping_box)
+        self.controller_mapping = QPlainTextEdit()
+        configured_mapping = controller.get("state_registers", {}) or {}
+        if configured_mapping:
+            mapping_text = yaml.safe_dump({
+                "state_registers": configured_mapping,
+                "state_codec": controller.get("state_codec", {}) or {},
+            }, sort_keys=False, allow_unicode=True)
+        else:
+            mapping_text = """# 仅填厂家确认的零基地址；以下只是字段模板，不是地址示例。
+state_registers:
+  # joint_deg_1: {address: <官方地址>, source: holding, encoding: s32, scale: <倍率>}
+  # joint_deg_2: {address: <官方地址>, source: holding, encoding: s32, scale: <倍率>}
+  # joint_deg_3 .. joint_deg_6；axis_1 .. axis_7；reserved_1 / reserved_2
+  # tcp_x_mm / tcp_y_mm / tcp_z_mm；tcp_rx_deg / tcp_ry_deg / tcp_rz_deg
+  # coordinate_system / angle_unit / shape / tool_id / user_id
+  # servo_on / emergency_stop / moving / alarm_code / alarm_active
+  {}
+state_codec:
+  # alarm_texts: {'<报警码>': '厂家报警文本'}
+  alarm_severity: error
+"""
+        self.controller_mapping.setPlainText(mapping_text)
+        self.controller_mapping.setPlaceholderText(
+            "按官方表填写 address/source/encoding/scale；禁止猜测地址"
+        )
+        self.controller_mapping.setFixedHeight(180)
+        mapping_layout.addWidget(self.controller_mapping)
+        layout.addWidget(mapping_box)
+        state_box = QGroupBox("控制器状态（手册字段）")
+        state_grid = QGridLayout(state_box)
+        self.controller_state_labels = {}
+        for row, name in enumerate((
+            "connected", "servo_on", "emergency_stop", "moving", "joint_deg",
+            "tcp_xyz_mm", "tcp_rpy_deg", "point_name", "coordinate_system",
+            "angle_unit", "reserved", "axes", "tool_id", "user_id", "shape", "alarm",
+            "initial_shape", "shape_changed",
+        )):
+            label = self._strong("--")
+            self.controller_state_labels[name] = label
+            state_grid.addWidget(QLabel(name), row, 0)
+            state_grid.addWidget(label, row, 1)
+        layout.addWidget(state_box)
+        self.controller_result = self._result(
+            "配置 state_registers 后会周期读取，并按 XYZ mm、RPY deg、Tool/User/shape 显示。"
+        )
+        layout.addWidget(self.controller_result)
+        self.safe_point_button = action_button(self, "保存当前无奇异安全点", "SP_DialogSaveButton")
+        self.safe_point_button.clicked.connect(self.save_controller_safe_point)
+        layout.addWidget(self.safe_point_button)
+        self.safe_point_result = self._result(
+            "故障时正式执行器先 STOP，再按配置决定是否用低速 MOVJ 回退。默认禁止自动回退；"
+            "急停、TCP/关节状态失效或没有安全点时保持锁定。"
+        )
+        layout.addWidget(self.safe_point_result)
         layout.addStretch()
         return page
 
@@ -1722,18 +2057,27 @@ class CompetitionCalibrationWindow(QMainWindow):
         camera = self.config.camera
         backend = camera["backend"]
         is_astra = backend == "astra_ros"
+        is_orbbec = backend == "orbbec_ros"
         label = str(camera.get("label", self.config.active_camera_profile))
         self.source_banner.setText(
             "{}\n{}".format(
                 label,
-                "RGB UVC + IR/Depth ROS" if is_astra
-                else "DepthAI · RGB + 双 OV9282 · Depth 对齐 RGB",
+                "RGB UVC + IR/Depth ROS" if is_astra else (
+                    "Orbbec SDK ROS · 实机 CameraInfo / 出厂内参"
+                    if is_orbbec
+                    else "DepthAI · RGB + 双 OV9282 · Depth 对齐 RGB"
+                ),
             )
         )
         self.color_device_label.setVisible(is_astra)
         self.color_device.setVisible(is_astra)
         self.depth_mode_label.setVisible(is_astra)
         self.depth_mode.setVisible(is_astra)
+        self.rgb_manual_controls.setVisible(not is_orbbec)
+        self.rgb_factory_note.setVisible(is_orbbec)
+        self.astra_rgbd_controls.setVisible(is_astra)
+        self.oak_calibration_controls.setVisible(backend == "oak_depthai")
+        self.orbbec_calibration_controls.setVisible(is_orbbec)
         if is_astra:
             self.depth_mode.blockSignals(True)
             self.depth_mode.clear()
@@ -1757,6 +2101,19 @@ class CompetitionCalibrationWindow(QMainWindow):
             self.stage_list.item(self.RGBD).setText("02  RGB-IR 标定")
             self.rgbd_page_title.setText("RGB-IR 标定")
             self.rgbd_page_subtitle.setText("IR 内参 + T_color_depth")
+            self.stage_list.item(self.RGB).setText("01  RGB 内参")
+        elif is_orbbec:
+            self.source_metadata.setText(
+                "RGB  {} x {} @ {}\nDepth 对齐 RGB · CameraInfo 实时读取\n序列号 {}".format(
+                    camera["color_width"], camera["color_height"],
+                    camera["color_fps"], camera.get("expected_serial", "未限制"),
+                )
+            )
+            self.projector_state.setText("Gemini IR 投影器：待连接")
+            self.stage_list.item(self.RGB).setText("01  RGB 工厂内参")
+            self.stage_list.item(self.RGBD).setText("02  Gemini 工厂 RGB-D 参数")
+            self.rgbd_page_title.setText("Gemini 工厂 RGB-D 参数")
+            self.rgbd_page_subtitle.setText("Orbbec SDK · 设备内参 · 驱动 Depth→RGB 对齐")
         else:
             self.source_metadata.setText(
                 "RGB/Depth  {} x {} @ {}\nMono {} · 点阵 {} mA\n泛光灯 {} mA".format(
@@ -1772,9 +2129,10 @@ class CompetitionCalibrationWindow(QMainWindow):
             tool = camera.get("calibration_tool", {})
             self.oak_square_size.setValue(float(tool.get("square_size_cm", 3.0)))
             self.oak_marker_size.setValue(float(tool.get("marker_size_cm", 2.25)))
-        self.astra_rgbd_controls.setVisible(is_astra)
-        self.oak_calibration_controls.setVisible(not is_astra)
-        self.connect_button.setText("连接 {}".format("Astra" if is_astra else "OAK-D Pro"))
+            self.stage_list.item(self.RGB).setText("01  RGB 内参")
+        self.connect_button.setText(
+            "连接 {}".format("Astra" if is_astra else ("Gemini" if is_orbbec else "OAK-D Pro"))
+        )
 
     def change_depth_mode(self, index):
         if self.config.camera.get("backend") != "astra_ros":
@@ -1821,6 +2179,7 @@ class CompetitionCalibrationWindow(QMainWindow):
             self.sample_store = HandEyeSampleStore(self._sample_path(), self.config)
             self.bundle = None
             self.color_intrinsics_cache = None
+            self.orbbec_intrinsics_synced = False
             self.depth_aligner = None
             self.depth_aligner_source = None
             self.last_aligned_preview = None
@@ -2030,7 +2389,11 @@ class CompetitionCalibrationWindow(QMainWindow):
         pose = payload["pose"]
         if self.rviz_worker is not None and pose.valid:
             self.rviz_worker.submit_pose(pose)
-        if self.current_stage in (self.TAGS, self.HAND_EYE):
+        hand_eye_uses_tags = (
+            self.current_stage == self.HAND_EYE
+            and self.hand_target_combo.currentData() == APRILTAG_MAP_TARGET
+        )
+        if self.current_stage == self.TAGS or hand_eye_uses_tags:
             mapped = sorted(set(detections).intersection(TagMap(self.config).ids))
             self.color_canvas.set_frame(
                 self._draw_tags(payload["frame"], detections)
@@ -2063,6 +2426,7 @@ class CompetitionCalibrationWindow(QMainWindow):
             self.disconnect_camera()
             return
         self.connect_button.setEnabled(False)
+        self.orbbec_intrinsics_synced = False
         worker = RgbdCameraWorker(
             self.config.runtime_camera(), self.color_device.currentText(),
             initial_laser_enabled=self.ir_emitter_toggle.isChecked(),
@@ -2076,6 +2440,153 @@ class CompetitionCalibrationWindow(QMainWindow):
         self.camera_worker = worker
         worker.start()
 
+    def toggle_controller_test(self):
+        if self.controller_worker is not None:
+            worker, self.controller_worker = self.controller_worker, None
+            worker.stop()
+            worker.wait(3000)
+            self.controller_connect_button.setText("保存并开始只读测试")
+            self.controller_result.setText("控制器只读测试已停止")
+            return
+        try:
+            mapping_document = yaml.safe_load(
+                self.controller_mapping.toPlainText()
+            ) or {}
+            if not isinstance(mapping_document, dict):
+                raise ValueError("寄存器 YAML 根节点必须是 mapping")
+            state_registers = mapping_document.get("state_registers", {}) or {}
+            state_codec = mapping_document.get("state_codec", {}) or {}
+            if not isinstance(state_registers, dict) or not isinstance(state_codec, dict):
+                raise ValueError("state_registers 和 state_codec 必须是 mapping")
+            settings = dict(self.config.data.get("controller", {}))
+            settings.update({
+                "enabled": self.controller_enabled.isChecked(),
+                "host": self.controller_host.text().strip(),
+                "port": int(self.controller_port.value()),
+                "unit_id": int(self.controller_unit.value()),
+                "state_registers": state_registers,
+                "state_codec": state_codec,
+            })
+            self.config.data["controller"] = settings
+            self.config.save()
+        except Exception as error:
+            self._show_error("控制器配置无效", error)
+            return
+        poll_hz = max(float(settings.get("state_poll_hz", 2.0)), 0.1)
+        worker = ControllerStateWorker(settings, interval_s=1.0 / poll_hz)
+        worker.state_ready.connect(self._receive_controller_state)
+        worker.failed.connect(self._controller_test_failed)
+        worker.finished.connect(self._controller_test_finished)
+        self.controller_worker = worker
+        self.controller_connect_button.setText("停止测试")
+        self.controller_result.setText("正在连接控制器，只执行状态读取……")
+        worker.start()
+
+    @staticmethod
+    def _controller_value(value, precision=3):
+        if value is None:
+            return "未知/未映射"
+        if isinstance(value, (tuple, list)):
+            return "[{}]".format(", ".join("{:.{}f}".format(float(item), precision) for item in value))
+        if isinstance(value, bool):
+            return "是" if value else "否"
+        return str(value)
+
+    def _receive_controller_state(self, state):
+        self.controller_state = state
+        values = {
+            "connected": state.connected,
+            "servo_on": state.servo_on,
+            "emergency_stop": state.emergency_stop,
+            "moving": state.moving,
+            "joint_deg": state.joint_deg,
+            "tcp_xyz_mm": state.tcp_xyz_mm,
+            "tcp_rpy_deg": state.tcp_rpy_deg,
+            "point_name": state.point_name or "未知/未映射",
+            "coordinate_system": {
+                0: "0 关节", 1: "1 直角", 2: "2 工具", 3: "3 用户",
+            }.get(state.coordinate_system, "未知/未映射"),
+            "angle_unit": {0: "0 度", 1: "1 弧度"}.get(
+                state.angle_unit, "未知/未映射"
+            ),
+            "reserved": state.reserved,
+            "axes": state.axes,
+            "tool_id": state.tool_id,
+            "user_id": state.user_id,
+            "shape": state.shape,
+            "initial_shape": state.initial_shape,
+            "shape_changed": state.shape_changed,
+            "alarm": "{} {}".format(state.alarm.code if state.alarm.code is not None else "--", state.alarm.text or "无"),
+        }
+        for name, value in values.items():
+            self.controller_state_labels[name].setText(self._controller_value(value))
+        if state.tcp_xyz_mm is not None and state.tcp_rpy_deg is not None:
+            values = tuple(state.tcp_xyz_mm) + tuple(state.tcp_rpy_deg)
+            for spins in (self.verify_pose_spins, self.hand_pose_spins):
+                for spin, value in zip(spins, values):
+                    spin.setValue(float(value))
+        if state.error:
+            self.controller_result.setText("读取失败：{}".format(state.error))
+        elif not state.raw_registers:
+            self.controller_result.setText("已连接，但 state_registers 为空；请按官方寄存器表填写，当前没有猜测地址。")
+        else:
+            self.controller_result.setText("状态已刷新；原始字段：{}".format(state.raw_registers))
+
+    def _controller_test_failed(self, message):
+        self.controller_result.setText("连接失败：{}".format(message))
+        self._log("控制器只读测试失败：{}".format(message))
+
+    def _controller_test_finished(self):
+        self.controller_worker = None
+        self.controller_connect_button.setText("保存并开始只读测试")
+
+    def save_controller_safe_point(self):
+        state = self.controller_state
+        try:
+            if (
+                not state.connected or state.joint_deg is None or state.axes is None
+                or state.tcp_xyz_mm is None
+            ):
+                raise ValueError("控制器、Axis1..7、关节角和 TCP 状态必须全部有效")
+            if state.moving is not False:
+                raise ValueError("仅允许在控制器明确报告已停止时保存安全点")
+            if state.emergency_stop is not False:
+                raise ValueError("急停状态未知或已触发，不能保存安全点")
+            if state.alarm.active:
+                raise ValueError("当前仍有活动报警，不能标记为无奇异安全点")
+            if (
+                state.shape is None or state.tool_id is None or state.user_id is None
+                or state.reserved is None
+            ):
+                raise ValueError(
+                    "必须先从控制器读取 shape、Tool ID、User ID 和两个保留字段"
+                )
+            point = InexbotPoint(
+                name="P9000", coordinate_system=0, angle_unit=0,
+                shape=state.shape, tool_id=state.tool_id, user_id=state.user_id,
+                reserved=state.reserved,
+                axes=state.axes,
+            )
+            self.config.data.setdefault("safety", {}).setdefault("recovery", {})["safe_movej_points"] = [{
+                "name": point.name,
+                "coordinate_system": point.coordinate_system,
+                "angle_unit": point.angle_unit,
+                "shape": point.shape,
+                "tool_id": point.tool_id,
+                "user_id": point.user_id,
+                "reserved": list(point.reserved),
+                "axes": list(point.axes),
+            }]
+            self.config.save()
+            self.safe_point_result.setText(
+                "已保存 P9000：shape={} Tool={} User={}，Axis1..7={}。"
+                "现场确认路径无碰撞后，才能开启 auto_recover。".format(
+                    point.shape, point.tool_id, point.user_id, list(point.axes)
+                )
+            )
+        except Exception as error:
+            self._show_error("安全点保存失败", error)
+
     def disconnect_camera(self):
         if self.camera_worker is None:
             return
@@ -2086,7 +2597,10 @@ class CompetitionCalibrationWindow(QMainWindow):
         self.camera_connected = False
         self.connect_button.setText(
             "连接 {}".format(
-                "Astra" if self.config.camera["backend"] == "astra_ros" else "OAK-D Pro"
+                "Astra" if self.config.camera["backend"] == "astra_ros" else (
+                    "Gemini" if self.config.camera["backend"] == "orbbec_ros"
+                    else "OAK-D Pro"
+                )
             )
         )
         self.connect_button.setEnabled(True)
@@ -2095,18 +2609,25 @@ class CompetitionCalibrationWindow(QMainWindow):
 
     def _camera_connected(self):
         self.camera_connected = True
-        self._start_live_processing_workers()
+        if self.config.camera["backend"] != "orbbec_ros":
+            self._start_live_processing_workers()
         self.connect_button.setEnabled(True)
         self.connect_button.setText("断开相机")
         self.connection_badge.setText("RGB-D 已连接")
         self.preview_state.setText("等待 RGB / IR / Depth")
         if self.config.camera["backend"] == "astra_ros":
             self._log("Astra RGB UVC 与 IR/Depth ROS 已启动")
+        elif self.config.camera["backend"] == "orbbec_ros":
+            self._log("Gemini ROS 已启动，等待实机 CameraInfo 后启用定位")
         else:
             self._log("OAK-D Pro DepthAI RGB/IR/Depth 已启动（Depth 对齐 RGB）")
 
     def _laser_changed(self, enabled):
-        prefix = "Astra IR" if self.config.camera["backend"] == "astra_ros" else "OAK 点阵"
+        prefix = {
+            "astra_ros": "Astra IR",
+            "orbbec_ros": "Gemini IR",
+            "oak_depthai": "OAK 点阵",
+        }.get(self.config.camera["backend"], "IR")
         self.projector_state.setText(
             "{}发射器：{}".format(prefix, "已打开（IR / Depth 可用）" if enabled else "已关闭")
         )
@@ -2143,13 +2664,18 @@ class CompetitionCalibrationWindow(QMainWindow):
         self.camera_connected = False
         self.connect_button.setText(
             "连接 {}".format(
-                "Astra" if self.config.camera["backend"] == "astra_ros" else "OAK-D Pro"
+                "Astra" if self.config.camera["backend"] == "astra_ros" else (
+                    "Gemini" if self.config.camera["backend"] == "orbbec_ros"
+                    else "OAK-D Pro"
+                )
             )
         )
         self.connect_button.setEnabled(True)
         self.connection_badge.setText("未连接")
 
     def _receive_bundle(self, bundle):
+        if self.config.camera["backend"] == "orbbec_ros":
+            self._sync_orbbec_factory_intrinsics(bundle)
         self.bundle = bundle
         self.metric_source.setText(
             "RGB {}x{} · Depth {}".format(
@@ -2161,12 +2687,53 @@ class CompetitionCalibrationWindow(QMainWindow):
         )
         processors = (
             self._process_rgb, self._process_rgbd, self._process_tags,
-            self._process_tags, self._process_localization,
+            self._process_hand_eye, self._process_localization,
             self._process_segmentation, self._process_future_stage,
             self._process_future_stage,
         )
         processors[self.current_stage](bundle)
         self._show_auxiliary(bundle)
+
+    def _sync_orbbec_factory_intrinsics(self, bundle):
+        if self.orbbec_intrinsics_synced:
+            return
+        intrinsics = bundle.color_intrinsics
+        if intrinsics is None:
+            return
+        expected = (
+            int(self.config.camera["color_width"]),
+            int(self.config.camera["color_height"]),
+        )
+        actual = (int(intrinsics.width), int(intrinsics.height))
+        if actual != expected:
+            raise ValueError(
+                "Gemini CameraInfo 为 {}x{}，当前配置要求 {}x{}".format(
+                    actual[0], actual[1], expected[0], expected[1]
+                )
+            )
+        save_camera_yaml(
+            str(self._color_output_path()),
+            intrinsics.matrix,
+            intrinsics.distortion,
+            actual,
+            "orbbec_gemini_{}".format(
+                self.config.camera.get("expected_serial", "device")
+            ),
+            distortion_model="rational_polynomial",
+        )
+        self.color_intrinsics_cache = None
+        self.orbbec_intrinsics_synced = True
+        self.rgb_result.setText(
+            "已读取 Gemini 出厂内参 · {}x{} · fx {:.3f} · fy {:.3f}".format(
+                actual[0], actual[1], intrinsics.matrix[0, 0], intrinsics.matrix[1, 1]
+            )
+        )
+        self.orbbec_result.setText(
+            "CameraInfo 已读取并保存 · Depth 已由驱动对齐到 RGB"
+        )
+        self._start_live_processing_workers()
+        self._refresh_readiness()
+        self._log("Gemini 实机 CameraInfo 已刷新：{}".format(self._color_output_path()))
 
     def _show_auxiliary(self, bundle):
         now = time.monotonic()
@@ -2215,6 +2782,18 @@ class CompetitionCalibrationWindow(QMainWindow):
     def _process_rgb(self, bundle):
         if not self._stage_due("rgb_intrinsics", 10.0):
             return
+        if self.config.camera["backend"] == "orbbec_ros":
+            self.color_canvas.set_frame(bundle.color_bgr)
+            intrinsics = bundle.color_intrinsics
+            self.metric_detection.setText("Gemini CameraInfo")
+            self.metric_progress.setText("出厂内参  已读取")
+            if intrinsics is not None:
+                self.preview_state.setText(
+                    "出厂内参 · fx {:.2f} · fy {:.2f}".format(
+                        intrinsics.matrix[0, 0], intrinsics.matrix[1, 1]
+                    )
+                )
+            return
         self.color_detection = self._detect_color_charuco(bundle.color_bgr)
         count = len(self.color_detection[1])
         self.rgb_corner_value.setText(str(count))
@@ -2225,6 +2804,18 @@ class CompetitionCalibrationWindow(QMainWindow):
 
     def _process_rgbd(self, bundle):
         if not self._stage_due("rgb_ir_calibration", 8.0):
+            return
+        if self.config.camera["backend"] == "orbbec_ros":
+            self.color_canvas.set_frame(bundle.color_bgr)
+            if bundle.ir_image is not None:
+                self.ir_canvas.set_frame(infrared_preview(bundle.ir_image))
+            self.metric_detection.setText("Gemini 工厂 RGB-D")
+            self.metric_progress.setText(
+                "Depth→RGB  {}".format(
+                    "已对齐" if bundle.depth_aligned_to_color else "未对齐"
+                )
+            )
+            self.preview_state.setText("Orbbec SDK CameraInfo / 工厂参数")
             return
         if self.config.camera["backend"] == "oak_depthai":
             self.color_canvas.set_frame(bundle.color_bgr)
@@ -2310,6 +2901,52 @@ class CompetitionCalibrationWindow(QMainWindow):
         if self.latest_tag_payload is None and self._stage_due("tag_raw_preview", 15.0):
             self.color_canvas.set_frame(bundle.color_bgr)
             self.preview_state.setText("后台检测 Tag")
+
+    def _process_hand_eye(self, bundle):
+        target = self._hand_eye_ui_target_settings(require_complete=False)
+        if target["type"] != CHECKERBOARD_TARGET:
+            self._process_tags(bundle)
+            return
+        if not self._stage_due("hand_eye_checkerboard", 10.0):
+            return
+        if not target["checkerboard"].get("configured", False):
+            self.color_canvas.set_frame(bundle.color_bgr)
+            self.metric_detection.setText("棋盘角点  待设置")
+            self.metric_progress.setText("长短边格数未填写")
+            self.preview_state.setText("请填写长边和短边的黑白方格总数")
+            return
+        try:
+            matrix, distortion, size = self._load_color_intrinsics()
+            color = bundle.color_bgr
+            if (color.shape[1], color.shape[0]) != size:
+                raise ValueError("当前 RGB 分辨率与内参不一致")
+            checkerboard = CheckerboardTarget(target["checkerboard"])
+            observation = checkerboard.estimate(color, matrix, distortion)
+            self.color_canvas.set_frame(checkerboard.draw(color, observation))
+            found = checkerboard.corner_count if observation.corners is not None else 0
+            self.metric_detection.setText(
+                "棋盘角点  {} / {}".format(found, checkerboard.corner_count)
+            )
+            try:
+                sample_count = len(self.sample_store.entries())
+            except ValueError:
+                sample_count = 0
+            self.metric_progress.setText(
+                "手眼样本  {} / {}".format(
+                    sample_count,
+                    int(self.config.data["hand_eye"].get("minimum_samples", 8)),
+                )
+            )
+            self.preview_state.setText(
+                "棋盘格{} · {}".format(
+                    "有效" if observation.valid else "未通过", observation.reason
+                )
+            )
+        except Exception as error:
+            self.color_canvas.set_frame(bundle.color_bgr)
+            self.metric_detection.setText("棋盘角点  识别失败")
+            self.preview_state.setText(str(error))
+            self.preview_state.setText("棋盘格检测失败：{}".format(error))
 
     def _load_color_intrinsics(self):
         path = self._color_output_path()
@@ -2424,7 +3061,7 @@ class CompetitionCalibrationWindow(QMainWindow):
         names = {
             SOURCE_TAG_VISUAL: "Tag 视觉",
             SOURCE_TAG_VISUAL_HELD: "Tag 视觉保持",
-            SOURCE_TCP_FALLBACK: "TCP 回退",
+            SOURCE_TCP_FALLBACK: "TCP + 手眼",
         }
         self.loc_source.setText(names.get(result.source, "无有效位姿"))
         self.loc_tags.setText(", ".join(map(str, result.used_tag_ids)) or "--")
@@ -2675,6 +3312,14 @@ class CompetitionCalibrationWindow(QMainWindow):
             self._show_error("无法采样", "等待 RGB 图像")
             return
         try:
+            settings = self._hand_eye_ui_target_settings(require_complete=True)
+            if self.config.data["hand_eye"]["calibration_target"] != settings:
+                backup, _changed = self._apply_hand_eye_target_settings()
+                self.hand_result.setText(
+                    "已自动应用界面靶标参数；旧样本归档 {}".format(
+                        backup or "（无旧样本）"
+                    )
+                )
             matrix, distortion, size = self._load_color_intrinsics()
             color = self.bundle.color_bgr
             if (color.shape[1], color.shape[0]) != size:
@@ -2692,8 +3337,8 @@ class CompetitionCalibrationWindow(QMainWindow):
             count = self.sample_store.append(sample, path)
             self._refresh_samples()
             self.hand_result.setText(
-                "样本 {} · Tag {} · RMS {:.3f} px".format(
-                    count, list(sample.visible_tag_ids), sample.rms_reprojection_error_px
+                "样本 {} · {} · RMS {:.3f} px".format(
+                    count, sample.target_label, sample.rms_reprojection_error_px
                 )
             )
         except Exception as error:
@@ -2710,7 +3355,11 @@ class CompetitionCalibrationWindow(QMainWindow):
             row = self.hand_table.rowCount()
             self.hand_table.insertRow(row)
             values = (
-                str(index), ",".join(map(str, entry.get("visible_tag_ids", []))),
+                str(index), (
+                    "棋盘 {} 角点".format(entry.get("target_corner_count", 0))
+                    if entry.get("target_type", APRILTAG_MAP_TARGET) == CHECKERBOARD_TARGET
+                    else "Tag {}".format(",".join(map(str, entry.get("visible_tag_ids", []))))
+                ),
                 "{:.3f}".format(float(entry.get("rms_reprojection_error_px", 0))),
             )
             for column, value in enumerate(values):
@@ -2734,10 +3383,7 @@ class CompetitionCalibrationWindow(QMainWindow):
         try:
             calibrator = HandEyeCalibrator(self.config)
             for entry in self.sample_store.load()["samples"]:
-                calibrator.add_sample(
-                    entry["base_from_tcp"], entry["base_from_camera"],
-                    entry.get("visible_tag_ids", []), entry.get("rms_reprojection_error_px", 0),
-                )
+                calibrator.add_stored_sample(entry)
             result = calibrator.solve()
             calibrator.promote(result)
             self.hybrid_localizer = None
@@ -2757,15 +3403,15 @@ class CompetitionCalibrationWindow(QMainWindow):
             return
         self.current_stage = int(index)
         self.stack.setCurrentIndex(index)
-        second_stage = (
-            "RGB-IR / Depth 标定"
-            if self.config.camera["backend"] == "astra_ros"
-            else "OAK 工厂标定 / EEPROM 导入"
-        )
+        second_stage = {
+            "astra_ros": "RGB-IR / Depth 标定",
+            "orbbec_ros": "Gemini 工厂 RGB-D 参数",
+            "oak_depthai": "OAK 工厂标定 / EEPROM 导入",
+        }.get(self.config.camera["backend"], "RGB-D 参数")
         self.preview_title.setText((
             "RGB 内参", second_stage, "Tag 右下角地图",
             "眼在手上标定", "混合定位验证", "实例分割模型验证",
-            "抓取规划验证", "抓取执行验证",
+            "抓取规划验证", "抓取执行验证", "控制器/TCP 测试",
         )[index])
         self.preview_state.setText("实时" if self.camera_connected else "待连接")
         if self.camera_worker is not None:
@@ -2984,6 +3630,10 @@ class CompetitionCalibrationWindow(QMainWindow):
     def closeEvent(self, event):
         self.stop_rviz_visualization(stop_master=False)
         self._stop_live_processing_workers()
+        if self.controller_worker is not None:
+            self.controller_worker.stop()
+            self.controller_worker.wait(3000)
+            self.controller_worker = None
         if self.segmentation_worker is not None:
             self.segmentation_worker.stop()
             self.segmentation_worker.wait(5000)
@@ -3001,7 +3651,7 @@ def main():
     parser.add_argument(
         "--stage", choices=(
             "rgb", "rgbd", "tags", "hand-eye", "localization",
-            "segmentation", "planning", "grasp",
+            "segmentation", "planning", "grasp", "controller",
         ),
         default="rgb",
     )
@@ -3013,6 +3663,7 @@ def main():
     indices = {
         "rgb": 0, "rgbd": 1, "tags": 2, "hand-eye": 3,
         "localization": 4, "segmentation": 5, "planning": 6, "grasp": 7,
+        "controller": 8,
     }
     window = CompetitionCalibrationWindow(args.config, indices[args.stage], args.auto_connect)
     window.show()

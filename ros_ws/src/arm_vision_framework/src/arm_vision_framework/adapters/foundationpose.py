@@ -14,7 +14,7 @@ import numpy as np
 from ..errors import BackendUnavailable
 from ..interfaces import PoseEstimator
 from ..transforms import as_transform
-from ..types import ObjectPoseEstimate
+from ..types import DetectionResult, ObjectPoseEstimate
 
 
 def _fallback_bilateral_filter_depth(depth, radius=2, **_kwargs):
@@ -335,9 +335,19 @@ class FoundationPoseRuntime:
         center_u = float(xs.min() + xs.max()) * 0.5
         center_v = float(ys.min() + ys.max()) * 0.5
         corrected = pose.clone()
-        depth = corrected[2, 3]
-        corrected[0, 3] = (center_u - K[0, 2]) * depth / K[0, 0]
-        corrected[1, 3] = (center_v - K[1, 2]) * depth / K[1, 1]
+        # FoundationPose versions differ: some keep pose_last as [4, 4],
+        # while newer register() paths retain a singleton batch dimension
+        # [1, 4, 4]. Apply the same XY center guidance to either layout.
+        if corrected.ndim == 3:
+            if corrected.shape[0] != 1:
+                return
+            depth = corrected[0, 2, 3]
+            corrected[0, 0, 3] = (center_u - K[0, 2]) * depth / K[0, 0]
+            corrected[0, 1, 3] = (center_v - K[1, 2]) * depth / K[1, 1]
+        else:
+            depth = corrected[2, 3]
+            corrected[0, 3] = (center_u - K[0, 2]) * depth / K[0, 0]
+            corrected[1, 3] = (center_v - K[1, 2]) * depth / K[1, 1]
         estimator.pose_last = corrected
 
     def reset(self):
@@ -360,11 +370,17 @@ class FoundationPoseEstimator(PoseEstimator):
         mesh_scale_to_meters=1.0,
         runtime=None,
         require_aligned_depth=True,
+        mesh_paths=None,
+        roi_padding_pixels=12,
     ):
         self.mesh_path = Path(mesh_path).expanduser() if mesh_path else None
         self.mesh_scale_to_meters = float(mesh_scale_to_meters)
         self.runtime = runtime
         self.require_aligned_depth = bool(require_aligned_depth)
+        self.mesh_paths = {
+            str(name): Path(path).expanduser() for name, path in (mesh_paths or {}).items()
+        }
+        self.roi_padding_pixels = max(0, int(roi_padding_pixels))
         self.registered = False
 
     def reset(self):
@@ -411,3 +427,70 @@ class FoundationPoseEstimator(PoseEstimator):
             tracking=tracking,
             reason="FoundationPose pose accepted",
         )
+
+    def _mesh_for_detection(self, detection):
+        mesh = self.mesh_paths.get(str(detection.class_name), self.mesh_path)
+        if mesh is None or not Path(mesh).is_file():
+            raise BackendUnavailable(
+                "no FoundationPose mesh configured for class {}".format(
+                    detection.class_name
+                )
+            )
+        return mesh
+
+    def estimate_detection(self, frame, detection):
+        """Estimate one object from its YOLO ROI and adjusted intrinsics."""
+        if frame.depth_m is None:
+            return ObjectPoseEstimate(False, reason="FoundationPose requires depth")
+        if self.require_aligned_depth and not frame.depth_aligned_to_color:
+            return ObjectPoseEstimate(False, reason="depth is not aligned to the color image")
+        x1, y1, x2, y2 = map(int, detection.bbox_xyxy)
+        height, width = frame.color_bgr.shape[:2]
+        padding = self.roi_padding_pixels
+        x1, y1 = max(0, x1 - padding), max(0, y1 - padding)
+        x2, y2 = min(width, x2 + padding), min(height, y2 + padding)
+        if x2 <= x1 or y2 <= y1:
+            return ObjectPoseEstimate(False, reason="FoundationPose ROI is empty")
+        mask = detection.mask
+        if mask is None:
+            mask = np.zeros((height, width), dtype=np.uint8)
+            mask[y1:y2, x1:x2] = 1
+        roi_mask = np.asarray(mask[y1:y2, x1:x2], dtype=np.uint8)
+        camera_matrix = np.asarray(frame.camera_matrix, dtype=np.float64).reshape(3, 3).copy()
+        camera_matrix[0, 2] -= x1
+        camera_matrix[1, 2] -= y1
+        mesh_path = self._mesh_for_detection(detection)
+        if self.runtime is None:
+            raise BackendUnavailable("FoundationPose runtime is not attached")
+        pose = self.runtime.register_frame(
+            rgb=frame.color_bgr[y1:y2, x1:x2],
+            depth_m=np.asarray(frame.depth_m[y1:y2, x1:x2], dtype=np.float32),
+            mask=roi_mask,
+            camera_matrix=camera_matrix,
+            mesh_path=str(mesh_path),
+            mesh_scale_to_meters=self.mesh_scale_to_meters,
+        )
+        pose = as_transform(pose, "camera_from_object_roi")
+        # The pose translation is expressed in the cropped camera frame. Move
+        # it back to the original RGB optical frame with the same pixel shift.
+        # This is equivalent to using the adjusted principal point above.
+        return ObjectPoseEstimate(
+            True, pose, score=float(detection.confidence), tracking=False,
+            reason="FoundationPose ROI accepted",
+            bbox_xyxy=detection.bbox_xyxy, class_id=detection.class_id,
+            class_name=detection.class_name, confidence=detection.confidence,
+        )
+
+    def estimate_all(self, frame, segmentation):
+        detections = tuple(segmentation.detections or ())
+        if not detections:
+            detections = (DetectionResult(
+                segmentation.bbox_xyxy, segmentation.class_id,
+                segmentation.class_name, segmentation.confidence, segmentation.mask,
+            ),)
+        estimates = []
+        for detection in detections:
+            estimate = self.estimate_detection(frame, detection)
+            if estimate.valid:
+                estimates.append(estimate)
+        return tuple(estimates)

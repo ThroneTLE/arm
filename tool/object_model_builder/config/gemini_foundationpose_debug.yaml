@@ -1,0 +1,130 @@
+schema_version: 1
+paths:
+  foundationpose_root: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus
+  # Exists only for the generic environment check. Gemini uses its live
+  # CameraInfo and hardware depth-to-RGB registration instead.
+  runtime_calibration: /home/throne/workspaces/arm/ros_ws/src/arm_vision_framework/config/calibration_parameters.yaml
+  # Created/refreshed from the selected Gemini device on every connection.
+  color_intrinsics: /home/throne/workspaces/arm_data/foundationpose_gemini_debug/gemini_max_factory_color.yaml
+  tag_layout: /home/throne/workspaces/arm/tool/object_model_builder/config/gemini_tag_layout.yaml
+  yolo_weights: /home/throne/workspaces/fp_release_20260821_155930/models/yolo_model.pt
+  capture_root: /home/throne/workspaces/arm_data/foundationpose_gemini_debug/sessions
+  rgbd_calibration_root: /home/throne/workspaces/arm_data/foundationpose_gemini_debug/calibration
+  mesh_root: /home/throne/workspaces/arm_data/foundationpose_gemini_debug/meshes
+  foundationpose_debug_root: /home/throne/workspaces/arm_data/foundationpose_gemini_debug/runtime
+  model_free_root: /home/throne/workspaces/arm_data/foundationpose_gemini_debug/model_free_jobs
+
+rgbd_calibration_target:
+  type: checkerboard
+  model: SINE IMAGE YE0102-A540
+  pattern_columns: 19
+  pattern_rows: 3
+  square_size_m: 0.029
+
+camera:
+  label: Orbbec Gemini Max（FoundationPose 调试）
+  backend: orbbec_ros
+  expected_serial: AY2R763007W
+  persist_camera_info: true
+  bootstrap_color_intrinsics: /home/throne/workspaces/arm/tool/object_model_builder/config/gemini_max_bootstrap_color.yaml
+  color_topic: /camera/color/image_raw
+  color_info_topic: /camera/color/camera_info
+  depth_topic: /camera/depth/image_raw
+  depth_info_topic: /camera/depth/camera_info
+  ir_topic: /camera/ir/image_raw
+  laser_service: /camera/set_laser
+  # SV1301S_U3 exposes the stable RGB/depth defaults below on this firmware.
+  color_width: 640
+  color_height: 480
+  color_fps: 30
+  preview_interval_ms: 33
+  maximum_sync_delta_s: 0.10
+  depth_aligned_to_color: true
+  start_ros_driver: true
+  ros_driver:
+    package: orbbec_camera
+    launch_file: gemini.launch
+    startup_timeout_s: 3.0
+    arguments:
+      camera_name: camera
+      enable_color: true
+      color_width: 640
+      color_height: 480
+      color_fps: 30
+      color_format: MJPG
+      enable_depth: true
+      depth_width: 640
+      depth_height: 400
+      depth_fps: 30
+      depth_format: Y11
+      enable_ir: true
+      # High-resolution IR is exposed by the device independently of the
+      # stable RGB/depth pair and is useful for inspection/calibration.
+      ir_width: 1280
+      ir_height: 800
+      ir_fps: 30
+      ir_format: Y10
+      depth_registration: true
+      enable_point_cloud: false
+      enable_colored_point_cloud: false
+      log_level: none
+
+segmentation:
+  # Empty allows the UI to choose a class after loading any YOLO segmentation
+  # model. Enter one or more comma-separated class names in the UI to filter.
+  target_classes: []
+  confidence_threshold: 0.25
+  device: '0'
+  preview_interval_s: 0.20
+
+tag_pose:
+  # A single Tag is sufficient for a diagnostic pose; when both are visible
+  # the estimator prefers the joint pose and falls back to the cleaner single
+  # Tag if their measured spacing is inconsistent.
+  minimum_tags: 1
+  maximum_rms_px: 2.5
+
+capture:
+  pose_source: apriltag
+  minimum_mask_depth_coverage: 0.40
+  # YOLO runs asynchronously; allow a slow first inference to finish instead
+  # of declaring the capture timed out after the generic 5 s window.
+  maximum_analysis_age_s: 3.0
+  capture_request_timeout_s: 15.0
+  maximum_object_centroid_shift_m: 0.05
+  minimum_translation_m: 0.025
+  minimum_rotation_deg: 8.0
+  rgbd_odometry:
+    minimum_fitness: 0.08
+    maximum_rmse: 0.03
+    maximum_depth_m: 2.0
+    update_interval_s: 0.25
+
+foundationpose_live:
+  mesh_path: ''
+  mesh_scale_to_meters: 1.0
+  device: cuda:0
+  est_refine_iter: 5
+  track_refine_iter: 2
+  use_mask_center_guidance: true
+  maximum_pose_age_s: 1.0
+  debug: 0
+
+model_free:
+  config_path: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus/FoundationPose/bundlesdf/config_ycbv.yml
+  minimum_views: 16
+  iterations: 1000
+  mesh_resolution_m: 0.003
+
+fusion:
+  voxel_length_m: 0.002
+  sdf_trunc_m: 0.008
+  maximum_depth_m: 2.0
+  minimum_views: 16
+  mask_erosion_pixels: 1
+  simplify_triangles: 80000
+  workspace_up: [0.0, 0.0, -1.0]
+  mesh_quality:
+    minimum_dimensions_m: [0.01, 0.01, 0.01]
+    maximum_dimensions_m: [0.80, 0.80, 0.80]
+    require_watertight: false

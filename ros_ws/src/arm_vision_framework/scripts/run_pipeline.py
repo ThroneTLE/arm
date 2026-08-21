@@ -43,13 +43,35 @@ def dependency_state(name):
 
 
 def check_report(settings, calibration):
+    camera_settings = settings.get("camera", {})
+    camera_adapter = str(camera_settings.get("adapter", "ros_topics"))
+    oak = camera_settings.get("oak_d_pro", {})
+    expected_oak_size = (
+        int(oak.get("color_width", 0)), int(oak.get("color_height", 0))
+    )
+    oak_calibration_ready = (
+        camera_adapter != "oak_depthai"
+        or (
+            calibration.image_size == expected_oak_size
+            and calibration.depth_aligned_to_color
+            and str(
+                calibration.data.get("metadata", {}).get(
+                    "camera_calibration_source", ""
+                )
+            ) == "official_depthai_eeprom_json"
+        )
+    )
+    hand_eye_ready = calibration.transform_valid("gripper_from_camera")
     return {
         "schema_valid": True,
         "camera": calibration.data["camera"]["name"],
         "image_size": list(calibration.image_size),
         "depth_aligned_to_color": calibration.depth_aligned_to_color,
+        "camera_adapter": camera_adapter,
+        "camera_profile_ready": oak_calibration_ready,
         "workspace_from_base_valid": calibration.transform_valid("workspace_from_base"),
-        "gripper_from_camera_valid": calibration.transform_valid("gripper_from_camera"),
+        "gripper_from_camera_valid": hand_eye_ready,
+        "field_runtime_ready": bool(oak_calibration_ready and hand_eye_ready),
         "segmentation_backend": settings["segmentation"]["backend"],
         "pose_backend": settings["pose_estimation"]["backend"],
         "robot_adapter": settings["robot"]["adapter"],

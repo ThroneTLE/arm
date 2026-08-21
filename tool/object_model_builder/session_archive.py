@@ -314,6 +314,88 @@ def create_foundationpose_reference_archive(
         )
 
 
+def export_foundationpose_reference_directory(
+    session_path: str,
+    destination_root: str,
+    object_id: int = 1,
+    object_name: str = "object",
+) -> Path:
+    """Write the official BundleSDF reference layout to a directory.
+
+    This is the on-disk counterpart of
+    :func:`create_foundationpose_reference_archive`.  It is intentionally
+    separate from ZIP creation because local Model-free reconstruction needs
+    the upstream ``run_nerf.py`` to write its Neural Object Field checkpoints
+    next to the reference views.
+    """
+    session = CaptureSession.open(session_path)
+    validation = validate_capture_session(str(session.root))
+    identifier = int(object_id)
+    if identifier <= 0:
+        raise ValueError("FoundationPose object_id must be positive")
+    destination = Path(destination_root).expanduser().resolve()
+    if destination.exists() and any(destination.iterdir()):
+        raise FileExistsError("reference output directory is not empty: {}".format(destination))
+    destination.mkdir(parents=True, exist_ok=True)
+    reference_root = destination / "ob_{:07d}".format(identifier)
+    for name in ("rgb", "depth_enhanced", "mask", "cam_in_ob"):
+        (reference_root / name).mkdir(parents=True, exist_ok=True)
+    np.savetxt(reference_root / "K.txt", session.color_intrinsics().matrix, fmt="%.12g")
+    selected_frames = []
+    for view in session.iter_views():
+        stem = "{:07d}".format(view.index)
+        selected_frames.append(view.index)
+        if not cv2.imwrite(str(reference_root / "rgb" / (stem + ".png")), view.color_bgr):
+            raise IOError("failed to write FoundationPose RGB reference")
+        depth_mm = np.rint(np.clip(view.depth_aligned_m, 0.0, 65.535) * 1000.0).astype(np.uint16)
+        if not cv2.imwrite(str(reference_root / "depth_enhanced" / (stem + ".png")), depth_mm):
+            raise IOError("failed to write FoundationPose depth reference")
+        if not cv2.imwrite(str(reference_root / "mask" / (stem + ".png")), view.mask.astype(np.uint8) * 255):
+            raise IOError("failed to write FoundationPose mask reference")
+        np.savetxt(reference_root / "cam_in_ob" / (stem + ".txt"), view.workspace_from_color, fmt="%.12g")
+    with (reference_root / "select_frames.yml").open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            {"selected_frames": selected_frames, "frame_count": validation.frame_count},
+            handle,
+            sort_keys=False,
+        )
+    metadata = {
+        "schema_version": FOUNDATIONPOSE_REFERENCE_ARCHIVE_SCHEMA_VERSION,
+        "object_id": identifier,
+        "object_name": (
+            "".join(
+                character
+                for character in str(object_name)
+                if character.isalnum() or character in "_-"
+            )
+            or "object"
+        ),
+        "frame_count": validation.frame_count,
+        "units": "meters",
+        "depth_storage_units": "millimeters_uint16",
+        "camera_convention": "opencv_color_optical_frame",
+        "pose_convention": "cam_in_ob maps camera points into fixed object/workspace frame",
+        "object_frame_at_capture": "ruler_workspace",
+        "foundationpose_layout": reference_root.name,
+        "requires_model_free_reconstruction": True,
+    }
+    with (reference_root / "reference_metadata.yaml").open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(metadata, handle, sort_keys=False, allow_unicode=True)
+    (destination / "如何使用.txt").write_text(
+        "FoundationPose Model-free / Neural Object Field 参考照片\n\n"
+        "1. 固定物体，只移动相机并采集多视角 RGB-D。\n"
+        "2. depth_enhanced 是对齐 RGB 的 uint16 毫米深度，mask 是目标二值 Mask。\n"
+        "3. cam_in_ob 是相机到固定物体/工作坐标的 4x4 位姿。\n"
+        "4. 使用 BundleSDF/Neural Object Field 训练后，model/model.obj 可供 FoundationPose 使用。\n",
+        encoding="utf-8",
+    )
+    provenance = session.root / "provenance"
+    if provenance.is_dir():
+        shutil.copytree(provenance, reference_root / "provenance")
+    shutil.copy2(session.manifest_path, reference_root / "source_manifest.yaml")
+    return reference_root
+
+
 def _validated_archive_entries(
     archive: zipfile.ZipFile,
     manifest_name: str,

@@ -4,6 +4,45 @@ frames:
   tcp: robot_tcp
   color_camera: camera_color_optical_frame
   depth_camera: camera_depth_optical_frame
+controller:
+  enabled: false
+  transport: modbus_tcp
+  host: ''
+  port: null
+  unit_id: null
+  connect_timeout_s: 2.0
+  io_timeout_s: 1.0
+  keepalive: true
+  max_frame_bytes: 260
+  state_poll_hz: 2.0
+  use_state_topic: false
+  state_pose_convention: unverified
+  initial_shape: null
+  state_registers: {}
+  state_codec:
+    alarm_severity: error
+  modbus_global_point_fallback:
+    enabled: false
+    local_program_verified: false
+    local_program_name: ''
+    timeout_s: 10.0
+    poll_interval_s: 0.05
+    initial_sequence_id: 0
+    initial_shape: null
+    motion_codes:
+      MOVJ: 1
+      MOVL: 2
+    global_point_fields: {}
+    command_fields: {}
+    start_signal: {}
+    complete_signal: {}
+    stop_signal: {}
+  motion:
+    enabled: false
+    protocol: vendor_sdk_required
+  remote_io:
+    outputs: {}
+    inputs: {}
 camera:
   active_profile: astra_validation
   profiles:
@@ -57,24 +96,83 @@ camera:
           enable_ir: true
           enable_point_cloud: false
           enable_point_cloud_xyzrgb: false
-      maximum_sync_delta_s: 1.0
+      maximum_sync_delta_s: 0.03
       minimum_rgbd_common_corners: 10
       minimum_rgbd_pairs: 12
       max_color_intrinsic_rms_px: 0.8
       max_rgbd_rms_px: 2.0
+    gemini_max_debug:
+      label: Gemini Max（调试 / 读取出厂内参）
+      backend: orbbec_ros
+      # This file is refreshed from /camera/color/camera_info after every
+      # connection.  It is intentionally separate from Astra and OAK files.
+      color_intrinsics_file: ../output/gemini_max_factory_rgb.yaml
+      hand_eye_samples_file: ../output/hand_eye_samples_gemini_max.yaml
+      expected_serial: AY2R763007W
+      color_width: 640
+      color_height: 480
+      color_fps: 30
+      color_topic: /camera/color/image_raw
+      color_info_topic: /camera/color/camera_info
+      depth_topic: /camera/depth/image_raw
+      depth_info_topic: /camera/depth/camera_info
+      ir_topic: /camera/ir/image_raw
+      laser_service: /camera/set_laser
+      start_ros_driver: true
+      depth_aligned_to_color: true
+      depth_preview_fps: 10
+      maximum_sync_delta_s: 0.05
+      ros_driver:
+        package: orbbec_camera
+        launch_file: gemini.launch
+        startup_timeout_s: 3.0
+        arguments:
+          camera_name: camera
+          enable_color: true
+          color_width: 640
+          color_height: 480
+          color_fps: 30
+          color_format: MJPG
+          enable_depth: true
+          depth_width: 640
+          depth_height: 400
+          depth_fps: 30
+          depth_format: Y11
+          enable_ir: true
+          ir_width: 640
+          ir_height: 400
+          ir_fps: 30
+          ir_format: Y10
+          depth_registration: true
+          enable_point_cloud: false
+          enable_colored_point_cloud: false
+          log_level: none
     oak_competition:
       label: OAK-D Pro（比赛）
       backend: oak_depthai
       color_intrinsics_file: ../output/oak_color_intrinsics.yaml
       factory_calibration_file: ../output/oak_factory_calibration.json
       hand_eye_samples_file: ../output/hand_eye_samples_oak.yaml
-      color_width: 1280
-      color_height: 720
-      color_fps: 30
-      depth_preview_fps: 10
+      color_width: 1920
+      color_height: 1080
+      color_fps: 10
+      depth_preview_fps: 2
       mono_resolution: 800p
+      extended_disparity: true
+      subpixel: false
+      left_right_check: true
+      minimum_depth_m: 0.35
+      maximum_depth_m: 3.0
       dot_projector_mA: 800
       floodlight_mA: 0
+      focus_mode: device_default
+      manual_focus: null
+      imu:
+        enabled: true
+        topic: /camera/imu
+        imu_frame: oak_imu
+        camera_from_imu: null
+        report_rate_hz: 100.0
       maximum_sync_delta_s: 1.0
       calibration_tool:
         python: /home/throne/miniconda3/envs/oak-calibration/bin/python
@@ -140,6 +238,7 @@ tag_map:
 localization:
   processing_fps: 12.0
   cached_pose_max_age_s: 0.25
+  use_apriltag_runtime: false
   minimum_visible_tags: 1
   max_rms_reprojection_error_px: 50.0
   max_corner_reprojection_error_px: 100.0
@@ -151,6 +250,7 @@ segmentation_validation:
   weights_file: /home/throne/workspaces/Myolotrain/苹果香蕉_yolov8n-seg_best_20260816.pt
   target_classes: []
   confidence_threshold: 0.25
+  bbox_mask_fallback: true
   iou_threshold: 0.45
   image_size: 640
   device: auto
@@ -197,8 +297,6 @@ grasp_execution_validation:
   requires_planning_validation: true
   requires_dry_run_first: true
 grasp_planning:
-  # The deterministic top-down planner is the validated mainline. AnyGrasp is
-  # loaded only if this planner rejects an object and the fallback is usable.
   backend: deterministic_top_down
   fallback:
     enabled: true
@@ -222,12 +320,22 @@ grasp_planning:
   tcp_from_grasp:
     description: p_tcp = T_tcp_grasp * p_grasp
     matrix:
-    # Robotiq grasp center is 110 mm along tool0 +Z. The -90 degree yaw maps
-    # the canonical jaw axis to this URDF. Re-measure for the real TCP mount.
-    - [0.0, 1.0, 0.0, 0.0]
-    - [-1.0, 0.0, 0.0, 0.0]
-    - [0.0, 0.0, 1.0, 0.11]
-    - [0.0, 0.0, 0.0, 1.0]
+    - - 0.0
+      - 1.0
+      - 0.0
+      - 0.0
+    - - -1.0
+      - 0.0
+      - 0.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 1.0
+      - 0.11
+    - - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
 grasp_execution:
   speed_scale: 0.1
   maximum_segment_mm: 40.0
@@ -236,6 +344,21 @@ grasp_execution:
   placement_tolerance_mm: 80.0
   maximum_object_pose_age_s: 0.5
 hand_eye:
+  calibration_target:
+    type: checkerboard
+    checkerboard:
+      board_width_mm: 60.0
+      board_height_mm: 45.0
+      square_size_mm: 5.0
+      # 现场拿到板后数黑白方格总数；不能由含白边的外板尺寸推断。
+      configured: false
+      squares_x:
+      squares_y:
+      inner_corners:
+      maximum_rms_px: 1.5
+      prefer_find_chessboard_sb: true
+      minimum_tcp_translation_span_mm: 30.0
+      minimum_tcp_rotation_span_deg: 15.0
   minimum_samples: 8
   max_sample_translation_error_mm: 8.0
   max_sample_rotation_error_deg: 3.0
@@ -274,3 +397,8 @@ safety:
   maximum_single_rotation_deg: 10.0
   maximum_speed_scale: 0.2
   maximum_robot_pose_age_s: 0.25
+  recovery:
+    auto_recover: false
+    require_explicit_confirmation: true
+    safe_movej_points: []
+    singularity_error_codes: []

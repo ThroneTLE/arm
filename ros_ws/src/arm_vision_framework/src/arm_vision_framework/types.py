@@ -18,6 +18,15 @@ class FrameData:
 
 
 @dataclass
+class DetectionResult:
+    bbox_xyxy: Tuple[int, int, int, int]
+    class_id: int
+    class_name: str
+    confidence: float
+    mask: Optional[np.ndarray] = None
+
+
+@dataclass
 class SegmentationResult:
     valid: bool
     mask: Optional[np.ndarray] = None
@@ -27,6 +36,7 @@ class SegmentationResult:
     confidence: float = 0.0
     simulated: bool = False
     reason: str = ""
+    detections: Tuple[DetectionResult, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -37,6 +47,10 @@ class ObjectPoseEstimate:
     tracking: bool = False
     simulated: bool = False
     reason: str = ""
+    bbox_xyxy: Optional[Tuple[int, int, int, int]] = None
+    class_id: Optional[int] = None
+    class_name: str = ""
+    confidence: float = 0.0
 
 
 @dataclass
@@ -71,3 +85,5 @@ class PipelineResult:
     simulated: bool = False
     reason: str = ""
     diagnostics: Dict[str, Any] = field(default_factory=dict)
+    workspace_from_objects: Tuple[np.ndarray, ...] = field(default_factory=tuple)
+    object_poses: Tuple[ObjectPoseEstimate, ...] = field(default_factory=tuple)

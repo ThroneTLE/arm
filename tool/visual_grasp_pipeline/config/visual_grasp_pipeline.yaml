@@ -1,0 +1,57 @@
+schema_version: 1
+
+paths:
+  # The migrated release keeps large weights/meshes outside Git.  These defaults
+  # match the local workspace used for verification; change them on other hosts.
+  yolo_weights: /home/throne/workspaces/fp_release_20260821_155930/models/yolo_model.pt
+  foundationpose_root: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus
+  static_frame_dir: /home/throne/workspaces/fp_release_20260821_155930/static_frame
+  debug_dir: /home/throne/workspaces/arm_data/foundationpose_gemini_debug/runtime
+
+object_models:
+  wangzai: /home/throne/workspaces/fp_release_20260821_155930/models/can/mesh/can.obj
+  sprite: /home/throne/workspaces/fp_release_20260821_155930/models/can2/mesh/can.obj
+  banana: /home/throne/workspaces/fp_release_20260821_155930/models/banana/mesh/banana.glb
+  red_apple: /home/throne/workspaces/fp_release_20260821_155930/models/apple/mesh/apple.glb
+  green_apple: /home/throne/workspaces/fp_release_20260821_155930/models/apple/mesh/apple.glb
+  orange: ''
+  bottle: ''
+
+yolo_to_object:
+  orange: orange
+  banana: banana
+  red_apple: red_apple
+  green_apple: green_apple
+  bottle: bottle
+  can: sprite
+
+grasp_rules:
+  wangzai: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
+  sprite: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
+  orange: {type: sphere, offset_mm: 0.0, yaw_align: any}
+  banana: {type: elongated, offset_mm: 0.0, yaw_align: "y+"}
+  red_apple: {type: sphere, offset_mm: 0.0, yaw_align: any}
+  green_apple: {type: sphere, offset_mm: 0.0, yaw_align: any}
+  bottle: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
+
+pipeline:
+  default_object: sprite
+  target_label: null
+  force_object: null
+  tag_size_mm: 80.0
+  yolo_conf: 0.85
+  yolo_imgsz: 640
+  offset_xy_mm: [15.0, 32.0]
+  center_offset_mm: 30.0
+  flip_x: true
+  flip_y: true
+  est_refine_iter: 5
+  track_refine_iter: 2
+  use_track: true
+  smoothing_alpha: 0.15
+  tag_smoothing_alpha: 0.3
+  pose_file: /tmp/can_pose.npy
+  grasp_file: /tmp/grasp_pose.npy
+  mesh_scale_to_meters: 1.0
+  device: cuda:0
+  use_mask_center_guidance: true

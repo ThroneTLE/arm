@@ -1,4 +1,4 @@
-"""AprilTag absolute localization with robot-pose fallback."""
+"""TCP + eye-in-hand runtime localization, with calibration-only AprilTags."""
 
 import math
 import time
@@ -10,7 +10,7 @@ from .types import CameraLocalization, FrameData, RobotState
 
 
 SOURCE_TAG_VISUAL = "tag_visual"
-SOURCE_ROBOT_FALLBACK = "robot_fallback"
+SOURCE_ROBOT_FALLBACK = "robot_tcp_hand_eye"
 SOURCE_SIMULATED_ROBOT = "simulated_robot"
 SOURCE_UNAVAILABLE = "unavailable"
 
@@ -134,16 +134,36 @@ class AprilTagWorkspaceLocalizer:
 
 
 class HybridCameraLocalizer:
-    def __init__(self, calibration, maximum_robot_pose_age_s=0.25, use_robot_fallback=True):
+    """Compute camera pose from the controller TCP and hand-eye transform.
+
+    AprilTags stay available in :class:`AprilTagWorkspaceLocalizer` for hand-
+    eye calibration and acceptance tests.  They are disabled in the runtime
+    path by default: the industrial controller's TCP feedback is the primary
+    metric pose source, not a visual fallback.
+    """
+
+    def __init__(
+        self, calibration, maximum_robot_pose_age_s=0.25,
+        use_robot_fallback=True, use_visual_tags=False,
+    ):
         self.calibration = calibration
-        self.visual = AprilTagWorkspaceLocalizer(calibration)
+        self.use_visual_tags = bool(use_visual_tags)
+        self.visual = (
+            AprilTagWorkspaceLocalizer(calibration) if self.use_visual_tags else None
+        )
         self.maximum_robot_pose_age_s = float(maximum_robot_pose_age_s)
         self.use_robot_fallback = bool(use_robot_fallback)
 
     def localize(self, frame: FrameData, robot_state: RobotState) -> CameraLocalization:
-        visual = self.visual.estimate(frame)
-        if visual.valid:
-            return visual
+        if self.use_visual_tags:
+            visual = self.visual.estimate(frame)
+            if visual.valid:
+                return visual
+        else:
+            visual = CameraLocalization(
+                False, None, SOURCE_UNAVAILABLE, frame.timestamp_s,
+                reason="runtime AprilTag localization is disabled by configuration",
+            )
         if not self.use_robot_fallback:
             return visual
         if robot_state is None or not robot_state.valid or robot_state.base_from_gripper is None:
@@ -152,14 +172,23 @@ class HybridCameraLocalizer:
         if abs(frame.timestamp_s - robot_state.timestamp_s) > self.maximum_robot_pose_age_s:
             visual.reason += "; robot state is stale"
             return visual
-        calibration_ready = self.calibration.transform_valid(
-            "workspace_from_base"
-        ) and self.calibration.transform_valid("gripper_from_camera")
-        if not calibration_ready and not robot_state.simulated:
-            visual.reason += "; robot fallback transforms are not calibrated"
+        same_base_frame = (
+            self.calibration.data.get("frames", {}).get("workspace")
+            == self.calibration.data.get("frames", {}).get("base")
+        )
+        base_transform_ready = (
+            same_base_frame or self.calibration.transform_valid("workspace_from_base")
+        )
+        hand_eye_ready = self.calibration.transform_valid("gripper_from_camera")
+        if (not base_transform_ready or not hand_eye_ready) and not robot_state.simulated:
+            visual.reason += "; TCP/hand-eye transforms are not calibrated"
             return visual
-        workspace_from_base = self.calibration.transform(
-            "workspace_from_base", require_valid=not robot_state.simulated
+        workspace_from_base = (
+            np.eye(4, dtype=np.float64)
+            if same_base_frame
+            else self.calibration.transform(
+                "workspace_from_base", require_valid=not robot_state.simulated
+            )
         )
         gripper_from_camera = self.calibration.transform(
             "gripper_from_camera", require_valid=not robot_state.simulated
@@ -180,6 +209,6 @@ class HybridCameraLocalizer:
             reason=(
                 "simulation fallback; not safe for robot execution"
                 if robot_state.simulated
-                else "robot kinematics fallback active"
+                else "current controller TCP pose composed with calibrated hand-eye transform"
             ),
         )

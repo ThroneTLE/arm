@@ -45,6 +45,21 @@ def run_checks(
     results.append(
         CheckResult("FoundationPose mycpp", bool(mycpp), str(mycpp[0]) if mycpp else "missing")
     )
+    mycuda_dir = root / "FoundationPose" / "bundlesdf" / "mycuda"
+    mycuda_common = list(mycuda_dir.glob("common*.so"))
+    mycuda_grid = list(mycuda_dir.glob("gridencoder*.so"))
+    mycuda_ok = bool(mycuda_common and mycuda_grid)
+    results.append(
+        CheckResult(
+            "FoundationPose mycuda (Model-free)",
+            mycuda_ok,
+            "common={}, gridencoder={}".format(
+                "available" if mycuda_common else "missing",
+                "available" if mycuda_grid else "missing",
+            ),
+            required=False,
+        )
+    )
     refiner = root / "FoundationPose" / "weights" / "2023-10-28-18-33-37" / "model_best.pth"
     scorer = root / "FoundationPose" / "weights" / "2024-01-11-20-02-45" / "model_best.pth"
     results.append(CheckResult("FoundationPose refiner weights", refiner.is_file(), str(refiner)))

@@ -399,6 +399,7 @@ class PipelineTest(unittest.TestCase):
         return {7: pixels.reshape(4, 2)}, matrix, distortion
 
     def test_visual_pose_uses_tag_before_tcp(self):
+        self.config.data["localization"]["use_apriltag_runtime"] = True
         expected = transform_from_xyz_rpy([0.46, 0.13, 0.8], [180.0, 0.0, 0.0])
         detections, matrix, distortion = self._project_detection(expected)
         localizer = HybridLocalizer(self.config)
@@ -412,6 +413,7 @@ class PipelineTest(unittest.TestCase):
         np.testing.assert_allclose(result.base_from_camera, expected, atol=1e-6)
 
     def test_recent_multi_tag_pose_prevents_single_tag_jump_and_one_bad_frame(self):
+        self.config.data["localization"]["use_apriltag_runtime"] = True
         localizer = HybridLocalizer(self.config)
         stable = np.eye(4)
         stable[0, 3] = 0.40
@@ -462,7 +464,21 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(result.source, SOURCE_TCP_FALLBACK)
         np.testing.assert_allclose(result.base_from_camera[:3, 3], [0.4, 0.1, 0.8])
 
+    def test_runtime_does_not_detect_tags_when_tcp_hand_eye_is_selected(self):
+        self.config.data["hand_eye"]["tcp_from_color_camera"].update(
+            {"valid": True, "matrix": np.eye(4).tolist()}
+        )
+        localizer = HybridLocalizer(self.config)
+        localizer.visual.detect = lambda image: self.fail("runtime must not query AprilTags")
+        result = localizer.localize(
+            np.zeros((10, 10, 3), dtype=np.uint8), np.eye(3), np.zeros(5),
+            base_from_tcp=np.eye(4), image_timestamp_s=4.0, robot_timestamp_s=4.0,
+        )
+        self.assertTrue(result.valid, result.reason)
+        self.assertEqual(result.source, SOURCE_TCP_FALLBACK)
+
     def test_hand_eye_aggregation_rejects_one_outlier(self):
+        self.config.data["hand_eye"]["calibration_target"]["type"] = "apriltag_map"
         self.config.data["hand_eye"]["minimum_samples"] = 5
         expected = transform_from_xyz_rpy([0.04, -0.02, 0.16], [3.0, -2.0, 5.0])
         calibrator = HandEyeCalibrator(self.config)
@@ -515,6 +531,7 @@ class PipelineTest(unittest.TestCase):
             load_rgbd_result(calibration, maximum_rms_px=2.0)
 
     def test_hand_eye_sample_store_rejects_changed_tag_map(self):
+        self.config.data["hand_eye"]["calibration_target"]["type"] = "apriltag_map"
         path = Path(self.temporary.name) / "samples.yaml"
         store = HandEyeSampleStore(path, self.config)
         sample = SimpleNamespace(

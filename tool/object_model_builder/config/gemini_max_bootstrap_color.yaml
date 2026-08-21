@@ -1,0 +1,19 @@
+# Bootstrap only. The Gemini debug profile replaces this with the connected
+# device's /camera/color/camera_info before capture or pose estimation.
+image_width: 640
+image_height: 480
+camera_name: Orbbec Gemini Max bootstrap
+distortion_model: rational_polynomial
+camera_matrix:
+  - [451.9165954589844, 0.0, 326.25335693359375]
+  - [0.0, 451.9165954589844, 245.31967163085938]
+  - [0.0, 0.0, 1.0]
+distortion_coefficients:
+  - 0.043671615421772
+  - -0.06011690944433212
+  - 0.00025111663853749633
+  - 0.00011227672075619921
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0

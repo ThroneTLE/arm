@@ -9,6 +9,7 @@ import numpy as np
 
 from tool.object_model_builder.camera_source import (
     AstraRosSource,
+    OrbbecRosSource,
     native_ros_environment,
     nearest_timestamped_frame,
     ros_image_to_numpy,
@@ -108,6 +109,29 @@ class TimestampPairingTests(unittest.TestCase):
         self.assertAlmostEqual(bundle.depth_timestamp_s, 1.20)
         self.assertAlmostEqual(bundle.sync_delta_s, 0.02)
         self.assertEqual(int(bundle.color_bgr[0, 0, 0]), 20)
+
+    def test_orbbec_source_waits_for_live_camera_info(self):
+        source = OrbbecRosSource(start_ros_driver=False)
+        source._color_history.append((1.0, np.zeros((3, 4, 3), dtype=np.uint8)))
+        self.assertIsNone(source.latest())
+        from tool.object_model_builder.rgbd_geometry import CameraIntrinsics
+
+        source._color_intrinsics = CameraIntrinsics(
+            4,
+            3,
+            np.asarray(
+                [[100.0, 0.0, 1.5], [0.0, 100.0, 1.0], [0.0, 0.0, 1.0]]
+            ),
+            np.zeros(5),
+        )
+        source._depth_history.append((1.01, np.ones((3, 4), dtype=np.float32)))
+        bundle = source.latest()
+        self.assertIsNotNone(bundle)
+        self.assertTrue(bundle.depth_aligned_to_color)
+        self.assertEqual(
+            (bundle.color_intrinsics.width, bundle.color_intrinsics.height),
+            (4, 3),
+        )
 
 
 if __name__ == "__main__":

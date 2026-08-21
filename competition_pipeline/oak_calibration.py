@@ -46,7 +46,7 @@ def _read_calibration(path):
         raise ValueError("无法读取 DepthAI EEPROM JSON：{}".format(error)) from error
 
 
-def inspect_oak_calibration(path, width=1280, height=720):
+def inspect_oak_calibration(path, width=1920, height=1080):
     """Return validated RGB intrinsics and stereo metadata from an EEPROM JSON."""
     source, dai, calibration = _read_calibration(path)
     width, height = int(width), int(height)
@@ -138,7 +138,7 @@ def _copy_atomic(source, destination):
     return destination
 
 
-def import_oak_calibration(source_json, output_json, output_yaml, width=1280, height=720):
+def import_oak_calibration(source_json, output_json, output_yaml, width=1920, height=1080):
     """Validate an official JSON, preserve it, and write canonical RGB YAML."""
     info = inspect_oak_calibration(source_json, width, height)
     saved_json = _copy_atomic(source_json, output_json)
@@ -173,7 +173,7 @@ def import_oak_calibration(source_json, output_json, output_yaml, width=1280, he
     return info
 
 
-def export_connected_oak_eeprom(output_json, output_yaml, width=1280, height=720):
+def export_connected_oak_eeprom(output_json, output_yaml, width=1920, height=1080):
     """Read the connected device EEPROM, save official JSON, and import it."""
     dai = _depthai()
     output_json = Path(output_json).expanduser().resolve()

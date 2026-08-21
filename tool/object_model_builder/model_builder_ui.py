@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 import yaml
 
-from .camera_source import AstraRosSource, FrameBundle, OakDProSource
+from .camera_source import AstraRosSource, FrameBundle, OakDProSource, OrbbecRosSource
 from .capture_session import CaptureSession
 from .environment_check import run_checks
 from .foundationpose_export import export_foundationpose_model, validate_mesh
@@ -25,6 +25,7 @@ from .foundationpose_live import (
     draw_pose_overlay,
 )
 from .mesh_fusion import fuse_session
+from .model_free import run_model_free_reconstruction
 from .rgbd_calibration import (
     CalibrationTarget,
     StereoCalibrationResult,
@@ -50,6 +51,7 @@ from .rgbd_geometry import (
     save_rgbd_calibration,
     transform_points,
 )
+from .rgbd_odometry import OdometryResult, RgbdOdometryTracker
 from .tag_pose_provider import TagPoseProvider
 from .yolo_segmenter import MaskResult, YoloMaskProvider
 
@@ -91,6 +93,12 @@ class CaptureAnalysisResult:
     depth_preview_bgr: Optional[np.ndarray] = None
     aligned_preview_bgr: Optional[np.ndarray] = None
     device_calibration: Optional[RgbdCalibration] = None
+    yolo_inference_ms: float = 0.0
+    mask_pixels: int = 0
+    valid_depth_pixels: int = 0
+    mask_depth_coverage: float = 0.0
+    odometry_result: Optional[OdometryResult] = None
+    odometry_error: str = ""
     completed_monotonic_s: float = 0.0
     error: Optional[Exception] = None
 
@@ -132,21 +140,37 @@ class ModelBuilderApp:
         self.capture_config = self.config["capture"]
         self.fusion_config = self.config["fusion"]
         self.foundationpose_live_config = self.config.get("foundationpose_live", {})
-        self.source: Optional[AstraRosSource] = None
+        self.model_free_config = self.config.get("model_free", {})
+        self.source = None
         self.bundle: Optional[FrameBundle] = None
         self.analysis_bundle: Optional[FrameBundle] = None
         self.analysis_rectified_color: Optional[np.ndarray] = None
         self.analysis_completed_monotonic_s = 0.0
-        self.color_intrinsics = load_color_intrinsics(self.paths["color_intrinsics"])
+        self._live_color_intrinsics_signature = None
+        try:
+            self.color_intrinsics = load_color_intrinsics(
+                self.paths["color_intrinsics"]
+            )
+        except FileNotFoundError:
+            bootstrap = self.camera_config.get("bootstrap_color_intrinsics", "")
+            if not bootstrap:
+                raise
+            self.color_intrinsics = load_color_intrinsics(bootstrap)
         self.rgbd_calibration: Optional[RgbdCalibration] = None
         self.depth_aligner: Optional[DepthToColorAligner] = None
         self.device_rgbd_calibration: Optional[RgbdCalibration] = None
         self.stereo_result: Optional[StereoCalibrationResult] = None
-        self.tag_provider = TagPoseProvider(
-            self.paths["tag_layout"],
-            minimum_tags=self.tag_config["minimum_tags"],
-            maximum_rms_px=self.tag_config["maximum_rms_px"],
-        )
+        if self.capture_config.get("pose_source") == "rgbd_odometry":
+            # Marker-free Gemini capture intentionally has no AprilTag
+            # dependency. The provider is omitted, not merely ignored, so a
+            # missing tag layout cannot block this workflow.
+            self.tag_provider = None
+        else:
+            self.tag_provider = TagPoseProvider(
+                self.paths["tag_layout"],
+                minimum_tags=self.tag_config["minimum_tags"],
+                maximum_rms_px=self.tag_config["maximum_rms_px"],
+            )
         self.tag_estimate = None
         self.tag_detections = {}
         self.yolo_provider: Optional[YoloMaskProvider] = None
@@ -155,6 +179,14 @@ class ModelBuilderApp:
         self.rectified_color = None
         self.capture_session: Optional[CaptureSession] = None
         self.last_capture_pose = None
+        odometry_config = self.capture_config.get("rgbd_odometry", {})
+        self.capture_odometry = RgbdOdometryTracker(
+            minimum_fitness=float(odometry_config.get("minimum_fitness", 0.08)),
+            maximum_rmse=float(odometry_config.get("maximum_rmse", 0.03)),
+            maximum_depth_m=float(
+                odometry_config.get("maximum_depth_m", 2.0)
+            ),
+        )
         self._captured_object_centroids_workspace = []
         self.fusion_result = None
         self._frame_counter = 0
@@ -219,6 +251,15 @@ class ModelBuilderApp:
             False, reason="等待后台分割"
         )
         self._analysis_last_yolo_monotonic_s = 0.0
+        self._analysis_yolo_inference_ms = 0.0
+        self._analysis_cached_odometry_result = None
+        self._analysis_cached_odometry_depth_timestamp_s = None
+        self._analysis_last_odometry_monotonic_s = 0.0
+        self.analysis_odometry_result = None
+        self.analysis_odometry_error = ""
+        self.analysis_mask_pixels = 0
+        self.analysis_valid_depth_pixels = 0
+        self.analysis_mask_depth_coverage = 0.0
         self.foundationpose_live_worker = FoundationPoseLiveWorker()
         self.foundationpose_live_active = False
         self.foundationpose_live_pose = None
@@ -511,7 +552,7 @@ class ModelBuilderApp:
 
         note = self.tk.Label(
             parent,
-            text="工作坐标：ruler_workspace\n输出：FoundationPose CAD 模型",
+            text="工作坐标：ruler_workspace\n输出：Neural Object Field / FoundationPose 模型",
             background="#e2e7e9",
             foreground="#66737a",
             justify="left",
@@ -847,7 +888,13 @@ class ModelBuilderApp:
         ).pack(fill="x", pady=3)
         self.ttk.Button(
             parent,
-            text="5  加载网格并实时测试",
+            text="5  用 16 张参考图训练神经隐式模型",
+            style="Primary.TButton",
+            command=self._run_model_free,
+        ).pack(fill="x", pady=(8, 3))
+        self.ttk.Button(
+            parent,
+            text="6  加载重建模型并实时测试",
             style="Primary.TButton",
             command=self._load_foundationpose_live,
         ).pack(fill="x", pady=(10, 3))
@@ -862,7 +909,7 @@ class ModelBuilderApp:
             command=self._stop_foundationpose_live,
         ).pack(fill="x", pady=3)
         self.foundationpose_live_status_text = self.tk.StringVar(
-            value="参考照片 ZIP 需先重建为 OBJ/PLY/STL"
+            value="可选择官方 BundleSDF Model-free，或加载已有 OBJ/PLY/STL"
         )
         self.ttk.Label(
             parent,
@@ -894,7 +941,18 @@ class ModelBuilderApp:
             wraplength=370,
             justify="left",
         ).pack(fill="x", pady=(14, 0))
-        gates = "彩深不同步时按钮会等待下一组深度；深度覆盖率、物体固定和新视角仍需合格。"
+        if self.capture_config.get("pose_source") == "rgbd_odometry":
+            gates = (
+                "无 AprilTag：首张 RGB-D 作为相机原点，后续靠 RGB-D 里程计估计运动；"
+                "需要保持背景有纹理、物体和场景固定，并保证相邻视角有重叠。"
+            )
+        elif self.camera_config.get("backend") == "orbbec_ros":
+            gates = (
+                "双 AprilTag：ID0 左、ID1 右，两个 Tag 必须同时可见；"
+                "边长 75 mm，右下角间距 150 mm，物体与 Tag 保持固定。"
+            )
+        else:
+            gates = "AprilTag · Mask · 对齐深度 · 新视角；物体与 Tag 保持固定。"
         self.ttk.Label(parent, text=gates, style="Muted.TLabel", wraplength=370).pack(
             fill="x", pady=(12, 0)
         )
@@ -984,6 +1042,29 @@ class ModelBuilderApp:
                     color_height=oak.get("color_height", 720),
                     fps=oak.get("fps", 30),
                 )
+            elif backend == "orbbec_ros":
+                ros_driver = self.camera_config.get("ros_driver", {})
+                self.source = OrbbecRosSource(
+                    color_topic=self.camera_config["color_topic"],
+                    color_info_topic=self.camera_config["color_info_topic"],
+                    depth_topic=self.camera_config["depth_topic"],
+                    depth_info_topic=self.camera_config["depth_info_topic"],
+                    ir_topic=self.camera_config["ir_topic"],
+                    start_ros_driver=self.camera_config.get("start_ros_driver", True),
+                    driver_log_path=str(log_path),
+                    driver_package=ros_driver.get("package", "orbbec_camera"),
+                    driver_launch_file=ros_driver.get("launch_file", "gemini.launch"),
+                    driver_arguments=ros_driver.get("arguments"),
+                    driver_startup_timeout_s=ros_driver.get("startup_timeout_s", 3.0),
+                    laser_service=self.camera_config.get(
+                        "laser_service", "/camera/set_laser"
+                    ),
+                    depth_aligned_to_color=self.camera_config.get(
+                        "depth_aligned_to_color", True
+                    ),
+                    expected_serial=self.camera_config.get("expected_serial"),
+                    ros_node_name="gemini_foundationpose_debug",
+                )
             elif backend == "astra_ros":
                 ros_driver = self.camera_config.get("ros_driver", {})
                 self.source = AstraRosSource(
@@ -1024,6 +1105,20 @@ class ModelBuilderApp:
             self._show_error("相机启动失败", error)
 
     def _reload_rgbd_calibration(self, show_dialog=True):
+        if self.camera_config.get("backend") == "orbbec_ros":
+            self.rgbd_calibration = None
+            self.depth_aligner = None
+            self._invalidate_capture_analysis(clear_state=True)
+            detail = "Gemini 使用设备 CameraInfo + 驱动 Depth→RGB 对齐；" + (
+                "双 AprilTag ID0/ID1 提供采集相机位姿；无 RGB-D 外参依赖"
+                if self.capture_config.get("pose_source") == "apriltag"
+                else "无 AprilTag RGB-D 外参依赖"
+            )
+            if hasattr(self, "rgbd_status_text"):
+                self.rgbd_status_text.set(detail)
+            if hasattr(self, "status_text"):
+                self._set_status(detail)
+            return
         try:
             self.rgbd_calibration = load_runtime_calibration(self.paths["runtime_calibration"])
             self.rgbd_calibration.require_valid()
@@ -1163,12 +1258,20 @@ class ModelBuilderApp:
                 False, reason="等待后台分割"
             )
             self._analysis_last_yolo_monotonic_s = 0.0
+            self._analysis_yolo_inference_ms = 0.0
+            self._analysis_cached_odometry_result = None
+            self._analysis_cached_odometry_depth_timestamp_s = None
+            self._analysis_last_odometry_monotonic_s = 0.0
 
-        estimate, detections = self.tag_provider.estimate(
-            rectified_color,
-            color_intrinsics.matrix,
-            color_intrinsics.distortion,
-        )
+        pose_source = str(getattr(self, "capture_config", {}).get("pose_source", "apriltag"))
+        if pose_source == "rgbd_odometry":
+            estimate, detections = None, {}
+        else:
+            estimate, detections = self.tag_provider.estimate(
+                rectified_color,
+                color_intrinsics.matrix,
+                color_intrinsics.distortion,
+            )
         mask_result = self._analysis_cached_mask_result
         now = time.monotonic()
         provider = self.yolo_provider
@@ -1180,6 +1283,9 @@ class ModelBuilderApp:
             mask_result = provider.predict(rectified_color)
             self._analysis_cached_mask_result = mask_result
             self._analysis_last_yolo_monotonic_s = now
+            self._analysis_yolo_inference_ms = float(
+                getattr(provider, "last_inference_ms", 0.0)
+            )
 
         device_calibration = self._analysis_cached_device_calibration
         aligned_depth = self._analysis_cached_aligned_depth
@@ -1205,7 +1311,7 @@ class ModelBuilderApp:
                     depth=color_intrinsics,
                     color_from_depth=np.eye(4),
                     valid=True,
-                    source="DepthAI factory calibration; depth aligned to RGB",
+                    source="device factory depth registration; depth aligned to RGB",
                 )
             elif self.depth_aligner is not None:
                 aligned_depth = self.depth_aligner.align(bundle.depth_m)
@@ -1225,6 +1331,32 @@ class ModelBuilderApp:
                 else self._depth_colormap(aligned_depth)
             )
 
+        odometry_result = self._analysis_cached_odometry_result
+        odometry_error = ""
+        if (
+            pose_source == "rgbd_odometry"
+            and self.capture_session is not None
+            and aligned_depth is not None
+            and bundle.depth_timestamp_s != self._analysis_cached_odometry_depth_timestamp_s
+            and time.monotonic() - self._analysis_last_odometry_monotonic_s >= float(
+                self.capture_config.get("rgbd_odometry", {}).get(
+                    "update_interval_s", 0.25
+                )
+            )
+        ):
+            try:
+                odometry_result = self.capture_odometry.update(
+                    rectified_color,
+                    aligned_depth,
+                    rectified_intrinsics(color_intrinsics).matrix,
+                )
+                self._analysis_cached_odometry_result = odometry_result
+                self._analysis_cached_odometry_depth_timestamp_s = bundle.depth_timestamp_s
+            except Exception as error:
+                odometry_result = None
+                odometry_error = str(error)
+            self._analysis_last_odometry_monotonic_s = time.monotonic()
+
         aligned_preview = self._analysis_cached_aligned_preview_bgr
         if aligned_preview is not None:
             aligned_preview = aligned_preview.copy()
@@ -1233,6 +1365,24 @@ class ModelBuilderApp:
                 aligned_preview[outside] = (
                     aligned_preview[outside] * 0.22
                 ).astype(np.uint8)
+
+        mask_pixels = (
+            int(np.count_nonzero(mask_result.mask))
+            if mask_result.valid and mask_result.mask is not None
+            else 0
+        )
+        valid_depth_pixels = 0
+        mask_depth_coverage = 0.0
+        if (
+            aligned_depth is not None
+            and mask_result.valid
+            and mask_result.mask is not None
+        ):
+            mask_array = np.asarray(mask_result.mask).astype(bool)
+            valid_depth_pixels = int(
+                np.count_nonzero((np.asarray(aligned_depth) > 0.0) & mask_array)
+            )
+            mask_depth_coverage = depth_coverage(aligned_depth, mask_array)
 
         return CaptureAnalysisResult(
             generation=generation,
@@ -1245,6 +1395,12 @@ class ModelBuilderApp:
             depth_preview_bgr=self._analysis_cached_depth_preview_bgr,
             aligned_preview_bgr=aligned_preview,
             device_calibration=device_calibration,
+            yolo_inference_ms=self._analysis_yolo_inference_ms,
+            mask_pixels=mask_pixels,
+            valid_depth_pixels=valid_depth_pixels,
+            mask_depth_coverage=mask_depth_coverage,
+            odometry_result=odometry_result,
+            odometry_error=odometry_error,
             completed_monotonic_s=time.monotonic(),
         )
 
@@ -1280,6 +1436,20 @@ class ModelBuilderApp:
         )
         self.aligned_depth = result.aligned_depth
         self.device_rgbd_calibration = result.device_calibration
+        self.analysis_mask_pixels = int(result.mask_pixels)
+        self.analysis_valid_depth_pixels = int(result.valid_depth_pixels)
+        self.analysis_mask_depth_coverage = float(result.mask_depth_coverage)
+        self.analysis_odometry_result = result.odometry_result
+        self.analysis_odometry_error = result.odometry_error
+        self._set_capture_diagnostics(
+            result.yolo_inference_ms,
+            result.mask_result,
+            result.mask_pixels,
+            result.valid_depth_pixels,
+            result.mask_depth_coverage,
+            result.odometry_result,
+            result.odometry_error,
+        )
         if result.depth_preview_bgr is not None:
             self._set_preview(
                 self.depth_preview,
@@ -1297,6 +1467,46 @@ class ModelBuilderApp:
             )
         self._queue_foundationpose_live_frame()
 
+    def _set_capture_diagnostics(
+        self,
+        yolo_ms,
+        mask_result,
+        mask_pixels,
+        valid_depth_pixels,
+        coverage,
+        odometry_result=None,
+        odometry_error="",
+    ):
+        widget = getattr(self, "capture_diagnostics_text", None)
+        if widget is None:
+            return
+        if mask_result is None or not mask_result.valid:
+            widget.set(
+                "YOLO {:.0f} ms · Mask 无效：{}".format(
+                    float(yolo_ms), getattr(mask_result, "reason", "等待分割")
+                )
+            )
+            return
+        if odometry_result is None:
+            odometry_text = "里程计等待"
+        elif not odometry_result.success:
+            odometry_text = "里程计失败"
+        else:
+            odometry_text = "里程计 Δ{:.0f}mm/{:.1f}°".format(
+                odometry_result.translation_m * 1000.0,
+                odometry_result.rotation_deg,
+            )
+        if odometry_error:
+            odometry_text = "里程计错误：{}".format(odometry_error)
+        widget.set(
+            "YOLO {:.0f} ms · Mask {} px · 有效深度 {} px · 覆盖 {:.1%}（要求 {:.0%}） · {}".format(
+                float(yolo_ms), int(mask_pixels), int(valid_depth_pixels),
+                float(coverage),
+                float(self.capture_config.get("minimum_mask_depth_coverage", 0.0)),
+                odometry_text,
+            )
+        )
+
     def _set_foundationpose_live_status(self, text: str) -> None:
         if hasattr(self, "foundationpose_live_status_text"):
             self.foundationpose_live_status_text.set(str(text))
@@ -1307,14 +1517,28 @@ class ModelBuilderApp:
             return
         if pose is None:
             text = "camera_from_object\n--"
+            relative_text = "物体相对相机：等待 FoundationPose 位姿"
         else:
             matrix = np.asarray(pose, dtype=np.float64).reshape(4, 4)
             rows = ["[" + "  ".join("{:+.5f}".format(value) for value in row) + "]" for row in matrix]
             text = "camera_from_object (m)\n" + "\n".join(rows)
+            position = matrix[:3, 3]
+            relative_text = (
+                "物体相对相机（m）\n"
+                "X {:+.4f}  Y {:+.4f}  Z {:+.4f}\n"
+                "直线距离 {:.4f} m ({:.1f} mm)\n"
+                "相机系：+X 向右，+Y 向下，+Z 向前"
+            ).format(
+                position[0], position[1], position[2],
+                float(np.linalg.norm(position)), float(np.linalg.norm(position) * 1000.0),
+            )
         widget.configure(state="normal")
         widget.delete("1.0", "end")
         widget.insert("end", text)
         widget.configure(state="disabled")
+        relative_widget = getattr(self, "foundationpose_relative_position_text", None)
+        if relative_widget is not None:
+            relative_widget.set(relative_text)
 
     def _load_foundationpose_live(self) -> None:
         try:
@@ -1532,6 +1756,7 @@ class ModelBuilderApp:
         calibration_stage = self._active_stage_index == 1
         capture_stage = self._active_stage_index == 2
         active_color_intrinsics = bundle.color_intrinsics or self.color_intrinsics
+        self._persist_live_color_intrinsics(active_color_intrinsics)
         self.rectified_color = (
             bundle.color_bgr.copy()
             if bundle.color_is_rectified
@@ -1651,7 +1876,18 @@ class ModelBuilderApp:
             if status_bundle.sync_delta_s is None
             else "{:.0f} ms".format(status_bundle.sync_delta_s * 1000.0)
         )
-        tag = "有效" if capture_stage and estimate is not None and estimate.valid else "待机"
+        pose_label = (
+            "RGB-D里程计"
+            if self.capture_config.get("pose_source") == "rgbd_odometry"
+            else "Tag"
+        )
+        tag = (
+            "启用"
+            if capture_stage and self.capture_config.get("pose_source") == "rgbd_odometry"
+            else "有效"
+            if capture_stage and estimate is not None and estimate.valid
+            else "待机"
+        )
         mask = "有效" if capture_stage and self.mask_result.valid else "待机"
         coverage_text = "--"
         if (
@@ -1674,8 +1910,8 @@ class ModelBuilderApp:
             self.capture_status_text.set(self._capture_feedback_text)
         else:
             self.capture_status_text.set(
-                "Tag {} | Mask {} | 深度 {}（需 {:.0%}） | 彩深差 {} | 已拍 {} 张".format(
-                    tag,
+                "{} {} | Mask {} | 深度 {}（需 {:.0%}） | 彩深差 {} | 已拍 {} 张".format(
+                    pose_label, tag,
                     mask,
                     coverage_text,
                     float(self.capture_config["minimum_mask_depth_coverage"]),
@@ -1697,7 +1933,7 @@ class ModelBuilderApp:
             )
         else:
             self.detection_metric_text.set(
-                "Tag {} · Mask {}".format(tag, mask)
+                "{} {} · Mask {}".format(pose_label, tag, mask)
             )
         self.capture_metric_text.set(
             "{} 帧".format(
@@ -1706,6 +1942,46 @@ class ModelBuilderApp:
         )
         if calibration_stage:
             self._try_auto_calibration_capture(bundle)
+
+    def _persist_live_color_intrinsics(self, intrinsics: CameraIntrinsics) -> None:
+        """Persist the actual camera's ``CameraInfo`` when the profile asks for it.
+
+        The Gemini profile opens only after the Orbbec SDK publishes a valid
+        CameraInfo message.  Saving that message under ``arm_data`` makes the
+        selected model/session self-describing without ever reusing Astra's
+        calibration YAML.
+        """
+        if not bool(self.camera_config.get("persist_camera_info", False)):
+            return
+        matrix = np.asarray(intrinsics.matrix, dtype=np.float64).reshape(3, 3)
+        distortion = np.asarray(intrinsics.distortion, dtype=np.float64).reshape(-1)
+        signature = (
+            int(intrinsics.width), int(intrinsics.height),
+            tuple(np.round(matrix.reshape(-1), 10)),
+            tuple(np.round(distortion, 10)),
+        )
+        if signature == self._live_color_intrinsics_signature:
+            return
+        destination = Path(self.paths["color_intrinsics"]).expanduser().resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        payload = intrinsics.to_mapping()
+        payload.update({
+            "camera_name": str(self.camera_config.get("label", "Orbbec camera")),
+            "distortion_model": "rational_polynomial",
+            "source": "live /camera/color/camera_info",
+            "expected_serial": str(self.camera_config.get("expected_serial", "")),
+        })
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            yaml.safe_dump(payload, handle, sort_keys=False, allow_unicode=True)
+        temporary.replace(destination)
+        self._live_color_intrinsics_signature = signature
+        self._set_status("已读取并保存当前 Gemini CameraInfo：{}".format(destination))
+
+    def _capture_button_label(self) -> str:
+        return "3  拍摄参考图（目标 {} 张）".format(
+            int(self.model_free_config.get("minimum_views", 16))
+        )
 
     @staticmethod
     def _depth_colormap(depth_m: np.ndarray) -> np.ndarray:
@@ -2115,6 +2391,8 @@ class ModelBuilderApp:
         )
         self.session_var.set(str(session_path))
         self.last_capture_pose = None
+        self.capture_odometry.reset()
+        self._invalidate_capture_analysis(clear_state=True)
         self._captured_object_centroids_workspace = []
         self.fusion_result = None
         self._capture_request_pending = False
@@ -2138,6 +2416,8 @@ class ModelBuilderApp:
         self.capture_session = session
         self.session_var.set(str(session.root))
         self.last_capture_pose = last_pose
+        self.capture_odometry.reset()
+        self._invalidate_capture_analysis(clear_state=True)
         self._captured_object_centroids_workspace = centroids
         self._capture_request_pending = False
         self._last_captured_view_index = len(session) - 1 if len(session) else None
@@ -2184,7 +2464,7 @@ class ModelBuilderApp:
             return
         self._capture_request_pending = False
         if hasattr(self, "capture_button"):
-            self.capture_button.configure(text="3  拍摄参考图")
+            self.capture_button.configure(text=self._capture_button_label())
         self._last_captured_view_index = index
         self._refresh_capture_gallery_count()
         text = "已拍摄第 {} 张 · 深度 {:.0%} · 彩深差 {:.0f} ms".format(
@@ -2206,8 +2486,6 @@ class ModelBuilderApp:
             raise ValueError("后台分析暂未跟上")
         if calibration is None:
             raise ValueError("RGB-D 标定无效")
-        if self.tag_estimate is None or not self.tag_estimate.valid:
-            raise ValueError("画面中没有有效 AprilTag 位姿")
         if not self.mask_result.valid or self.mask_result.mask is None:
             raise ValueError("画面中没有有效 YOLO Mask")
         if bundle.sync_delta_s is None or bundle.sync_delta_s > float(
@@ -2232,7 +2510,23 @@ class ModelBuilderApp:
                     coverage, minimum_coverage
                 )
             )
-        pose = self.tag_estimate.workspace_from_camera
+        pose_source = str(self.capture_config.get("pose_source", "apriltag"))
+        if pose_source == "rgbd_odometry":
+            odometry = self.analysis_odometry_result
+            if odometry is None or not odometry.success:
+                raise ValueError(
+                    "RGB-D 里程计未跟上；请保持相邻视角重叠并缓慢移动相机"
+                )
+            pose = odometry.world_from_camera
+        else:
+            if self.tag_estimate is None or not self.tag_estimate.valid:
+                reason = (
+                    "AprilTag 尚未检测到"
+                    if self.tag_estimate is None
+                    else str(self.tag_estimate.reason)
+                )
+                raise ValueError("AprilTag 位姿无效：{}".format(reason))
+            pose = self.tag_estimate.workspace_from_camera
         centroid_camera = masked_depth_centroid(
             aligned,
             self.mask_result.mask,
@@ -2251,7 +2545,7 @@ class ModelBuilderApp:
             )
             if observed_shift_m > maximum_object_shift_m:
                 raise ValueError(
-                    "物体相对 Tag 移动 {:.0f} mm；请只移动相机".format(
+                    "物体相对参考坐标移动 {:.0f} mm；请只移动相机".format(
                         observed_shift_m * 1000.0
                     )
                 )
@@ -2274,8 +2568,15 @@ class ModelBuilderApp:
             workspace_from_color=pose,
             timestamp_s=bundle.color_timestamp_s,
             metadata={
-                "tag_ids": list(self.tag_estimate.visible_tag_ids),
-                "tag_rms_px": self.tag_estimate.rms_reprojection_error_px,
+                "pose_source": pose_source,
+                "tag_ids": (
+                    [] if self.tag_estimate is None
+                    else list(self.tag_estimate.visible_tag_ids)
+                ),
+                "tag_rms_px": (
+                    None if self.tag_estimate is None
+                    else self.tag_estimate.rms_reprojection_error_px
+                ),
                 "yolo_class": self.mask_result.class_name,
                 "yolo_confidence": self.mask_result.confidence,
                 "mask_depth_coverage": coverage,
@@ -2292,7 +2593,7 @@ class ModelBuilderApp:
         self._capture_request_pending = False
         self._capture_request_deadline_s = 0.0
         if hasattr(self, "capture_button"):
-            self.capture_button.configure(text="3  拍摄参考图")
+            self.capture_button.configure(text=self._capture_button_label())
         self._set_capture_feedback(text, duration_s)
         self._set_status(text)
 
@@ -2349,6 +2650,11 @@ class ModelBuilderApp:
         self._fuse_session()
 
     def _effective_rgbd_calibration(self):
+        # Gemini depth is registered to the RGB stream by the Orbbec driver.
+        # Do not silently fall back to an unrelated Astra calibration while
+        # waiting for the first Gemini CameraInfo/depth frame.
+        if self.camera_config.get("backend") == "orbbec_ros":
+            return self.device_rgbd_calibration
         return self.device_rgbd_calibration or self.rgbd_calibration
 
     def _pack_foundationpose_reference_zip(self):
@@ -2407,6 +2713,109 @@ class ModelBuilderApp:
     def _reference_zip_failed(self, error):
         self._busy = False
         self._show_error("无模型参考 ZIP 打包失败", error)
+
+    def _run_model_free(self):
+        """Train the official BundleSDF Neural Object Field from this session."""
+        if self._busy:
+            self._set_status("已有任务正在运行")
+            return
+        session_path = self.session_var.get().strip()
+        if not session_path:
+            self._show_error("无法训练神经隐式模型", "请先新建或选择参考拍照会话")
+            return
+        try:
+            session = CaptureSession.open(session_path)
+            frame_count = len(session)
+            minimum_views = int(self.model_free_config.get(
+                "minimum_views", self.fusion_config.get("minimum_views", 16)
+            ))
+            if frame_count < minimum_views:
+                raise ValueError(
+                    "Model-free 至少需要 {} 张参考图，当前只有 {} 张".format(
+                        minimum_views, frame_count
+                    )
+                )
+            object_id = int(self.reference_object_id_var.get())
+            if object_id <= 0:
+                raise ValueError("参考物体 ID 必须是正整数")
+            object_name = self.reference_object_name_var.get().strip() or "object"
+        except Exception as error:
+            self._show_error("无法训练神经隐式模型", error)
+            return
+
+        from .session_archive import export_foundationpose_reference_directory
+
+        root = Path(self.paths.get("model_free_root", self.paths["mesh_root"]))
+        root.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S") + "_{:03d}".format(
+            int((time.time() % 1.0) * 1000.0)
+        )
+        job = root / (Path(session_path).name + "_model_free_" + stamp)
+        reference_dir = job / "reference"
+        result_dir = job / "result"
+        foundationpose_root = self.paths["foundationpose_root"]
+        config_path = self.model_free_config.get("config_path") or None
+        iterations = self.model_free_config.get("iterations")
+        mesh_resolution = self.model_free_config.get("mesh_resolution_m")
+        self._busy = True
+        self._set_status(
+            "正在用 {} 张 RGB-D 训练 BundleSDF Neural Object Field；GPU 任务可能需要较长时间".format(
+                frame_count
+            )
+        )
+        if hasattr(self, "capture_status_text"):
+            self.capture_status_text.set("Model-free 建模进行中：正在导出参考数据并训练神经隐式表示…")
+
+        def worker():
+            try:
+                export_foundationpose_reference_directory(
+                    session_path,
+                    str(reference_dir),
+                    object_id=object_id,
+                    object_name=object_name,
+                )
+                result = run_model_free_reconstruction(
+                    str(reference_dir),
+                    foundationpose_root,
+                    str(result_dir),
+                    config_path=config_path,
+                    iterations=None if iterations in (None, "") else int(iterations),
+                    mesh_resolution_m=(
+                        None if mesh_resolution in (None, "") else float(mesh_resolution)
+                    ),
+                    object_id=object_id,
+                )
+                self.root.after(0, lambda: self._model_free_finished(result))
+            except Exception as error:
+                self.root.after(0, lambda current=error: self._model_free_failed(current))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _model_free_finished(self, result):
+        self._busy = False
+        model_path = str(result.model_obj)
+        if hasattr(self, "foundationpose_mesh_var"):
+            self.foundationpose_mesh_var.set(model_path)
+        if hasattr(self, "foundationpose_mesh_scale_var"):
+            self.foundationpose_mesh_scale_var.set("1.0")
+        text = (
+            "Neural Object Field 建模完成：{} 张参考图，耗时 {:.1f} s。\n"
+            "已生成米制模型：{}\n点击“加载重建模型并实时测试”执行 FoundationPose。"
+        ).format(result.frame_count, result.elapsed_s, model_path)
+        self._set_status(text)
+        if hasattr(self, "capture_status_text"):
+            self.capture_status_text.set(text)
+        if hasattr(self, "foundationpose_live_status_text"):
+            self.foundationpose_live_status_text.set(
+                "Model-free 模型已生成；请点击加载按钮开始 REGISTER/TRACK"
+            )
+
+    def _model_free_failed(self, error):
+        self._busy = False
+        text = "Neural Object Field 建模失败：{}".format(error)
+        if hasattr(self, "capture_status_text"):
+            self.capture_status_text.set(text)
+        self._show_error("Model-free 建模失败", error)
 
     def _fuse_session(self):
         if self._busy:

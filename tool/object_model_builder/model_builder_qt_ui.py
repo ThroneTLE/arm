@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
     QStackedWidget,
     QStyle,
     QToolButton,
@@ -60,14 +61,18 @@ class WidgetValue:
 
 
 class StatusValue:
-    def __init__(self, status_bar):
+    def __init__(self, status_bar, status_label=None):
         self.status_bar = status_bar
+        self.status_label = status_label
 
     def get(self):
         return self.status_bar.currentMessage()
 
     def set(self, value):
-        self.status_bar.showMessage(str(value))
+        text = str(value)
+        self.status_bar.showMessage(text)
+        if self.status_label is not None:
+            self.status_label.setText(text)
 
 
 class ButtonAdapter:
@@ -384,16 +389,26 @@ class QtModelBuilderController(ModelBuilderApp):
         outer.setSpacing(0)
         outer.addWidget(self._build_header())
 
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(0)
-        body.addWidget(self._build_sidebar())
-        body.addWidget(self._build_preview_area(), 1)
-        body.addWidget(self._build_control_area())
-        outer.addLayout(body, 1)
+        body = QSplitter(Qt.Horizontal)
+        body.setObjectName("mainSplitter")
+        body.setChildrenCollapsible(False)
+        body.setHandleWidth(7)
+        sidebar = self._build_sidebar()
+        preview = self._build_preview_area()
+        controls = self._build_control_area()
+        body.addWidget(sidebar)
+        body.addWidget(preview)
+        body.addWidget(controls)
+        body.setStretchFactor(0, 0)
+        body.setStretchFactor(1, 1)
+        body.setStretchFactor(2, 0)
+        body.setSizes([225, 790, 445])
+        outer.addWidget(body, 1)
 
         self.window.statusBar().setSizeGripEnabled(False)
-        self.status_text = StatusValue(self.window.statusBar())
+        self.status_text = StatusValue(
+            self.window.statusBar(), getattr(self, "live_status_label", None)
+        )
         self.status_text.set("等待操作")
 
     def _build_header(self):
@@ -404,7 +419,22 @@ class QtModelBuilderController(ModelBuilderApp):
         layout.setContentsMargins(24, 0, 20, 0)
         title = QLabel("物体三维模型工作台")
         title.setObjectName("appTitle")
-        subtitle = QLabel("Astra Pro · AprilTag · YOLO Mask · TSDF · FoundationPose")
+        backend = self.camera_config.get("backend", "astra_ros")
+        camera_name = {
+            "astra_ros": "Astra Pro",
+            "orbbec_ros": "Gemini Max",
+            "oak_depthai": "OAK-D Pro",
+        }.get(backend, "RGB-D camera")
+        workflow = (
+            "RGB-D里程计"
+            if self.config.get("capture", {}).get("pose_source") == "rgbd_odometry"
+            else "AprilTag"
+        )
+        subtitle = QLabel(
+            "{} · {} · YOLO Mask · TSDF · FoundationPose".format(
+                camera_name, workflow
+            )
+        )
         subtitle.setObjectName("appSubtitle")
         titles = QVBoxLayout()
         titles.setSpacing(1)
@@ -427,7 +457,8 @@ class QtModelBuilderController(ModelBuilderApp):
     def _build_sidebar(self):
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(238)
+        sidebar.setMinimumWidth(170)
+        sidebar.setMaximumWidth(330)
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(16, 20, 16, 18)
         layout.setSpacing(12)
@@ -450,13 +481,15 @@ class QtModelBuilderController(ModelBuilderApp):
         source_label.setObjectName("sectionLabel")
         layout.addWidget(source_label)
         backend = self.camera_config.get("backend", "astra_ros")
-        source = QLabel(
-            "Astra Pro · ROS" if backend == "astra_ros" else "OAK-D Pro · DepthAI"
-        )
+        source = QLabel({
+            "astra_ros": "Astra Pro · ROS",
+            "orbbec_ros": "Gemini Max · Orbbec SDK ROS · 实机 CameraInfo",
+            "oak_depthai": "OAK-D Pro · DepthAI",
+        }.get(backend, "RGB-D camera"))
         source.setObjectName("sourceBanner")
         layout.addWidget(source)
         layout.addStretch()
-        note = QLabel("工作坐标：ruler_workspace\n输出：FoundationPose CAD 模型")
+        note = QLabel("工作坐标：ruler_workspace\n输出：Neural Object Field / FoundationPose 模型")
         note.setObjectName("sidebarNote")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -478,24 +511,50 @@ class QtModelBuilderController(ModelBuilderApp):
         heading.addStretch()
         heading.addWidget(state)
         layout.addLayout(heading)
+        live_status = QLabel("等待操作")
+        live_status.setObjectName("liveStatus")
+        live_status.setWordWrap(True)
+        live_status.setMinimumHeight(32)
+        self.live_status_label = live_status
+        layout.addWidget(live_status)
+        diagnostics = QLabel(
+            "YOLO -- · Mask -- · 有效深度 -- · 覆盖 --"
+        )
+        diagnostics.setObjectName("captureDiagnostics")
+        diagnostics.setWordWrap(True)
+        self.capture_diagnostics_text = WidgetValue(diagnostics)
+        layout.addWidget(diagnostics)
 
+        color_caption = (
+            "RGB / 分割结果（无 Tag）"
+            if self.capture_config.get("pose_source") == "rgbd_odometry"
+            else "RGB / Tag / 分割结果"
+        )
         color_panel, self.color_preview = self._preview_panel(
-            "RGB / Tag / 分割结果", "相机未连接"
+            color_caption, "相机未连接"
         )
         layout.addWidget(color_panel, 5)
-        lower = QHBoxLayout()
-        lower.setSpacing(10)
+        lower = QSplitter(Qt.Horizontal)
+        lower.setObjectName("previewSplitter")
+        lower.setChildrenCollapsible(False)
+        lower.setHandleWidth(6)
         depth_panel, self.depth_preview = self._preview_panel("原始深度", "等待深度图像")
+        ir_caption = (
+            "红外原图 / 高分辨率监视"
+            if self.capture_config.get("pose_source") == "rgbd_odometry"
+            else "红外原图 / {}".format(self.calibration_target.display_name)
+        )
         ir_panel, self.ir_preview = self._preview_panel(
-            "红外原图 / {}".format(self.calibration_target.display_name), "等待红外图像"
+            ir_caption, "等待红外图像"
         )
         aligned_panel, self.aligned_preview = self._preview_panel(
             "对齐深度 / Mask", "等待彩深对齐"
         )
-        lower.addWidget(depth_panel, 1)
-        lower.addWidget(ir_panel, 1)
-        lower.addWidget(aligned_panel, 1)
-        layout.addLayout(lower, 3)
+        lower.addWidget(depth_panel)
+        lower.addWidget(ir_panel)
+        lower.addWidget(aligned_panel)
+        lower.setSizes([250, 250, 250])
+        layout.addWidget(lower, 3)
 
         metrics = QFrame()
         metrics.setObjectName("metricBar")
@@ -538,7 +597,8 @@ class QtModelBuilderController(ModelBuilderApp):
     def _build_control_area(self):
         area = QFrame()
         area.setObjectName("controlArea")
-        area.setFixedWidth(440)
+        area.setMinimumWidth(340)
+        area.setMaximumWidth(620)
         layout = QVBoxLayout(area)
         layout.setContentsMargins(18, 18, 18, 14)
         layout.setSpacing(0)
@@ -677,7 +737,11 @@ class QtModelBuilderController(ModelBuilderApp):
     def _build_capture_page(self):
         page, layout = self._page(
             "无模型拍照与实时测试",
-            "RGB-D 参考视图 · AprilTag · YOLO Mask · FoundationPose",
+            (
+                "RGB-D 参考视图 · RGB-D 里程计（无 AprilTag） · YOLO Mask · FoundationPose"
+                if self.capture_config.get("pose_source") == "rgbd_odometry"
+                else "RGB-D 参考视图 · AprilTag · YOLO Mask · FoundationPose"
+            ),
         )
 
         def choose_weights(edit):
@@ -739,7 +803,7 @@ class QtModelBuilderController(ModelBuilderApp):
             button.clicked.connect(callback)
             layout.addWidget(button)
         capture_button = action_button(
-            self.window, "3  拍摄参考图", "SP_DialogSaveButton", primary=True
+            self.window, self._capture_button_label(), "SP_DialogSaveButton", primary=True
         )
         capture_button.clicked.connect(self._capture_view)
         self.capture_button = ButtonAdapter(capture_button)
@@ -766,12 +830,26 @@ class QtModelBuilderController(ModelBuilderApp):
         )
         export_button.clicked.connect(self._pack_foundationpose_reference_zip)
         layout.addWidget(export_button)
+        model_free_button = action_button(
+            self.window,
+            "5  用 16 张参考图训练神经隐式模型",
+            "SP_MediaPlay",
+            primary=True,
+        )
+        model_free_button.clicked.connect(self._run_model_free)
+        layout.addWidget(model_free_button)
         capture_status = QLabel("先加载 YOLO，再新建参考拍照会话")
         capture_status.setObjectName("resultBanner")
         capture_status.setWordWrap(True)
         self.capture_status_text = WidgetValue(capture_status)
         layout.addWidget(capture_status)
-        gates = QLabel("Tag · Mask · 对齐深度 · 新视角")
+        if self.capture_config.get("pose_source") == "rgbd_odometry":
+            gate_text = "RGB-D 里程计 · Mask · 对齐深度 · 新视角"
+        elif self.camera_config.get("backend") == "orbbec_ros":
+            gate_text = "双 AprilTag（ID0 左 / ID1 右）· Mask · 对齐深度 · 新视角"
+        else:
+            gate_text = "AprilTag · Mask · 对齐深度 · 新视角"
+        gates = QLabel(gate_text)
         gates.setObjectName("mutedText")
         layout.addWidget(gates)
 
@@ -793,18 +871,23 @@ class QtModelBuilderController(ModelBuilderApp):
         self.foundationpose_mesh_var = WidgetValue(live_mesh)
         self.foundationpose_mesh_scale_var = WidgetValue(live_scale)
         for text, callback, icon, primary in (
-            ("5  加载网格并实时测试", self._load_foundationpose_live, "SP_ComputerIcon", True),
+            ("6  加载重建模型并实时测试", self._load_foundationpose_live, "SP_ComputerIcon", True),
             ("初始化 / 重新初始化", self._reset_foundationpose_live, "SP_BrowserReload", False),
             ("停止实时测试", self._stop_foundationpose_live, "SP_MediaStop", False),
         ):
             button = action_button(self.window, text, icon, primary)
             button.clicked.connect(callback)
             layout.addWidget(button)
-        live_status = QLabel("需要先把参考照片 ZIP 重建为 OBJ/PLY/STL")
+        live_status = QLabel("可选择官方 BundleSDF Model-free，或加载已有 OBJ/PLY/STL")
         live_status.setObjectName("resultBanner")
         live_status.setWordWrap(True)
         self.foundationpose_live_status_text = WidgetValue(live_status)
         layout.addWidget(live_status)
+        relative_position = QLabel("物体相对相机：等待 FoundationPose 位姿")
+        relative_position.setObjectName("resultBanner")
+        relative_position.setWordWrap(True)
+        self.foundationpose_relative_position_text = WidgetValue(relative_position)
+        layout.addWidget(relative_position)
         pose_text = QPlainTextEdit()
         pose_text.setReadOnly(True)
         pose_text.setMaximumHeight(132)
@@ -1135,6 +1218,10 @@ class QtModelBuilderController(ModelBuilderApp):
                                   border-radius: 4px; padding: 9px; color: #243139; }
             QLabel#viewTitle { font-size: 17px; font-weight: 650; }
             QLabel#viewState { color: #0f766e; font-weight: 650; }
+            QLabel#liveStatus { background: #fff7df; color: #6a5316; border: 1px solid #ead9a2;
+                                padding: 7px 10px; border-radius: 5px; }
+            QLabel#captureDiagnostics { background: #eef2f4; color: #526068; border: 1px solid #d6dee1;
+                                        padding: 5px 8px; border-radius: 4px; font-size: 11px; }
             QLabel#panelTitle { font-size: 18px; font-weight: 650; }
             QLabel#panelSubtitle, QLabel#mutedText { color: #6b767c; }
             QLabel#metricCaption { color: #707b81; font-size: 10px; }
@@ -1166,6 +1253,10 @@ class QtModelBuilderController(ModelBuilderApp):
                              font-family: monospace; font-size: 11px; padding: 7px; }
             QScrollArea { background: #ffffff; border: 0; }
             QScrollArea > QWidget > QWidget { background: #ffffff; }
+            QSplitter::handle { background: #cbd3d6; }
+            QSplitter::handle:hover { background: #176d64; }
+            QSplitter#mainSplitter::handle { width: 7px; }
+            QSplitter#previewSplitter::handle { width: 6px; }
             QStatusBar { background: #eef1f2; color: #526068; border-top: 1px solid #d7dde0; }
             """
         )

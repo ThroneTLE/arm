@@ -1,0 +1,24 @@
+schema_version: 2
+coordinate_convention:
+  id: tag_top_left_x_right_y_down_v1
+  origin: black_border_top_left
+  x_axis: top_left_to_top_right
+  y_axis: top_left_to_bottom_left
+  z_axis: x_cross_y_into_plane
+dictionary: DICT_APRILTAG_25h9
+tag_size_mm: 75.0
+# This is a runtime pair layout, not the four-tag calibration board layout.
+# The two tag black-frame top-left origins are 150 mm apart. Because both tags
+# have the same 75 mm size and yaw, their bottom-right corners are also 150 mm
+# apart, matching the physical measurement supplied for the Gemini setup.
+minimum_calibration_tags: 2
+workspace_frame: ruler_workspace
+camera_frame: camera_color_optical_frame
+workspace_plane_z_mm: 0.0
+calibration_tags:
+  0:
+    origin_mm: [0.0, 0.0, 0.0]
+    yaw_deg: 0.0
+  1:
+    origin_mm: [150.0, 0.0, 0.0]
+    yaw_deg: 0.0

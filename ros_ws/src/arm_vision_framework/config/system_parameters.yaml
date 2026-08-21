@@ -1,33 +1,162 @@
 schema_version: 1
 runtime:
+  # The OAK bridge publishes only explicit stopped-arm snapshots.  This cap is
+  # retained for externally published frames and is not a requested camera FPS.
   rate_hz: 10.0
   maximum_robot_pose_age_s: 0.25
-  log_level: INFO
+  # Formal competition launch keeps structured diagnostics enabled. ROS
+  # console filtering can still be raised/lowered without code changes.
+  log_level: DEBUG
+  debug_logging: true
 safety:
   dry_run: true
   allow_robot_motion: false
   stop_on_localization_loss: true
   maximum_target_jump_m: 0.05
+  recovery:
+    # Never issue a recovery move without a field-confirmed safe MOVJ point.
+    auto_recover: false
+    safe_movej_points: []
+    singularity_error_codes: []  # Fill only from the official alarm table.
+    require_explicit_confirmation: true
 camera:
-  adapter: ros_topics
+  adapter: oak_depthai
   color_topic: /camera/color/image_raw
   aligned_depth_topic: /camera/aligned_depth_to_color/image_raw
   camera_info_topic: /camera/color/camera_info
+  capture_service: /arm_vision/camera/capture
+  capture_timeout_s: 2.0
+  maximum_sync_delta_s: 0.03
+  color_frame_id: camera_color_optical_frame
+  depth_frame_id: camera_color_optical_frame
   depth_scale_to_meters: 0.001
+  oak_d_pro:
+    # Recommended stopped-arm competition profile. RGB and aligned depth have
+    # identical dimensions; official EEPROM intrinsics must be imported at
+    # this exact output size before real operation.
+    profile: static_rgbd_1080p_extended
+    color_width: 1920
+    color_height: 1080
+    fps: 10
+    mono_resolution: 800p
+    extended_disparity: true
+    subpixel: false
+    left_right_check: true
+    dot_projector_mA: 800
+    floodlight_mA: 0
+    # OAK-D Pro can ship with AF or FF RGB. Keep the device default until the
+    # exact unit is checked; AF units may use continuous_auto or manual 0..255.
+    focus_mode: device_default
+    manual_focus: null
+    minimum_depth_m: 0.35
+    maximum_depth_m: 3.0
+    imu:
+      # OAK-D Pro contains an IMU, but the board-to-camera axis convention is
+      # not assumed. Publish raw measurements for diagnostics only until this
+      # transform is measured on the mounted unit.
+      enabled: true
+      topic: /camera/imu
+      imu_frame: oak_imu
+      camera_from_imu: null
+      report_rate_hz: 100.0
 robot:
   adapter: mock
   state_pose_topic: /arm_vision/robot/state/tool_pose
   target_pose_topic: /arm_vision/robot/command/target_pose
   stop_service: /arm_vision/robot/stop
+controller:
+  # The controller manual confirms a Modbus slave remote mode but does not
+  # provide the actual endpoint or register map. Keep this disabled until the
+  # field protocol sheet is available.
+  enabled: false
+  transport: modbus_tcp
+  host: ''
+  port: null
+  unit_id: null
+  connect_timeout_s: 2.0
+  io_timeout_s: 1.0
+  keepalive: true
+  max_frame_bytes: 260
+  state_poll_hz: 5.0
+  # Keep false until the controller RPY definition has been checked against
+  # the manual and a stopped-arm pose comparison has passed.
+  use_state_topic: false
+  state_pose_convention: unverified
+  # At the first valid controller-state read, capture shape and attach it to
+  # every subsequent visual command. Leave null for normal match startup.
+  initial_shape: null
+  # All addresses below are intentionally empty until the controller's
+  # official register sheet is available.  The state reader is read-only.
+  state_registers: {}
+  state_codec:
+    alarm_severity: error
+  modbus_global_point_fallback:
+    # Disabled until the pendant local program and every address are field-
+    # verified. No address below is a usable default.
+    enabled: false
+    local_program_verified: false
+    local_program_name: ''
+    timeout_s: 10.0
+    poll_interval_s: 0.05
+    initial_sequence_id: 0
+    initial_shape: null
+    motion_codes: {MOVJ: 1, MOVL: 2}
+    global_point_fields: {}
+    command_fields: {}
+    start_signal: {}
+    complete_signal: {}
+    stop_signal: {}
+  motion:
+    enabled: false
+    protocol: vendor_sdk_required
+  remote_io:
+    outputs: {}
+    inputs: {}
+gripper:
+  # Fill named outputs only from the real controller IO sheet. A typical
+  # pneumatic two-output example is documented in README.md; addresses and
+  # polarity intentionally remain unset here.
+  enabled: false
+  open_outputs: {}
+  close_outputs: {}
+  stop_outputs: {}
+  done_input: null
+  command_timeout_s: 2.0
+  poll_interval_s: 0.05
+pick_place:
+  # The real placement pose is supplied by the competition planner later.
+  enabled: false
+  # Dynamic object/placement poses are supplied by the competition planner.
+  observation:
+    capture_service: /arm_vision/camera/capture
+    settle_time_s: 0.25
+    first_view_movej_points: []
+    second_view_movej_points: []
+  grasp_width_mm: 45.0
+  maximum_effort: null
+  motion:
+    movej_speed_scale: 0.1
+    movel_speed_mm_s: 30.0
+  placement:
+    valid: false
+    position_mm: []
+    rpy_deg: []
+    user_id: null
+    tool_id: null
 segmentation:
   backend: mock
   weights: ''
   target_classes: [can]
   confidence_threshold: 0.5
+  # Keep bbox/class detections usable before an instance-segmentation model is
+  # field-tested; FoundationPose receives a rectangular ROI mask fallback.
+  bbox_mask_fallback: true
 pose_estimation:
   backend: mock
   foundationpose_root: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus
   mesh_path: ''
+  mesh_paths: {}
+  roi_padding_pixels: 12
   mesh_scale_to_meters: 1.0
   require_aligned_depth: true
   device: cuda:0
@@ -37,9 +166,14 @@ pose_estimation:
   track_refine_iter: 2
   use_mask_center_guidance: true
 localization:
-  visual_priority: true
+  # AprilTags are used by the hand-eye calibration tool only. Runtime camera
+  # pose is T_base_tcp * T_tcp_color_camera from controller feedback.
+  use_apriltag_runtime: false
   use_robot_fallback: true
 outputs:
   object_pose_topic: /arm_vision/object_pose
   segmentation_mask_topic: /arm_vision/segmentation/mask
   status_topic: /arm_vision/status
+  task_command_topic: /arm_vision/task_command
+  controller_state_topic: /arm_vision/controller/state
+  diagnostics_topic: /arm_vision/diagnostics

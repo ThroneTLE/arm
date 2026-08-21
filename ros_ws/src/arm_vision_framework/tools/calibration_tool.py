@@ -2,6 +2,7 @@
 """Manage the framework's single calibration parameter file."""
 
 import argparse
+import copy
 import os
 import shutil
 import subprocess
@@ -20,8 +21,11 @@ ARM_ROOT = PACKAGE_ROOT.parents[2]
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from arm_vision_framework.parameters import CalibrationStore, COORDINATE_CONVENTION_ID
+from arm_vision_framework.parameters import (
+    CalibrationStore, COORDINATE_CONVENTION_ID, load_system_parameters,
+)
 from arm_vision_framework.transforms import as_transform
+from arm_vision_framework.oak_calibration_import import inspect_oak_eeprom
 
 
 DEFAULT_PARAMETER = PACKAGE_ROOT / "config" / "calibration_parameters.yaml"
@@ -33,6 +37,7 @@ DEFAULT_CAMERA_RUNTIME = (
     / "latest"
     / "runtime_calibration.yaml"
 )
+DEFAULT_SYSTEM_PARAMETER = PACKAGE_ROOT / "config" / "system_parameters.yaml"
 
 
 def read_yaml(path):
@@ -93,18 +98,85 @@ def atomic_save(path, data, create_backup=True):
     return destination, backup
 
 
+def atomic_save_system(path, data):
+    """Atomically write runtime parameters without treating them as calibration.
+
+    Controller endpoint/state maps and recovery points live in system
+    parameters, so they cannot go through :class:`CalibrationStore`'s
+    calibration-only validator.
+    """
+    destination = Path(path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    backup = None
+    if destination.exists():
+        backup_dir = destination.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup = backup_dir / "{}_{}{}".format(
+            destination.stem, datetime.now().strftime("%Y%m%d_%H%M%S_%f"), destination.suffix
+        )
+        shutil.copy2(str(destination), str(backup))
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=str(destination.parent),
+        prefix=".{}-".format(destination.name), suffix=".tmp", delete=False,
+    )
+    temporary = Path(handle.name)
+    try:
+        with handle:
+            yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(temporary), str(destination))
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    load_system_parameters(destination)
+    return destination, backup
+
+
+def import_competition_controller(system_path, competition_path):
+    """Copy the UI-tested controller map and safe MOVJ points into ROS config."""
+    system = read_yaml(system_path)
+    competition = read_yaml(competition_path)
+    controller = competition.get("controller")
+    if not isinstance(controller, dict):
+        raise ValueError("competition YAML has no controller mapping")
+    recovery = competition.get("safety", {}).get("recovery", {})
+    if not isinstance(recovery, dict):
+        raise ValueError("competition safety.recovery must be a mapping")
+    system["controller"] = copy.deepcopy(controller)
+    system.setdefault("safety", {})["recovery"] = copy.deepcopy(recovery)
+    return atomic_save_system(system_path, system)
+
+
 def matrix_from_hand_eye_file(data):
     if "camera_from_gripper" in data:
         raise ValueError(
             "input contains camera_from_gripper; provide an explicit gripper_from_camera matrix"
         )
+    def candidate_matrix(entry, label):
+        if isinstance(entry, dict):
+            if entry.get("valid") is False:
+                raise ValueError("{} input is marked invalid".format(label))
+            return entry.get("matrix")
+        return entry
+
     candidates = []
     direct = data.get("gripper_from_camera")
     if direct is not None:
-        candidates.append(direct.get("matrix") if isinstance(direct, dict) else direct)
+        candidates.append(candidate_matrix(direct, "gripper_from_camera"))
     nested = data.get("transforms", {}).get("gripper_from_camera")
     if nested is not None:
-        candidates.append(nested.get("matrix") if isinstance(nested, dict) else nested)
+        candidates.append(candidate_matrix(nested, "transforms.gripper_from_camera"))
+    # Native competition_pipeline output names the same rigid transform
+    # T_tcp_color_camera.  In the formal ROS package, the production TCP is
+    # represented by the gripper frame, so this is an explicit alias rather
+    # than an inferred inverse.
+    competition = data.get("hand_eye", {}).get("tcp_from_color_camera")
+    if competition is not None:
+        candidates.append(candidate_matrix(competition, "competition hand-eye"))
+    direct_competition = data.get("tcp_from_color_camera")
+    if direct_competition is not None:
+        candidates.append(candidate_matrix(direct_competition, "TCP hand-eye"))
     candidates = [candidate for candidate in candidates if candidate is not None]
     if len(candidates) != 1:
         raise ValueError("hand-eye YAML must contain exactly one gripper_from_camera matrix")
@@ -209,6 +281,141 @@ def import_hand_eye(parameter_path, hand_eye_path):
     return atomic_save(parameter_path, parameters)
 
 
+def _copy_file_atomic(source, destination):
+    source = Path(source).expanduser().resolve()
+    destination = Path(destination).expanduser().resolve()
+    if not source.is_file():
+        raise ValueError("source file does not exist: {}".format(source))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source == destination:
+        return destination
+    handle = tempfile.NamedTemporaryFile(
+        mode="wb", dir=str(destination.parent),
+        prefix=".{}-".format(destination.name), suffix=".tmp", delete=False,
+    )
+    temporary = Path(handle.name)
+    try:
+        with source.open("rb") as source_handle, handle:
+            shutil.copyfileobj(source_handle, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(temporary), str(destination))
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return destination
+
+
+def import_oak_eeprom(parameter_path, source_json, color_width=1920, color_height=1080,
+                       depth_width=1280, depth_height=800, factory_output=None):
+    """Import an official OAK EEPROM JSON into the ROS calibration file.
+
+    This is intentionally an offline import.  It does not claim to flash an
+    OAK device; flashing must be performed by the official DepthAI/Luxonis
+    calibration tool when the camera is physically connected.
+    """
+
+    parameters = read_yaml(parameter_path)
+    info = inspect_oak_eeprom(
+        source_json,
+        color_width=color_width,
+        color_height=color_height,
+        depth_width=depth_width,
+        depth_height=depth_height,
+    )
+    source = Path(source_json).expanduser().resolve()
+    factory_output = (
+        Path(factory_output).expanduser().resolve()
+        if factory_output is not None
+        else Path(parameter_path).expanduser().resolve().parent / "oak_factory_calibration.json"
+    )
+    saved_factory = _copy_file_atomic(source, factory_output)
+
+    camera = parameters.setdefault("camera", {})
+    color = camera.setdefault("color", {})
+    color.update(
+        {
+            "valid": True,
+            "image_width": int(info["color"]["image_width"]),
+            "image_height": int(info["color"]["image_height"]),
+            "pixel_format": "BGR",
+            "distortion_model": "plumb_bob",
+            "camera_matrix": np.asarray(info["color"]["camera_matrix"], dtype=np.float64).tolist(),
+            "distortion_coefficients": np.asarray(
+                info["color"]["distortion_coefficients"], dtype=np.float64
+            ).tolist(),
+            "source": str(saved_factory),
+        }
+    )
+    camera["name"] = info["product_name"] or info["device_name"] or "OAK-D Pro"
+    depth = camera.setdefault("depth", {})
+    depth.update(
+        {
+            "valid": True,
+            # The published depth is aligned and resampled into the RGB pixel
+            # grid, so its output geometry is the RGB geometry.  Preserve the
+            # native CAM_C calibration separately below instead of attaching
+            # mono intrinsics to aligned RGB pixels.
+            "image_width": int(info["color"]["image_width"]),
+            "image_height": int(info["color"]["image_height"]),
+            "unit": "millimeters_uint16",
+            "aligned_to_color": True,
+            "distortion_model": "plumb_bob",
+            "camera_matrix": np.asarray(info["color"]["camera_matrix"], dtype=np.float64).tolist(),
+            "distortion_coefficients": np.asarray(
+                info["color"]["distortion_coefficients"], dtype=np.float64
+            ).tolist(),
+            "intrinsics_valid": True,
+            "source": str(saved_factory),
+            "native_cam_c": {
+                "image_width": int(info["depth"]["image_width"]),
+                "image_height": int(info["depth"]["image_height"]),
+                "camera_matrix": np.asarray(
+                    info["depth"]["camera_matrix"], dtype=np.float64
+                ).tolist(),
+                "distortion_coefficients": np.asarray(
+                    info["depth"]["distortion_coefficients"], dtype=np.float64
+                ).tolist(),
+            },
+        }
+    )
+    # The OAK runtime will publish depth aligned to RGB. Do not retain an
+    # Astra transform under the new camera profile unless its direction has
+    # been explicitly verified from the official SDK output.
+    color_from_depth = parameters.setdefault("transforms", {}).setdefault(
+        "color_from_depth", {}
+    )
+    color_from_depth.update(
+        {
+            "valid": False,
+            "source": str(saved_factory),
+            "reason": "OAK runtime alignment is used; verify an explicit color_from_depth transform before enabling it",
+        }
+    )
+    metadata = parameters.setdefault("metadata", {})
+    metadata.update(
+        {
+            "profile": "oak_d_pro_competition_{}x{}".format(
+                info["color"]["image_width"], info["color"]["image_height"]
+            ),
+            "updated_at": timestamp_text(),
+            "source": str(saved_factory),
+            "camera_calibration_source": "official_depthai_eeprom_json",
+            "camera_calibration_eeprom_version": int(info["eeprom_version"]),
+            "camera_calibration_baseline_mm": info["baseline_mm"],
+        }
+    )
+    fixed_reference = parameters.setdefault("fixed_camera_validation_reference", {})
+    fixed_reference.update(
+        {
+            "valid": False,
+            "runtime_allowed_for_eye_in_hand": False,
+            "reason": "camera profile changed to OAK; redo eye-in-hand validation",
+        }
+    )
+    return atomic_save(parameter_path, parameters)
+
+
 def set_transform(parameter_path, name, matrix_values, valid=True):
     parameters = read_yaml(parameter_path)
     if name not in parameters.get("transforms", {}):
@@ -259,6 +466,29 @@ def parse_args():
     camera.add_argument("--tag-layout", type=Path)
     hand_eye = subparsers.add_parser("import-hand-eye")
     hand_eye.add_argument("--input", type=Path, required=True)
+    hand_eye_competition = subparsers.add_parser(
+        "import-competition-hand-eye",
+        help="import competition_pipeline hand_eye.tcp_from_color_camera",
+    )
+    hand_eye_competition.add_argument("--input", type=Path, required=True)
+    controller_competition = subparsers.add_parser(
+        "import-competition-controller",
+        help="import controller/state/recovery settings from competition_pipeline",
+    )
+    controller_competition.add_argument("--input", type=Path, required=True)
+    controller_competition.add_argument(
+        "--system", type=Path, default=DEFAULT_SYSTEM_PARAMETER
+    )
+    oak = subparsers.add_parser(
+        "import-oak-eeprom",
+        help="offline-import official DepthAI/Luxonis EEPROM JSON",
+    )
+    oak.add_argument("--input", type=Path, required=True)
+    oak.add_argument("--color-width", type=int, default=1920)
+    oak.add_argument("--color-height", type=int, default=1080)
+    oak.add_argument("--depth-width", type=int, default=1280)
+    oak.add_argument("--depth-height", type=int, default=800)
+    oak.add_argument("--factory-output", type=Path)
     transform = subparsers.add_parser("set-transform")
     transform.add_argument(
         "--name", choices=("workspace_from_base", "gripper_from_camera", "color_from_depth"), required=True
@@ -285,8 +515,20 @@ def main():
         return 0
     if args.command == "sync-camera":
         destination, backup = sync_camera(args.parameter, args.runtime, args.tag_layout)
-    elif args.command == "import-hand-eye":
+    elif args.command in ("import-hand-eye", "import-competition-hand-eye"):
         destination, backup = import_hand_eye(args.parameter, args.input)
+    elif args.command == "import-competition-controller":
+        destination, backup = import_competition_controller(args.system, args.input)
+    elif args.command == "import-oak-eeprom":
+        destination, backup = import_oak_eeprom(
+            args.parameter,
+            args.input,
+            color_width=args.color_width,
+            color_height=args.color_height,
+            depth_width=args.depth_width,
+            depth_height=args.depth_height,
+            factory_output=args.factory_output,
+        )
     elif args.command == "set-transform":
         destination, backup = set_transform(args.parameter, args.name, args.matrix)
     elif args.command == "invalidate":

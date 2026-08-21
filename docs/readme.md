@@ -1,6 +1,6 @@
 # 机械臂视觉项目现状
 
-更新时间：2026-08-17
+更新时间：2026-08-19
 
 ## 1. 项目目标
 
@@ -11,7 +11,7 @@ ROS 框架”两条路径展开，核心能力包括：
 2. 机械臂状态读取、基础控制和安全停止。
 3. YOLO 实例分割和 RGB-D 物体定位。
 4. FoundationPose / FoundationPose++ 六自由度位姿估计与 AnyGrasp 候选抓取。
-5. AprilTag 绝对定位与机械臂位姿回退相结合的定位链路。
+5. AprilTag 手眼标定，以及控制器 TCP 回读与手眼外参组成的运行时定位链路。
 6. MoveIt/Gazebo 抓取规划验证，以及真实厂商控制器适配。
 
 当前仍处于“无机械臂实物的算法与接口验证阶段”。Astra Pro 用于软件链验证，比赛相机
@@ -26,7 +26,7 @@ ROS 框架”两条路径展开，核心能力包括：
 | RGB 内参标定 | 已完成 | 当前运行档位为 `1280 x 720 MJPG`，RMS 为 `0.5571 px`；SDK 的 `1280 x 800` 需要单独标定 |
 | AprilTag 打印素材 | 已完成 | 提供经过尺寸校验的 A4 PDF，打印必须选择实际大小或 100% |
 | 工作平面外参 | 已实现 | ID100～102 多 Tag PnP，当前新坐标约定下 RMS 为 `0.3148 px` |
-| 移动相机绝对定位 | 已实现 | 每帧使用固定 ID100～102 重新计算相机位姿 |
+| 移动相机绝对定位 | 已实现 | 比赛运行时使用 `T_base_tcp × T_tcp_camera`；多 Tag PnP 仅用于标定/诊断 |
 | ID103 独立验证 | 程序已完成，结果未通过 | 最新结果约 `310.5 mm`，需要重新核对实物位置和配置后采集 |
 | RViz 可视化 | 已完成 | 显示相机轨迹、参考 Tag、ID103 理想/实测姿态和误差 |
 | ROS1 通用框架 | 骨架已完成 | 坐标链、参数入口、Mock 后端、适配器接口和安全门禁可运行 |
@@ -36,6 +36,7 @@ ROS 框架”两条路径展开，核心能力包括：
 | YOLO 分割 | 接口和 UI 已完成 | 等待用户提供目标 `.pt/.pth`，当前没有真实目标 Mask 结果 |
 | FoundationPose 6D | 核心运行时已接入，业务待真实数据验证 | ROS 适配器会按配置加载 FoundationPose++ CUDA、mycpp、PyTorch3D、nvdiffrast、refiner/scorer 权重；仍缺真实网格、RGB-D 标定和目标数据 |
 | 物体三维建模工具 | 已完成骨架 | UI、Astra/OAK 采集后端、Tag 位姿、RGB-D 配准、TSDF 和 FoundationPose OBJ/PLY 导出已实现 |
+| 视觉抓取流水线迁移 | 已完成并离线验证 | 外部 `fp_release` 的 YOLO + FoundationPose + Tag + 抓取位姿已迁入 `tool/visual_grasp_pipeline/`，静态帧离线验证通过，核心逻辑有无硬件单测 |
 | 比赛主线 | 已完成软件骨架 | `competition_pipeline/` 固化 Tag/手眼/分割/定位/俯视抓取/闭环执行接口，确定性俯视为主线，AnyGrasp 为惰性加载备选，正式配置仍 fail-closed |
 | UR5e + Robotiq 仿真 | 已验证 | 固定上游版本、MoveIt 控制链、GazeboGraspFix 和 `competition_sim_bridge` 已编译；完整木块抓取放置成功 |
 | 真实机械臂控制 | 未接入 | 机械臂型号和官方通信接口未确定，运动输出强制关闭 |
@@ -121,6 +122,16 @@ cd /home/throne/workspaces/arm
 python3 -m competition_pipeline.cli check
 ```
 
+迁移的视觉抓取流水线 UI 和离线验证：
+
+```bash
+cd /home/throne/workspaces/arm
+./tool/visual_grasp_pipeline/run_ui.sh
+./tool/visual_grasp_pipeline/run_offline.sh \
+  --config tool/visual_grasp_pipeline/config/visual_grasp_pipeline.yaml \
+  --label can
+```
+
 UR5e + Robotiq 仿真：
 
 ```bash
@@ -140,6 +151,15 @@ cd /home/throne/workspaces/arm
 
 后续文件必须先按职责分类，再放入下面的固定位置。仓库根目录不是临时工作区；不在
 本节中的新类别或新顶层目录，必须先说明用途并更新本规范，不能直接创建。
+
+四个目录的职责固定为：
+
+- `tool/`：单项调试、数据采集和离线验证工具，不承担比赛运行时状态机；
+- `competition_pipeline/`：比赛现场快速引导入口，负责录入 Tag/TCP/相机参数、手眼样本、
+  定位检查和 dry-run 规划；其中的控制器测试只使用 mock/本地假服务器；
+- `ros_ws/`：正式 ROS 运行时，承载最终相机、定位、规划、控制器和夹爪节点。当前旧框架
+  可以独立启动，但比赛 UI/仿真尚未将它作为依赖；真实控制器接入应在这里完成；
+- `sim/`：上游机器人模型和 Gazebo/MoveIt 验证，不把仿真适配器当成真实控制器驱动。
 
 ### 5.1 标准目录树
 
@@ -162,7 +182,7 @@ cd /home/throne/workspaces/arm
 │       ├── output/                    # 当前正在使用的标定结果
 │       ├── calibration_snapshots/     # 已冻结的正式标定快照
 │       └── tests/                     # 标定几何回归测试
-│   └── object_model_builder/           # RGB-D 物体网格生成工具
+│   ├── object_model_builder/           # RGB-D 物体网格生成工具
 │       ├── README.md                   # 建模、Astra/OAK 和 FoundationPose 说明
 │       ├── model_builder_ui.py         # 唯一图形界面入口
 │       ├── camera_source.py             # Astra ROS/UVC 和 OAK DepthAI 后端
@@ -177,6 +197,21 @@ cd /home/throne/workspaces/arm
 │       ├── config/                      # Astra/OAK 和 TSDF 参数
 │       ├── tests/                       # 无硬件 RGB-D/会话回归测试
 │       └── run_ui.sh                    # 唯一启动入口
+│   └── visual_grasp_pipeline/          # YOLO + FoundationPose + Tag 视觉抓取流水线
+│       ├── README.md                   # 迁移说明和离线验证方法
+│       ├── config.py                   # 路径/参数配置
+│       ├── geometry.py                 # Tag 工作台、坐标补偿和抓取位姿
+│       ├── detection.py                # YOLO 检测和 AprilTag
+│       ├── tracking.py                 # 多实例 IOU 稳定跟踪
+│       ├── foundationpose.py           # 复用 ROS 的 FoundationPose 适配器
+│       ├── pipeline.py                 # 公共 API 兼容入口
+│       ├── ui.py                       # Tk 识别结果界面
+│       ├── offline.py                  # 无相机离线验证 CLI
+│       ├── legacy/                     # 原复现包脚本快照（只读参考）
+│       ├── config/                     # visual_grasp_pipeline.yaml
+│       ├── tests/                      # 无硬件回归测试
+│       ├── run_ui.sh                   # 图形界面入口
+│       └── run_offline.sh              # 离线验证入口
 ├── competition_pipeline/                # 比赛现场标定、定位和抓取主线
 │   ├── config/                          # 比赛相机、Tag、手眼和安全参数
 │   ├── planning.py                      # 抓取目标和预/抓/放置位姿
@@ -224,7 +259,9 @@ cd /home/throne/workspaces/arm
 | 独立标定/转换/检查工具 | `tool/<tool_name>/` | 一个工具一个子目录，必须包含 README 和测试 |
 | 标定使用说明 | `tool/camera_calibration/README.md` | 坐标约定、打印、采集和 RViz 说明放这里 |
 | 物体网格生成工具 | `tool/object_model_builder/` | RGB-D 配准、Tag/YOLO 采集、TSDF 和 FoundationPose 导出统一放这里 |
+| 视觉抓取流水线 | `tool/visual_grasp_pipeline/` | 外部 fp_release 迁移的 YOLO + FoundationPose + Tag 离线验证和抓取位姿工具 |
 | 比赛现场主线 | `competition_pipeline/` | 比赛配置、Tag/手眼、定位、抓取规划和 fail-closed 执行统一放这里 |
+| 控制器通信边界 | `ros_ws/src/arm_vision_framework/.../adapters/inexbot_modbus.py` | 正式 ROS Modbus-TCP 基础层；pipeline 只保留离线测试入口，厂商运动协议和 IO 地址必须来自现场资料（语义事实见 `docs/机械臂协议问答.pdf`，字节级协议见 `docs/纳博特通讯协议.md`） |
 | 机械臂仿真 | `sim/` | 只维护上游固定版本、补丁、薄 bridge 和启动脚本，不复制机器人模型 |
 | ROS 框架说明 | `ros_ws/src/arm_vision_framework/README.md` | 话题、适配器、构建和运行说明放这里 |
 | 当前 Tag 布局 | `tool/camera_calibration/config/tag_layout.yaml` | UI 的实测输入，禁止在 Python 中硬编码 |
@@ -347,11 +384,12 @@ https://docs.oakchina.cn/en/latest/
 
 1. 在 Gazebo 增加桌面、横梁、侧墙等复杂障碍，并将同一几何同步到 MoveIt
    PlanningScene，验证可绕行、不可达拒绝和携物碰撞三类场景。
-2. 将真实控制边界扩展为 MoveIt 关节轨迹 + 厂商 MOVJ/MOVL：全局避障使用关节轨迹，
-   预抓取到抓取、抬升和撤退使用经过采样检查的低速 MOVL。
+2. 已固化 MoveIt 关节轨迹 → MOVJ 点列、近距离 MOVL、两视角快照和夹爪 IO 状态机；
+   现场只补厂商 SDK/协议桥接，并验收点列、速度、形态、停止和错误码。
 3. 确认比赛机械臂型号，接入只读关节/TCP 状态，明确数据是法兰还是 TCP；在完成厂商
    急停、限速和通信超时验收前保持 `dry_run: true`。
-4. 完成工具坐标和 `T_tcp_color_camera` 眼在手上标定，再验证 Tag 不可见时的机器人回退。
+4. 完成工具坐标和 `T_tcp_color_camera` 眼在手上标定，再验证 TCP 时间戳、手眼矩阵与
+   对齐 Depth 的坐标链；Tag 仅做手眼质量诊断，不作为抓取运行时回退。
 5. 到场验证 OAK-D Pro 枚举、EEPROM、投影器、对齐深度和最终分辨率；Astra 仅作为备用
    软件验证相机。
 6. 接入比赛正式 YOLO 权重、目标类别和分割 Mask，完成多实例、遮挡和复杂背景验证。
@@ -367,8 +405,13 @@ https://docs.oakchina.cn/en/latest/
 本节是无实物阶段必须提前固化的现场顺序。控制器手册为
 [`系统操作手册`](c9c6716a-f022-46a1-b5c4-3f982a816a50.pdf)；它能确认示教器中的
 TCP、用户坐标、点位和远程 IO 行为，但不包含 TCP 网络报文、端口、寄存器地址或夹爪
-厂商协议。因此真实通信适配器必须等到现场拿到对应的通信协议/SDK 后再实现，不能根据
-`MOVJ/MOVL` 名称猜测报文。
+厂商协议。补充资料 [`机械臂协议问答.pdf`](机械臂协议问答.pdf)（2026-08-17 问答总结）
+给出了语义级协议事实——纳博特通用系统、完整点位结构体（坐标系类型/弧度标记/形态/
+工具/用户/XYZABC）、小端序、A/B/C 弧度制、TCP 读坐标指令与 GP 点调用；2026-08-21
+又从官方开放文档站（open.inexbot.com 22.07 协议库）补全了**字节级协议**，整理见
+[`纳博特通讯协议.md`](纳博特通讯协议.md)（帧格式、6000 端口 MOVJ/MOVL 命令字、
+7000 端口状态查询，CRC 已验证）。真实通信适配器可据此实现；现场仍需确认固件版本
+（22.07/24.03）、6000 端口直连行为和坐标单位，不能凭空猜测未定义的字段。
 
 ### 7.1 到场后的安全和状态采集
 
@@ -432,10 +475,16 @@ T_base_camera = T_base_tcp × T_tcp_camera
 每个样本必须同时保存当前活动 Tool1 的 TCP 位姿、图像时间戳、Tag PnP 结果和相机 profile。
 Tag 地图变化、Tool1 变化、相机分辨率/内参变化或刚性安装变化后，样本全部失效。
 
-实物运行时优先使用控制器反馈的毫米级 `T_base_tcp`，不要求 AprilTag 持续在视野中；
-AprilTag 视觉结果保留为开机验收、手眼质量检查和 TCP 反馈失效时的可选诊断回退。当前
-`competition_pipeline/localization.py` 仍是“视觉优先、TCP 回退”的兼容实现，后续真实
-控制器接入时应增加 `tcp_primary` 运行模式，且视觉回退默认不允许直接触发运动。
+实物运行时只使用控制器反馈的毫米级 `T_base_tcp`，不要求 AprilTag 持续在视野中；
+AprilTag 视觉结果保留为开机验收、手眼质量检查和不触发运动的诊断工具。当前
+`competition_pipeline` 与正式 `ros_ws` 均已默认关闭运行时 Tag 检测，来源固定为
+`tcp_hand_eye` / `robot_tcp_hand_eye`；TCP 不新鲜或手眼无效时直接拒绝物体坐标与抓取。
+
+如果现场提供张正友棋盘格，也可以在 `competition_pipeline` 的“眼在手上”页切换为
+`checkerboard`。已预置板面 60×45 mm、单格 5 mm，对应 12×9 个方格、**11×8 个内角点**；
+这一路采用多姿态 OpenCV `calibrateHandEye`，固定棋盘不需要事先测其基座坐标。切换靶标或
+尺寸会归档旧样本并使手眼矩阵失效；棋盘的纯黑白 180° 朝向二义性需用一个角的物理标签和
+一致摆放方向消除。
 
 ### 7.5 形态参数与 MoveIt 轨迹
 
@@ -444,9 +493,11 @@ AprilTag 视觉结果保留为开机验收、手眼质量检查和 TCP 反馈失
 得到形态值 7。位置变量还绑定坐标系、角度/弧度标志、Tool ID 和 User ID；这些字段
 不能省略。
 
-“第一次读到的形态参数后一直复用”只有在整条轨迹保持同一构型分支时才成立。工程上应
-从 MoveIt 的每个关节点计算并校验形态值；若 1/3/5 轴跨过区间边界，或者出现关节跳变、
-接近奇异位形，就必须重新规划/拒绝执行，而不是强行发送固定形态值。
+比赛执行器在启用真实控制器状态回读后，会先锁存第一次有效的 `shape`，随后所有 MOVJ/
+MOVL 点都携带这一个值；不会按每个关节 waypoint 静默重算。若回读到的 shape 改变，剩余
+轨迹立即拒绝，必须 STOP、回到已确认安全点并重新规划。MoveIt 仍应在规划阶段检查 1/3/5
+轴是否跨过区间边界、是否有关节跳变或奇异风险；形态锁存是执行期保护，不是错误轨迹的
+修复。
 
 运动执行的最薄方案为：
 
@@ -457,6 +508,23 @@ AprilTag 视觉结果保留为开机验收、手眼质量检查和 TCP 反馈失
 
 当前仿真已验证 MoveIt/FollowJointTrajectory，但尚未验证厂商 MOVJ/MOVL 的点列、速度、
 加速度、blend、停止和错误码语义；这些必须在通信适配器和现场低速测试中单独验收。
+
+### 7.5.1 Modbus-GP 运动保底
+
+如果私有运动 TCP/SDK 在现场无法调通，可以在示教器中预先创建并验证一个本地程序：程序
+读取选定的 `GP0001..GP9999` 全局位置变量，根据动作码执行 MOVJ 或 MOVL，并输出完成信号。
+`ModbusGlobalPointRobotController` 只做以下事务：
+
+1. 按官方寄存器表写入完整 GP 字段（坐标系、度/弧度、shape、Tool/User、两个保留字段、
+   Axis1..Axis7）；
+2. 写入动作码和递增序列号；
+3. 脉冲启动信号，轮询完成信号，超时则 STOP。
+
+GP 地址、触发地址、完成/停止信号、字节序、倍率和本地程序名都没有从手册推导，必须由
+现场表逐项填写。配置默认关闭；没有 `local_program_verified: true`、完整字段/启动/完成/停止映射或有效
+控制器状态（急停明确关闭、无报警、初始 shape 已锁存）时，工厂和适配器都会 fail-closed，
+绝不会扫描或猜测地址。该路径只作为私有 TCP 失败时的后路，不改变视觉到控制器的
+`safe_to_execute: false` 安全门。
 
 ### 7.6 夹爪远程控制
 
@@ -475,6 +543,24 @@ AprilTag 视觉结果保留为开机验收、手眼质量检查和 TCP 反馈失
 
 在没有反馈之前，不能把“命令发送成功”当成“夹住物体”；仿真中已经采用物体抬升和放置
 位置验证，真实控制器也必须保留同等的 fail-closed 验证门。
+
+基础通信代码和现场确认表见
+[`competition_pipeline/controller_protocol.md`](../competition_pipeline/controller_protocol.md)。
+当前实现标准 Modbus-TCP 的帧、超时、异常和配置化 IO 访问；由于本手册没有公开运动
+socket 报文，MOVJ/MOVL 仍不能从该手册推导，必须拿到官方 SDK/通信协议后接入。
+
+比赛 UI 第 09 页是唯一的现场 TCP 预检入口：保存 IP/Port/Unit ID 后只读状态寄存器，字段
+格式与控制器内部点位一致（坐标系、度/弧度、shape、Tool/User、Axis1..7），并显示 Servo、
+急停、运动和报警。寄存器地址、字序和倍率必须逐项从官方表填进 `state_registers`；空映射
+只显示“未映射”，不会扫描或猜测地址。视觉到控制器的正式桥接 JSON 固定为
+`arm_vision.control.v1`：包含 command ID、时戳、frame、XYZ(mm)、RPY(deg)、MOVJ/MOVL、
+点列、Tool/User/shape 和 `safe_to_execute`。视觉输出永远是 `safe_to_execute: false`，只有
+MoveIt 和控制器桥完成碰撞、IK、形态确认后才可执行。
+
+如控制器报错或文本含 singular/奇异/IK/configuration，执行器先 STOP，取消原轨迹；安全点
+只能在机械臂停稳、急停关闭、无报警、TCP/关节/Tool/User/shape 全部有效时保存。默认不自动
+回退；没有已确认无碰撞的完整 MOVJ 点列、TCP 状态失效或急停异常时保持锁定。确认回退路径
+后才允许设置 `recovery.auto_recover: true`，并以低速 MOVJ 回到安全点。
 
 ### 7.7 明日（无实物准备日）执行清单
 
@@ -507,7 +593,7 @@ Tool1、User1、控制器返回的形态参数和 TCP 坐标全部读回并复�
 ## 8. OAK-D Pro 兼容边界
 
 相机标定和物体建模不得绑定 Astra Pro。当前物体建模采集层已经分为 `astra_ros` 和
-`oak_depthai` 后端；DepthAI `2.32.0.0` 已安装在 `foundationpose` 环境。切换 OAK 时修改：
+`oak_depthai` 后端；当前系统 Python 已验证 DepthAI `2.30.0.0`。切换 OAK 时修改：
 
 ```yaml
 camera:
@@ -519,9 +605,35 @@ OAK-D Pro 使用设备工厂内参、双目外参和 depth-to-RGB 对齐，可�
 标定 UI 可继续通过 ROS 图像话题完成 RGB/Tag 标定，业务层继续消费统一的 RGB、aligned
 depth 和 CameraInfo，不直接依赖 DepthAI。
 
-具体 OAK-D Pro 型号可能带 IMU。IMU 可用于短时姿态预测和时间同步诊断，不能替代 RGB-D
-内外参、眼在手上 `T_gripper_camera` 或 AprilTag 工作空间绝对位姿。安装约束为：
+比赛采用“MoveJ 到观察位并停稳 → 拍一张 → MoveJ 到第二观察位并停稳 → 再拍一张 →
+规划/夹取”，不需要高 FPS。基于手册的 IMX378 12MP RGB、OV9282 `1280×800` 双目和
+75 mm 基线，软件固定选择 RGB/对齐 Depth `1920×1080 @ 10 FPS`、双目 800P、扩展视差
+开启、Subpixel 关闭。标准 800P 深度约 70 cm 起，扩展视差目标约 35 cm 起；到场必须用
+量尺验证有效近距，低于验收近距后禁止继续把深度点云用于修正夹取坐标。
+
+OAK-D Pro 的 RGB 有 AF/FF 两种产品版本。配置默认 `focus_mode: device_default`，现场确认
+镜头后才允许 AF 使用连续/手动调焦；FF 版本保持默认，不能把调焦命令当作可用能力。
+
+本项目 OAK-D Pro 按带 IMU 准备，正式节点发布原始 `/camera/imu`。ROS RGB 光学坐标为
+`+X` 向右、`+Y` 向下、`+Z` 沿镜头向前；机械臂 TCP 的 `+Z` 沿工具伸出方向。两者的精确
+关系只能来自 `T_tcp_color_camera` 手眼标定，不能因为安装看起来平行就直接令两坐标系相等。
+当前 `imu_frame: oak_imu`、`camera_from_imu: null` 明确表示 IMU 轴向/外参未知，因此 IMU
+只用于时间同步、静止抖动和安装诊断，不能替代控制器 TCP 或参与绝对定位。到场读取 EEPROM
+外参并做三轴方向实测后，才能填写 4×4 `camera_from_imu`。安装约束为：
 
 ```bash
 python -m pip install -U --prefer-binary 'depthai>=2.17,<3'
 ```
+
+产品手册本身没有提供 Flash 命令；正式 ROS 入口使用官方 DepthAI
+`CalibrationHandler` 解析 Luxonis 工具导出的 EEPROM JSON：
+
+```bash
+rosrun arm_vision_framework calibration_tool.py \
+  import-oak-eeprom --input /absolute/path/to/oak_calibration.json \
+  --color-width 1920 --color-height 1080
+```
+
+无实物阶段可完成 JSON 校验、RGB/深度内参写入和备份；真正写入相机 Flash 必须到场后用
+官方标定软件执行，再将设备导出的 JSON 重新导入。相机内参或分辨率变化会使已有手眼
+结果失效，必须重新采集。

@@ -14,6 +14,11 @@ import yaml
 
 APRILTAG_DICTIONARY_NAME = "DICT_APRILTAG_36h11"
 APRILTAG_DICTIONARY_ID = cv2.aruco.DICT_APRILTAG_36h11
+SUPPORTED_APRILTAG_DICTIONARIES = {
+    "DICT_APRILTAG_36h11",
+    "DICT_APRILTAG_25h9",
+    "DICT_APRILTAG_16h5",
+}
 
 COORDINATE_CONVENTION_ID = "tag_top_left_x_right_y_down_v1"
 COORDINATE_CONVENTION = {
@@ -41,8 +46,15 @@ PRINTED_TAG_LAYOUT_MM = {
 }
 
 
-def april_dictionary():
-    return cv2.aruco.getPredefinedDictionary(APRILTAG_DICTIONARY_ID)
+def april_dictionary(dictionary_name: str = APRILTAG_DICTIONARY_NAME):
+    name = str(dictionary_name)
+    if name not in SUPPORTED_APRILTAG_DICTIONARIES or not hasattr(cv2.aruco, name):
+        raise ValueError(
+            "unsupported AprilTag dictionary {}; expected one of {}".format(
+                name, sorted(SUPPORTED_APRILTAG_DICTIONARIES)
+            )
+        )
+    return cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, name))
 
 
 def charuco_board():
@@ -54,10 +66,10 @@ def charuco_board():
     )
 
 
-def april_detector():
+def april_detector(dictionary_name: str = APRILTAG_DICTIONARY_NAME):
     parameters = cv2.aruco.DetectorParameters()
     parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-    return cv2.aruco.ArucoDetector(april_dictionary(), parameters)
+    return cv2.aruco.ArucoDetector(april_dictionary(dictionary_name), parameters)
 
 
 def detect_apriltags(image: np.ndarray) -> Dict[int, np.ndarray]:
@@ -370,6 +382,7 @@ def save_camera_yaml(
     distortion: np.ndarray,
     image_size: Tuple[int, int],
     camera_name: str,
+    distortion_model: str = "plumb_bob",
 ) -> None:
     width, height = image_size
     k = np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3)
@@ -381,7 +394,7 @@ def save_camera_yaml(
         "image_height": int(height),
         "camera_name": camera_name,
         "camera_matrix": {"rows": 3, "cols": 3, "data": k.reshape(-1).tolist()},
-        "distortion_model": "plumb_bob",
+        "distortion_model": str(distortion_model),
         "distortion_coefficients": {
             "rows": 1,
             "cols": int(d.size),
@@ -407,16 +420,29 @@ def save_camera_yaml(
 def load_layout(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
         layout = yaml.safe_load(handle)
-    if layout.get("dictionary") != APRILTAG_DICTIONARY_NAME:
-        raise ValueError("tag layout must use DICT_APRILTAG_36h11")
+    dictionary = str(layout.get("dictionary", ""))
+    if dictionary not in SUPPORTED_APRILTAG_DICTIONARIES:
+        raise ValueError(
+            "tag layout must use one of {}".format(
+                sorted(SUPPORTED_APRILTAG_DICTIONARIES)
+            )
+        )
     require_coordinate_convention(layout, "tag layout")
     calibration_tags = layout.get("calibration_tags", {})
-    if len(calibration_tags) < 3:
-        raise ValueError("at least three calibration tags are required")
+    minimum_tags = int(layout.get("minimum_calibration_tags", 3))
+    if minimum_tags < 2:
+        raise ValueError("minimum_calibration_tags must be at least two")
+    if len(calibration_tags) < minimum_tags:
+        raise ValueError(
+            "at least {} calibration tags are required".format(minimum_tags)
+        )
     origins = [np.asarray(entry["origin_mm"], dtype=np.float64) for entry in calibration_tags.values()]
     xy = np.asarray([origin[:2] for origin in origins])
-    if np.linalg.matrix_rank(xy[1:] - xy[0]) < 2:
-        raise ValueError("calibration tag origins must not be collinear")
+    if len(calibration_tags) >= 3:
+        if np.linalg.matrix_rank(xy[1:] - xy[0]) < 2:
+            raise ValueError("calibration tag origins must not be collinear")
+    elif np.linalg.norm(xy[1] - xy[0]) <= 1e-9:
+        raise ValueError("two calibration tag origins must be distinct")
     return layout
 
 

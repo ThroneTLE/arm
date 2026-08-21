@@ -7,6 +7,7 @@ from typing import Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
+import time
 
 
 @dataclass
@@ -176,6 +177,7 @@ class YoloMaskProvider:
         self.last_reason = ""
         self.last_model_instance_count = 0
         self.last_suppressed_instance_count = 0
+        self.last_inference_ms = 0.0
 
     def predict_all(self, color_bgr: np.ndarray):
         """Return every accepted instance, sorted by descending confidence."""
@@ -194,7 +196,11 @@ class YoloMaskProvider:
             options["iou"] = self.iou_threshold
         if self.image_size is not None:
             options["imgsz"] = self.image_size
-        results = self.model.predict(**options)
+        started = time.perf_counter()
+        try:
+            results = self.model.predict(**options)
+        finally:
+            self.last_inference_ms = (time.perf_counter() - started) * 1000.0
         if not results:
             self.last_reason = "YOLO returned no result"
             return []

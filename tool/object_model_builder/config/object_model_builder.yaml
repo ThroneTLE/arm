@@ -9,6 +9,7 @@ paths:
   rgbd_calibration_root: /home/throne/workspaces/arm_data/calibration_sessions
   mesh_root: /home/throne/workspaces/arm_data/meshes
   foundationpose_debug_root: /home/throne/workspaces/arm_data/foundationpose_debug
+  model_free_root: /home/throne/workspaces/arm_data/model_free_jobs
 rgbd_calibration_target:
   type: checkerboard
   model: SINE IMAGE YE0102-A540
@@ -88,6 +89,14 @@ foundationpose_live:
   use_mask_center_guidance: true
   maximum_pose_age_s: 1.0
   debug: 0
+
+model_free:
+  # Official BundleSDF/Neural Object Field path.  The config is copied in
+  # memory and overridden per job; the vendor YAML is never edited in place.
+  config_path: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus/FoundationPose/bundlesdf/config_ycbv.yml
+  minimum_views: 16
+  iterations: 1000
+  mesh_resolution_m: 0.003
 fusion:
   voxel_length_m: 0.002
   sdf_trunc_m: 0.008

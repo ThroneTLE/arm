@@ -11,8 +11,9 @@ import numpy as np
 import yaml
 
 from .configuration import CompetitionConfig, load_camera_intrinsics
+from .checkerboard_target import CHECKERBOARD_TARGET
 from .geometry import transform_from_xyz_rpy_mm, xyz_rpy_from_transform
-from .hand_eye import HandEyeCalibrator
+from .hand_eye import APRILTAG_MAP_TARGET, HandEyeCalibrator
 from .localization import HybridLocalizer
 from .sample_store import HandEyeSampleStore
 from .tag_map import TagMap
@@ -78,14 +79,24 @@ def _hand_eye_live(args, config):
                         (frame.shape[1], frame.shape[0]), image_size
                     )
                 )
-            detections = calibrator.localizer.detect(frame)
             preview = frame.copy()
-            if detections:
-                corners = [np.asarray(points, dtype=np.float32).reshape(1, 4, 2) for points in detections.values()]
-                ids = np.asarray(sorted(detections), dtype=np.int32).reshape(-1, 1)
-                corners = [np.asarray(detections[int(tag_id)], dtype=np.float32).reshape(1, 4, 2) for tag_id in ids.reshape(-1)]
-                cv2.aruco.drawDetectedMarkers(preview, corners, ids)
-            cv2.putText(preview, "mapped={} saved={}".format(sorted(set(detections).intersection(TagMap(config).ids)), _sample_count(args.samples, config)),
+            if calibrator.target_type == CHECKERBOARD_TARGET:
+                observation = calibrator.checkerboard.estimate(frame, matrix, distortion)
+                preview = calibrator.checkerboard.draw(frame, observation)
+                target_text = "checkerboard={}/{}".format(
+                    calibrator.checkerboard.corner_count if observation.corners is not None else 0,
+                    calibrator.checkerboard.corner_count,
+                )
+            else:
+                detections = calibrator.localizer.detect(frame)
+                if detections:
+                    ids = np.asarray(sorted(detections), dtype=np.int32).reshape(-1, 1)
+                    corners = [np.asarray(detections[int(tag_id)], dtype=np.float32).reshape(1, 4, 2) for tag_id in ids.reshape(-1)]
+                    cv2.aruco.drawDetectedMarkers(preview, corners, ids)
+                target_text = "mapped={}".format(
+                    sorted(set(detections).intersection(TagMap(config).ids))
+                )
+            cv2.putText(preview, "{} saved={}".format(target_text, _sample_count(args.samples, config)),
                         (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 0), 2)
             cv2.imshow("competition hand-eye capture", preview)
             key = cv2.waitKey(1) & 0xFF
@@ -100,7 +111,7 @@ def _hand_eye_live(args, config):
                 base_from_tcp = transform_from_xyz_rpy_mm(values[:3], values[3:])
                 sample = calibrator.add_image_sample(frame, base_from_tcp, matrix, distortion)
                 count = _append_sample(args.samples, config, sample, "live:{}".format(args.camera_device))
-                print("saved sample {}: tags={} RMS={:.3f}px".format(count, sample.visible_tag_ids, sample.rms_reprojection_error_px))
+                print("saved sample {}: {} RMS={:.3f}px".format(count, sample.target_label, sample.rms_reprojection_error_px))
     finally:
         capture.release()
         cv2.destroyAllWindows()
@@ -119,6 +130,21 @@ def parse_args():
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check")
     commands.add_parser("tag-list")
+    target = commands.add_parser("hand-eye-target")
+    target.add_argument(
+        "--type", choices=(APRILTAG_MAP_TARGET, CHECKERBOARD_TARGET), required=True
+    )
+    target.add_argument("--board-width-mm", type=float)
+    target.add_argument("--board-height-mm", type=float)
+    target.add_argument("--square-size-mm", type=float)
+    target.add_argument(
+        "--squares-x", type=int,
+        help="printed black+white square count along the board long side",
+    )
+    target.add_argument(
+        "--squares-y", type=int,
+        help="printed black+white square count along the board short side",
+    )
     tag_set = commands.add_parser("tag-set")
     tag_set.add_argument("--id", type=int, required=True)
     tag_set.add_argument("--bottom-right-mm", nargs=3, type=float, required=True, metavar=("X", "Y", "Z"))
@@ -160,10 +186,11 @@ def main():
             "rgbd_calibration_file", config.camera.get("factory_calibration_file")
         )
         print(
-            "config: PASS\ncamera profile: {}\nTag IDs: {}\nhand-eye valid: {}\n"
+            "config: PASS\ncamera profile: {}\nTag IDs: {}\nhand-eye target: {}\nhand-eye valid: {}\n"
             "color intrinsics: {}\ndepth calibration: {}\nsegmentation valid: {}\n"
             "planning valid: {}\ngrasp execution valid: {}".format(
                 config.active_camera_profile, list(tag_map.ids),
+                config.data["hand_eye"]["calibration_target"]["type"],
                 config.hand_eye_valid, intrinsics, depth_calibration,
                 config.segmentation_valid,
                 bool(config.data.get("planning_validation", {}).get("valid", False)),
@@ -175,6 +202,46 @@ def main():
         for tag_id in tag_map.ids:
             entry = tag_map.entry(tag_id)
             print("ID {}: BR={} mm, RPY={} deg".format(tag_id, entry["bottom_right_xyz_mm"], entry.get("base_from_tag_rpy_deg", tag_map.default_rpy_deg.tolist())))
+        return 0
+    if args.command == "hand-eye-target":
+        sample_path = _configured_samples(config)
+        target = config.data["hand_eye"]["calibration_target"]
+        target["type"] = args.type
+        checkerboard = target["checkerboard"]
+        for argument, field in (
+            (args.board_width_mm, "board_width_mm"),
+            (args.board_height_mm, "board_height_mm"),
+            (args.square_size_mm, "square_size_mm"),
+            (args.squares_x, "squares_x"),
+            (args.squares_y, "squares_y"),
+        ):
+            if argument is not None:
+                checkerboard[field] = int(argument) if field.startswith("squares_") else float(argument)
+        configured = (
+            checkerboard.get("squares_x") is not None
+            and checkerboard.get("squares_y") is not None
+        )
+        checkerboard["configured"] = configured
+        checkerboard["inner_corners"] = (
+            [int(checkerboard["squares_x"]) - 1, int(checkerboard["squares_y"]) - 1]
+            if configured else None
+        )
+        if args.type == CHECKERBOARD_TARGET and not configured:
+            raise ValueError(
+                "checkerboard requires --squares-x and --squares-y; count all black+white cells, not black cells only"
+            )
+        config.data["hand_eye"]["tcp_from_color_camera"]["valid"] = False
+        config.save()
+        backup = HandEyeSampleStore(sample_path, config).reset()
+        print(
+            "hand-eye target={} checkerboard={}x{} mm, square={} mm, squares={}x{}, inner corners={}; "
+            "previous session archived={} and reset".format(
+                args.type, checkerboard["board_width_mm"],
+                checkerboard["board_height_mm"], checkerboard["square_size_mm"],
+                checkerboard.get("squares_x"), checkerboard.get("squares_y"),
+                checkerboard["inner_corners"], backup or "none",
+            )
+        )
         return 0
     if args.command == "tag-set":
         tag_map.set_tag(args.id, args.bottom_right_mm, args.rpy_deg)
@@ -201,13 +268,13 @@ def main():
         base_from_tcp = transform_from_xyz_rpy_mm(args.tcp_xyz_mm, args.tcp_rpy_deg)
         sample = calibrator.add_image_sample(image, base_from_tcp, matrix, distortion)
         count = _append_sample(args.samples, config, sample, args.image.resolve())
-        print("saved sample {}: tags={} RMS={:.3f}px".format(count, sample.visible_tag_ids, sample.rms_reprojection_error_px))
+        print("saved sample {}: {} RMS={:.3f}px".format(count, sample.target_label, sample.rms_reprojection_error_px))
         return 0
     if args.command == "hand-eye-solve":
         data = HandEyeSampleStore(args.samples, config).load()
         calibrator = HandEyeCalibrator(config)
         for entry in data["samples"]:
-            calibrator.add_sample(entry["base_from_tcp"], entry["base_from_camera"], entry.get("visible_tag_ids", []), entry.get("rms_reprojection_error_px", 0.0))
+            calibrator.add_stored_sample(entry)
         result = calibrator.solve()
         calibrator.promote(result)
         print("T_tcp_color_camera:\n{}".format(_matrix_text(result.tcp_from_camera)))

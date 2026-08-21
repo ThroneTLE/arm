@@ -42,6 +42,28 @@ class TopicRobotController(RobotController):
             float(speed_scale),
         )
 
+    def move_j(self, points, speed_scale=0.1):
+        """Forward a validated MOVJ point list to an optional vendor bridge."""
+        if not self.allow_motion:
+            raise SafetyInterlockError("robot motion is disabled by system_parameters.yaml")
+        sink = getattr(self, "_move_j_sink", None)
+        if sink is None:
+            raise SafetyInterlockError("MOVJ command bridge is not connected")
+        return sink(tuple(points), float(speed_scale))
+
+    def move_l(self, points, speed_mm_s=30.0):
+        """Forward a validated MOVL point list to an optional vendor bridge."""
+        if not self.allow_motion:
+            raise SafetyInterlockError("robot motion is disabled by system_parameters.yaml")
+        sink = getattr(self, "_move_l_sink", None)
+        if sink is None:
+            raise SafetyInterlockError("MOVL command bridge is not connected")
+        return sink(tuple(points), float(speed_mm_s))
+
+    def set_motion_sinks(self, move_j_sink=None, move_l_sink=None):
+        self._move_j_sink = move_j_sink
+        self._move_l_sink = move_l_sink
+
     def stop(self):
         if self._stop_sink is not None:
             return self._stop_sink()

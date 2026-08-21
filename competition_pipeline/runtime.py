@@ -18,7 +18,7 @@ class CompetitionRuntime:
         self.localizer = HybridLocalizer(config)
 
     def localize(self, color_bgr, timestamp_s):
-        """Localize from the RGB stream, with the robot pose as fallback."""
+        """Use the current TCP and hand-eye transform for camera pose."""
         if (color_bgr.shape[1], color_bgr.shape[0]) != self.image_size:
             raise ValueError("RGB image size does not match calibrated intrinsics")
         robot = None if self.robot_pose_provider is None else self.robot_pose_provider.latest_pose()

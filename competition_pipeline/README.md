@@ -5,7 +5,7 @@
 - `astra_validation`：当前 Astra Pro 验证相机，RGB 走 UVC，IR/Depth 走 ROS。
 - `oak_competition`：比赛 OAK-D Pro，RGB、双 OV9282 和对齐 Depth 走 DepthAI。
 
-RGB 是 AprilTag、手眼标定和最终定位的主相机。切换相机配置会自动使当前手眼矩阵失效，
+RGB 是 AprilTag 手眼标定和物体定位的主相机；AprilTag 不参与比赛运行时相机定位。切换相机配置会自动使当前手眼矩阵失效，
 并使用各自独立的手眼样本文件，避免把 Astra 的结果误用于 OAK-D Pro。
 
 ## 现场 UI
@@ -17,7 +17,7 @@ cd /home/throne/workspaces/arm
 ./competition_pipeline/run_ui.sh
 ```
 
-UI 左侧“相机配置”可切换 Astra 与 OAK。相机已连接时切换会先安全断开。按八个阶段操作：
+UI 左侧“相机配置”可切换 Astra 与 OAK。相机已连接时切换会先安全断开。按九个阶段操作：
 
 Astra 还可在侧栏切换 Depth/IR 模式：默认 `640×480 @ 30` 用于流畅验证，
 `1280×1024 @ 7` 用于需要更多深度细节的静态检查。切换不会改变 1280×720 RGB，
@@ -36,12 +36,14 @@ Astra 还可在侧栏切换 Depth/IR 模式：默认 `640×480 @ 30` 用于流�
 3. **Tag 地图**：录入任意数量的 AprilTag ID，以及每个黑框右下角 `BR` 在机器人基座的
    XYZ（毫米）。表格中的 R/P/Y 是 Tag 平面朝向，默认值可一次填充到所有行。
 4. **眼在手上**：机械臂停稳后输入当前 `T_base_tcp`（X/Y/Z 毫米，R/P/Y 度），采集
-   至少 8 个姿态。程序由 RGB Tag PnP 求 `T_base_color_camera`，再求并写回
+   至少 8 个姿态。默认“已建图 AprilTag”流程由 RGB Tag PnP 求
+   `T_base_color_camera`，再求并写回 `T_tcp_color_camera`。若现场提供张正友棋盘格，
+   在本页选择“张正友棋盘格”：固定棋盘无需录入其基座坐标，程序使用多姿态
+   `T_base_tcp` 与每帧 `T_camera_board` 的 OpenCV `calibrateHandEye` 求
    `T_tcp_color_camera`。
-5. **定位验证**：有合格的已登记 Tag 时使用视觉结果；Tag 不可见时，只有在手眼矩阵有效且
-   TCP 时间戳新鲜时才使用 TCP 回退。画面会显示当前来源和质量。运行验证时采用多 Tag
-   短时迟滞：双 Tag 偶发掉成单 Tag 时保持最近双 Tag 位姿 0.8 秒，RMS 偶发超限时最多保持
-   最近有效位姿 0.6 秒，来源显示为 `tag_visual_held`。手眼采样不使用该保持逻辑。
+5. **定位验证**：比赛主线只接受时间戳新鲜的控制器 TCP 回读，并计算
+   `T_base_camera = T_base_tcp × T_tcp_color_camera`。AprilTag 只用于手眼采样和单独诊断；
+   `localization.use_apriltag_runtime` 默认 `false`，不要在抓取时改成视觉优先。
 6. **分割验证**：选择 Ultralytics 实例分割权重、目标类别、置信度、IOU、推理尺寸和设备。
    模型在独立线程中常驻，只处理最新 RGB 帧；UI 叠加全部实例 Mask，并显示类别、置信度、
    Mask 面积、推理耗时和连续合格帧。连续通过质量门后由操作员确认，程序保存模型 SHA256、
@@ -56,6 +58,18 @@ Astra 还可在侧栏切换 Depth/IR 模式：默认 `640×480 @ 30` 用于流�
    retreat 状态机，支持取消/stop、结构化结果和运动分段。若有物体追踪器，抬升高度与放置
    XY 误差是强制闭环门；只完成机械臂轨迹不会被误报为抓取成功。真实适配器未验收前仍
    保持 fail-closed、dry-run 和禁止运动。
+9. **控制器/TCP 测试**：可现场填写 IP、Port 和 Unit ID，保存后只读连接。寄存器映射为空
+   时不会猜地址；按官方表配置后显示 Servo、急停、运动状态、Axis1..7、TCP XYZ/RPY、
+   Tool ID、User ID、shape、两个保留字段、报警码/文本及原始值。只有机械臂明确停稳、
+   急停关闭、无活动报警且这些字段全部有效时，才能把当前构型保存为 `P9000` 安全 MOVJ 点。
+
+第 09 页验收后可把控制器映射和安全点一次导入正式 ROS 参数（自动备份旧文件）：
+
+```bash
+source ros_ws/devel/setup.bash
+rosrun arm_vision_framework calibration_tool.py import-competition-controller \
+  --input competition_pipeline/config/competition.yaml
+```
 
 没有连接相机时，UI 仍可编辑 Tag 地图、查看配置和离屏检查页面；点击“连接深度相机”才
 会启动当前 profile 对应的后端。不要把 `tool/object_model_builder/output` 中的旧
@@ -73,6 +87,11 @@ Depth 通常保持开启；太阳光含有很强的近红外，室外重新采�
 OAK-D Pro 出厂 EEPROM 已包含 RGB/左右相机内参、畸变、双目外参和基线，DepthAI 后端会
 直接输出对齐到 RGB 的 Depth。比赛现场有三种入口：
 
+比赛推荐 `1920×1080 @ 10 FPS` RGB/对齐 Depth、OV9282 `800p`、扩展视差开启、Subpixel
+关闭。我们是停稳后拍两张而不是实时跟踪，10 FPS 足以在服务调用时取得新同步帧；1080P
+兼顾物体分割细节、USB/CPU 负载和 RGB/Depth 同尺寸。手册给出的 800P 标准近距约 70 cm，
+扩展视差约 35 cm，最终接近抓取位不可继续依赖深度，必须在观察高度完成定位。
+
 1. 点击“导入 OAK 官方标定 JSON”，选择 Luxonis `calibrate.py` 的输出；UI 会保留原始
    EEPROM JSON，并生成现有定位代码可直接读取的 `oak_color_intrinsics.yaml`。
 2. 相机未被实时预览占用时，点击“从已连接 OAK 导出 EEPROM”，直接读取设备当前标定。
@@ -88,7 +107,23 @@ OAK-D Pro 出厂 EEPROM 已包含 RGB/左右相机内参、畸变、双目外参
 ```
 
 目前没有 OAK-D Pro 实物，因此软件接口、JSON 导入和离屏 UI 已验证，但相机枚举、投影器
-电流、实时帧率和实机 EEPROM 导出必须到场后再做一次硬件验收。
+电流、实时帧率和实机 EEPROM 导出必须到场后再做一次硬件验收。正式 ROS 参数的一键导入
+入口是：
+
+```bash
+rosrun arm_vision_framework calibration_tool.py \
+  import-oak-eeprom --input /absolute/path/to/oak_calibration.json \
+  --color-width 1920 --color-height 1080
+```
+
+该入口只解析官方 EEPROM JSON 并生成 ROS 参数；真正 Flash 写入仍由官方 DepthAI/Luxonis
+标定工具在连接实物后完成。
+
+OAK-D Pro 的 IMU 由正式 ROS 节点发布到 `/camera/imu`。`oak_imu` 是独立原始传感器帧；
+当前 `camera_from_imu: null` 表示轴向/外参未知，数据只允许用于时间同步、静止抖动和安装
+诊断。ROS RGB 光学坐标固定为 `+X` 向图像右、`+Y` 向图像下、`+Z` 沿镜头向前；机械臂
+工具 `+Z` 沿工具伸出方向。两者看起来可能近似同向，但实际关系始终由
+`T_tcp_color_camera` 手眼标定给出，不能靠 IMU 或肉眼假设。
 
 ## 分割模型验证
 
@@ -118,7 +153,7 @@ OAK-D Pro 出厂 EEPROM 已包含 RGB/左右相机内参、畸变、双目外参
 ## RViz 分割定位与规划可视化
 
 第 07 步的“打开 RViz 点云验证”不会再次打开相机。它直接消费比赛 UI 已同步的 RGB、Depth、
-去重后 Mask，以及 AprilTag 优先/TCP 回退得到的 `T_base_camera`，将每个 Mask 内的有效
+去重后 Mask，以及 TCP+手眼得到的 `T_base_camera`，将每个 Mask 内的有效
 Depth 反投影到机器人基座坐标系。点云会经过边界腐蚀、最大深度连通域、深度覆盖率、工作
 空间和最小点数质量门。
 
@@ -157,6 +192,30 @@ Depth 内参，并继续使用刚性不变的 `T_color_depth` 外参完成三维
 - 手眼字段固定为 `hand_eye.tcp_from_color_camera`，含义是
   `p_tcp = T_tcp_color_camera * p_color`。
 
+### 张正友棋盘格手眼标定
+
+`hand_eye.calibration_target` 同时兼容原有 `apriltag_map` 和 `checkerboard`。当前已按你
+可能拿到的板预留了外板 **60 × 45 mm**、单格 **5 mm**，但**不会**再由这三个数字推断
+棋盘规格：实际板可能有白边，外板尺寸并不等于印刷网格尺寸。手眼页面的“长边总格数（黑+白）”
+和“短边总格数（黑+白）”默认留空，现场面对实物填入即可。这里数的是该方向全部黑白格子，
+不是只数黑格；例如填 `11 × 8` 时，OpenCV `findChessboardCorners` 的 `patternSize` 自动为
+**`[10, 7]` 个内角点**（共 70 点）。未填写时棋盘实时预览会明确显示“待设置”，不会误按
+AprilTag 或虚构的角点数采样。
+
+棋盘格路径使用固定外部靶标的标准手眼方程，不需要输入 `T_base_board`：
+
+```text
+T_base_board = T_base_tcp × T_tcp_color_camera × T_camera_board
+```
+
+程序对所有采样同时估计未知的 `T_base_board` 与 `T_tcp_color_camera`，并用每帧反推出的
+`T_base_board` 一致性剔除离群样本。采样要覆盖明显的姿态变化（默认 TCP 位移跨度至少
+30 mm、旋转跨度至少 15°）；不要只在一个小范围平移相机。
+
+纯黑白棋盘存在 180° 朝向二义性。比赛前请在棋盘一个角贴上非棋盘色的小标签/写上“TOP”，
+全程保持同一朝向；采样画面中不要把棋盘旋转到难以分辨正反/上下的姿态。切换靶标、改变
+板宽高或方格尺寸会自动使手眼矩阵失效，并归档旧样本，AprilTag 样本与棋盘样本绝不会混用。
+
 所有现场参数集中在 [`config/competition.yaml`](config/competition.yaml)。修改 Tag 地图会
 自动使旧手眼矩阵失效；样本文件还带 Tag 地图哈希，地图改变后不能误用旧样本。配置保存
 前会在 `config/backups/` 留一份备份。
@@ -194,6 +253,15 @@ python3 -m competition_pipeline.cli hand-eye-solve
 python3 -m competition_pipeline.cli localize-image --image data/check.png
 ```
 
+无 UI 时切换到该棋盘格目标（命令会归档并重建当前相机 profile 的样本会话）：
+
+```bash
+python3 -m competition_pipeline.cli hand-eye-target \
+  --type checkerboard \
+  --board-width-mm 60 --board-height-mm 45 --square-size-mm 5 \
+  --squares-x 11 --squares-y 8
+```
+
 `check` 只检查配置和路径字段，不会自动连接硬件。RGB 图像分辨率必须与
 `color_intrinsics_file` 一致。机械臂适配器实现 `interfaces.RobotPoseProvider` 和
 `interfaces.RobotController`，夹爪实现 `GripperController` 即可接入运行时；
@@ -201,6 +269,13 @@ python3 -m competition_pipeline.cli localize-image --image data/check.png
 且禁止运动，必须在现场完成独立安全联锁验收后再打开。
 
 UR5e+Robotiq 的开源仿真、上游复现、比赛 bridge 和闭环执行说明见 `sim/README.md`。
+
+真实控制器的基础通信边界见
+[`controller_protocol.md`](controller_protocol.md)。当前仅实现标准 Modbus-TCP 传输和
+配置化 IO 读写；手册没有公开运动 socket 报文，因此 MOVJ/MOVL 适配器必须等现场取得
+官方协议/SDK 后再实现。正式协议代码在
+`ros_ws/src/arm_vision_framework/.../adapters/inexbot_modbus.py`，本目录只保留离线测试
+入口。
 
 ## 运行测试
 

@@ -23,7 +23,7 @@ class TagPoseProvider:
     ):
         self.layout_path = Path(layout_path).expanduser().resolve()
         self.layout = load_layout(str(self.layout_path))
-        self.detector = april_detector()
+        self.detector = april_detector(self.layout["dictionary"])
         self.estimator = TagMapPoseEstimator(
             self.layout,
             minimum_tags=minimum_tags,
@@ -78,7 +78,13 @@ class TagPoseProvider:
                 estimate.rms_reprojection_error_px
             )
             color = (46, 204, 113)
-        cv2.rectangle(output, (8, 8), (390, 42), (25, 30, 34), -1)
+        cv2.rectangle(
+            output,
+            (8, 8),
+            (min(output.shape[1] - 8, 630), 68),
+            (25, 30, 34),
+            -1,
+        )
         cv2.putText(
             output,
             status,
@@ -89,4 +95,18 @@ class TagPoseProvider:
             2,
             cv2.LINE_AA,
         )
+        if not estimate.valid:
+            reason = str(estimate.reason or "no valid Tag pose")
+            if len(reason) > 78:
+                reason = reason[:75] + "..."
+            cv2.putText(
+                output,
+                reason,
+                (18, 58),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.38,
+                (180, 180, 180),
+                1,
+                cv2.LINE_AA,
+            )
         return output

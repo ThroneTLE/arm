@@ -131,10 +131,29 @@ FoundationPose 能直接用裸 RGB-D 永久跳过网格。采集页提供以下�
 2. 点击“2 新建参考拍照会话”，固定物体与 Tag，只移动相机；
 3. 点击“3 拍摄参考图”。按钮会等待下一组同步 RGB-D，不会因某一帧时间差弹窗失败；
 4. 点击“查看已拍照片（N 张）”检查 RGB、Mask、对齐深度和覆盖率；
-5. 拍够 12 张后，可点击“照片快速预览三维”用 TSDF 检查现场拍摄效果；
-6. 点击“4 导出 FoundationPose 参考照片 ZIP”；
-7. 在具备 BundleSDF 完整依赖的机器上离线生成 `model.obj`；
-8. 回到采集页选择该 OBJ/PLY/STL，按实际单位填写缩放，点击“5 加载网格并实时测试”。
+5. 拍够 16 张后，可点击“照片快速预览三维”用 TSDF 检查现场拍摄效果；
+6. 点击“4 导出 FoundationPose 参考照片 ZIP”保存可移植数据；
+7. 点击“5 用 16 张参考图训练神经隐式模型”，执行官方 BundleSDF/Neural Object Field；
+8. 训练完成后，Tool 会自动填入生成的 `model.obj`，点击“6 加载重建模型并实时测试”。
+
+第 7 步是真正的 FoundationPose Model-free 路线：参考 RGB-D 被送入
+`FoundationPose/bundlesdf/run_nerf.py::run_neural_object_field`，先训练神经隐式
+表示，再从隐式场提取带纹理的网格。FoundationPose 的 REGISTER/TRACK 接口仍以这个
+提取出的网格作为统一下游输入；它不是把 16 张 PNG 直接当作 CAD，也不会训练一个
+新的 FoundationPose 网络。运行该步骤需要 CUDA、PyTorch3D、nvdiffrast 和 Kaolin；
+缺少 Kaolin 时环境页仍允许拍照和导出 ZIP，但 Model-free 按钮会给出明确依赖错误。
+每个任务目录会同时保留 `reference/ob_0000001/`、`result/nerf/`（神经隐式训练检查点）
+和 `result/model/model.obj`，方便后续复查或在另一台机器继续处理。
+
+也可以在无界面环境运行同一条入口（`--session` 会先导出参考目录）：
+
+```bash
+python -m tool.object_model_builder.model_free \
+  --session /path/to/capture_session \
+  --reference-dir /path/to/reference_root \
+  --foundationpose-root /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus \
+  --output-dir /home/throne/workspaces/arm_data/model_free_jobs/object_001
+```
 
 无模型 ZIP 直接包含上游 `run_nerf.py` 使用的参考布局：
 
@@ -153,9 +172,10 @@ ob_0000001/
 ```
 
 当前机器的 `foundationpose` 环境可以运行已有网格的实时 FoundationPose，但没有安装
-Kaolin，因此 UI 环境检查会把“Kaolin (无模型 Neural Object Field)”标记为可选缺失；
-这不会阻止拍照、打包 ZIP 或使用已有网格实时测试，却意味着上游完整 Neural Object Field
-重建应在依赖齐全的环境中执行。工具不会在运行时自动安装或改动该环境。
+Kaolin，因此 UI 环境检查会把“Kaolin (无模型 Neural Object Field)”标记为缺失；这不会
+阻止拍照、打包 ZIP 或使用已有网格实时测试，但点击 Model-free 建模前必须在该环境补齐
+Kaolin。工具不会在运行时自动安装或改动环境，建议按上游版本安装与当前 PyTorch/CUDA
+匹配的 Kaolin，再重启 UI。
 
 采集门禁分为两类：彩深时间差使用主机到达时间戳，深度约 `7 FPS`，因此点击拍摄后会
 等待最多 5 秒的下一组配对帧；Mask 内有效深度覆盖率、物体相对 Tag 是否移动和是否换了
@@ -167,6 +187,28 @@ Kaolin，因此 UI 环境检查会把“Kaolin (无模型 Neural Object Field)�
 叠加米制网格的 3D 包围盒和 XYZ 轴，控制页显示推理模式、耗时及 4×4
 `camera_from_object`。分析过期、彩深不同步、Mask/深度为空时会拒绝该帧；更换网格或
 重新加载分割链路后必须重新注册。
+
+### Gemini Max 无 CAD 调试 UI
+
+Gemini Max 调试相机可直接使用独立入口：
+
+```bash
+./tool/object_model_builder/run_gemini_foundationpose_ui.sh
+```
+
+该 UI 从连接设备的 `/camera/color/camera_info` 保存出厂内参，并使用驱动的
+Depth→RGB 硬件对齐；不会使用 Astra Pro 标定。选择任意 YOLO *分割* `.pt` 后，将物体
+放在 ID0（左）和 ID1（右）两个 AprilTag 中间，只移动相机采集 16 个通过质量门的
+RGB-D 视角。当前 Gemini Tag Map 使用 `DICT_APRILTAG_25h9`、75 mm Tag 边长，并把两个 Tag 黑框右下角间距
+定义为 150 mm（Tag 左上角原点因此相距 150 mm）。然后可点击 Model-free 按钮执行
+BundleSDF/Neural Object Field，也可先执行 TSDF 快速预览；生成的米制模型加载到
+FoundationPose 实时测试后，即可在界面中看到 `camera_from_object` 的相对 XYZ 和相机到
+物体原点距离。实时输出始终以相机光学坐标系为原点，且该入口不会执行机械臂动作。采集
+时两个 Tag 必须同时可见且物体与 Tag 保持刚性不动；相邻视角仍需有足够重叠。更详细说明见
+[`GEMINI_FOUNDATIONPOSE_DEBUG.md`](GEMINI_FOUNDATIONPOSE_DEBUG.md)。
+当前 `SV1301S_U3` 配置保持稳定的 RGB `640×480@30` 和对齐深度 `640×400@30`，
+同时请求 IR `1280×800@30`；UI 图像栏会显示驱动实际返回的尺寸。不要在未重新查询设备
+profile 前强行把 Depth 也改成 `1280×800`，此前该组合会使设备深度接口复位。
 
 ## Astra Pro 工作流
 

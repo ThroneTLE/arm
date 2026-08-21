@@ -5,9 +5,13 @@ metadata:
   source: /home/throne/workspaces/arm/tool/camera_calibration/calibration_snapshots/latest/runtime_calibration.yaml
   note: Astra Pro is only the current algorithm-validation camera.
 frames:
-  workspace: ruler_workspace
+  # Runtime output is expressed directly in the controller's robot-base frame.
+  # AprilTags are calibration targets only and do not define a live workspace.
+  workspace: robot_base
   base: robot_base
-  gripper: tool0
+  # This frame is the controller's calibrated Tool1 TCP, despite the legacy
+  # key name retained for parameter compatibility.
+  gripper: tool1_tcp
   camera_color: camera_color_optical_frame
   camera_depth: camera_depth_optical_frame
   object: target_can

@@ -12,7 +12,7 @@ from .tag_map import TagMap
 
 SOURCE_TAG_VISUAL = "tag_visual"
 SOURCE_TAG_VISUAL_HELD = "tag_visual_held"
-SOURCE_TCP_FALLBACK = "tcp_fallback"
+SOURCE_TCP_FALLBACK = "tcp_hand_eye"
 SOURCE_UNAVAILABLE = "unavailable"
 
 
@@ -172,16 +172,23 @@ class HybridLocalizer:
         detections_override=None,
     ):
         timestamp_s = time.monotonic() if image_timestamp_s is None else float(image_timestamp_s)
-        if detections_override is None:
-            visual = self.visual.estimate(
-                image, camera_matrix, distortion, timestamp_s=timestamp_s
-            )
-        else:
-            visual = self.visual.estimate_detections(
-                detections_override, camera_matrix, distortion, timestamp_s=timestamp_s
-            )
         settings = self.config.data["localization"]
-        allow_visual_hold = detections_override is None
+        use_apriltag_runtime = bool(settings.get("use_apriltag_runtime", False))
+        if use_apriltag_runtime:
+            if detections_override is None:
+                visual = self.visual.estimate(
+                    image, camera_matrix, distortion, timestamp_s=timestamp_s
+                )
+            else:
+                visual = self.visual.estimate_detections(
+                    detections_override, camera_matrix, distortion, timestamp_s=timestamp_s
+                )
+        else:
+            visual = LocalizationResult(
+                False, None, SOURCE_UNAVAILABLE, timestamp_s,
+                reason="runtime AprilTag localization is disabled; TCP + hand-eye is required",
+            )
+        allow_visual_hold = use_apriltag_runtime and detections_override is None
         if visual.valid:
             single_hold_s = float(
                 settings.get("single_tag_after_multi_hold_s", 0.8)
@@ -245,5 +252,5 @@ class HybridLocalizer:
             used_tag_ids=visual.used_tag_ids,
             rms_reprojection_error_px=visual.rms_reprojection_error_px,
             max_reprojection_error_px=visual.max_reprojection_error_px,
-            reason="Tag pose unavailable; current TCP pose fallback active",
+            reason="current controller TCP pose composed with calibrated hand-eye transform",
         )

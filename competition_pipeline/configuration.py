@@ -73,6 +73,7 @@ class CompetitionConfig:
     def __init__(self, path):
         self.path, self.data = _read_yaml(path)
         self._add_legacy_depth_modes()
+        self._add_legacy_hand_eye_target()
         self.validate()
 
     def _add_legacy_depth_modes(self):
@@ -107,6 +108,31 @@ class CompetitionConfig:
                         break
             camera["depth_mode"] = selected or next(iter(camera["depth_modes"]))
             camera.setdefault("alignment_splat_radius_pixels", 0)
+
+    def _add_legacy_hand_eye_target(self):
+        """Keep old Tag-only competition YAML files valid."""
+        hand_eye = self.data.setdefault("hand_eye", {})
+        target = hand_eye.setdefault("calibration_target", {})
+        target.setdefault("type", "apriltag_map")
+        checkerboard = target.setdefault("checkerboard", {})
+        checkerboard.setdefault("board_width_mm", 60.0)
+        checkerboard.setdefault("board_height_mm", 45.0)
+        checkerboard.setdefault("square_size_mm", 5.0)
+        # Never guess the printed grid from the outer-board dimensions. Legacy
+        # files did not contain explicit cell counts, so leave them unconfigured
+        # until the real board is counted at the venue.
+        checkerboard.setdefault(
+            "configured",
+            checkerboard.get("squares_x") is not None
+            and checkerboard.get("squares_y") is not None,
+        )
+        checkerboard.setdefault("squares_x", None)
+        checkerboard.setdefault("squares_y", None)
+        checkerboard.setdefault("inner_corners", None)
+        checkerboard.setdefault("maximum_rms_px", 1.5)
+        checkerboard.setdefault("prefer_find_chessboard_sb", True)
+        checkerboard.setdefault("minimum_tcp_translation_span_mm", 30.0)
+        checkerboard.setdefault("minimum_tcp_rotation_span_deg", 15.0)
 
     def validate(self):
         if int(self.data.get("schema_version", 0)) != SCHEMA_VERSION:
@@ -279,6 +305,48 @@ class CompetitionConfig:
             hand_eye.get("tcp_from_color_camera", {}).get("matrix"),
             "tcp_from_color_camera",
         )
+        target = hand_eye.get("calibration_target", {}) or {}
+        target_type = str(target.get("type", "apriltag_map"))
+        if target_type not in ("apriltag_map", "checkerboard"):
+            raise ValueError(
+                "hand_eye.calibration_target.type must be apriltag_map or checkerboard"
+            )
+        checkerboard = target.get("checkerboard", {}) or {}
+        for name in (
+            "board_width_mm", "board_height_mm", "square_size_mm", "maximum_rms_px",
+            "minimum_tcp_translation_span_mm", "minimum_tcp_rotation_span_deg",
+        ):
+            if float(checkerboard.get(name, 0.0)) <= 0.0:
+                raise ValueError(
+                    "hand_eye.calibration_target.checkerboard.{} must be positive".format(name)
+                )
+        if not bool(checkerboard.get("configured", False)):
+            squares = None
+        else:
+            squares = []
+            for name, limit_name in (
+                ("squares_x", "board_width_mm"),
+                ("squares_y", "board_height_mm"),
+            ):
+                try:
+                    count = int(checkerboard[name])
+                except (TypeError, ValueError):
+                    raise ValueError("checkerboard.{} must be an integer".format(name))
+                if count < 3:
+                    raise ValueError("checkerboard needs at least 3 squares on every side")
+                if count * float(checkerboard["square_size_mm"]) > float(checkerboard[limit_name]) + 1e-9:
+                    raise ValueError(
+                        "checkerboard printed grid is larger than physical board {}".format(limit_name)
+                    )
+                squares.append(count)
+            expected_corners = [squares[0] - 1, squares[1] - 1]
+            inner_corners = checkerboard.get("inner_corners")
+            if inner_corners is None or [int(value) for value in inner_corners] != expected_corners:
+                raise ValueError(
+                    "checkerboard.inner_corners must be {} (inner corners, not square count)".format(
+                        expected_corners
+                    )
+                )
         camera_root = self.data.get("camera", {})
         profiles = camera_root.get("profiles", {})
         if not isinstance(profiles, dict) or not profiles:
@@ -288,7 +356,7 @@ class CompetitionConfig:
             raise ValueError("camera.active_profile does not name a configured profile")
         for profile_name, camera in profiles.items():
             backend = str(camera.get("backend", "")).strip()
-            if backend not in ("astra_ros", "oak_depthai"):
+            if backend not in ("astra_ros", "orbbec_ros", "oak_depthai"):
                 raise ValueError(
                     "camera profile {} has unsupported backend {}".format(
                         profile_name, backend
@@ -343,6 +411,39 @@ class CompetitionConfig:
                         "camera profile {} alignment splat radius cannot be "
                         "negative".format(profile_name)
                     )
+            if backend == "orbbec_ros":
+                for field in (
+                    "color_topic", "color_info_topic", "depth_topic",
+                    "depth_info_topic", "ir_topic",
+                ):
+                    if not str(camera.get(field, "")).strip():
+                        raise ValueError(
+                            "camera profile {} {} is required".format(
+                                profile_name, field
+                            )
+                        )
+                if int(camera.get("color_width", 0)) <= 0 or int(
+                    camera.get("color_height", 0)
+                ) <= 0:
+                    raise ValueError(
+                        "camera profile {} Orbbec RGB size must be positive".format(
+                            profile_name
+                        )
+                    )
+                if float(camera.get("color_fps", 0.0)) <= 0.0:
+                    raise ValueError(
+                        "camera profile {} Orbbec RGB FPS must be positive".format(
+                            profile_name
+                        )
+                    )
+                driver = camera.get("ros_driver", {}) or {}
+                for field in ("package", "launch_file"):
+                    if not str(driver.get(field, "")).strip():
+                        raise ValueError(
+                            "camera profile {} ros_driver.{} is required".format(
+                                profile_name, field
+                            )
+                        )
             if float(camera.get("depth_preview_fps", 10.0)) <= 0.0:
                 raise ValueError(
                     "camera profile {} depth_preview_fps must be positive".format(
@@ -357,6 +458,163 @@ class CompetitionConfig:
                         profile_name
                     )
                 )
+            if backend == "oak_depthai":
+                size = (
+                    int(camera.get("color_width", 0)),
+                    int(camera.get("color_height", 0)),
+                )
+                if size != (1920, 1080):
+                    raise ValueError(
+                        "camera profile {} must use the validated OAK RGB "
+                        "1920x1080 competition profile".format(profile_name)
+                    )
+                if not 1 <= int(camera.get("color_fps", 0)) <= 30:
+                    raise ValueError(
+                        "camera profile {} OAK FPS must be within 1..30".format(
+                            profile_name
+                        )
+                    )
+                if str(camera.get("mono_resolution", "")).lower() != "800p":
+                    raise ValueError(
+                        "camera profile {} must use OAK mono 800p".format(profile_name)
+                    )
+                extended = bool(camera.get("extended_disparity", True))
+                subpixel = bool(camera.get("subpixel", False))
+                if extended and subpixel:
+                    raise ValueError(
+                        "camera profile {} cannot enable OAK extended disparity "
+                        "and subpixel together".format(profile_name)
+                    )
+                imu = camera.get("imu", {}) or {}
+                if not isinstance(imu, dict):
+                    raise ValueError("camera profile {} imu must be a mapping".format(profile_name))
+                if float(imu.get("report_rate_hz", 100.0)) <= 0.0:
+                    raise ValueError("camera profile {} IMU report rate must be positive".format(profile_name))
+                camera_from_imu = imu.get("camera_from_imu")
+                if camera_from_imu is not None:
+                    matrix = np.asarray(camera_from_imu, dtype=np.float64)
+                    if matrix.size != 16:
+                        raise ValueError("camera profile {} camera_from_imu must be 4x4".format(profile_name))
+                focus_mode = str(camera.get("focus_mode", "device_default")).strip().lower()
+                if focus_mode not in ("device_default", "continuous_auto", "manual"):
+                    raise ValueError(
+                        "camera profile {} has invalid OAK focus_mode".format(profile_name)
+                    )
+                if focus_mode == "manual" and (
+                    camera.get("manual_focus") is None
+                    or not 0 <= int(camera["manual_focus"]) <= 255
+                ):
+                    raise ValueError(
+                        "camera profile {} manual OAK focus must be within 0..255".format(
+                            profile_name
+                        )
+                    )
+                minimum_depth = float(camera.get("minimum_depth_m", 0.0))
+                maximum_depth = float(camera.get("maximum_depth_m", 0.0))
+                if not 0.0 < minimum_depth < maximum_depth:
+                    raise ValueError(
+                        "camera profile {} OAK depth range is invalid".format(
+                            profile_name
+                        )
+                    )
+        controller = self.data.get("controller", {})
+        if not isinstance(controller, dict):
+            raise ValueError("controller must be a mapping")
+        transport = str(controller.get("transport", "modbus_tcp")).strip().lower()
+        if transport != "modbus_tcp":
+            raise ValueError(
+                "controller.transport must be modbus_tcp until the official motion protocol is available"
+            )
+        unit_id = controller.get("unit_id")
+        if unit_id is not None and not 1 <= int(unit_id) <= 247:
+            raise ValueError("controller.unit_id must be within 1..247")
+        for name in ("connect_timeout_s", "io_timeout_s"):
+            if float(controller.get(name, 0.0)) <= 0.0:
+                raise ValueError("controller.{} must be positive".format(name))
+        if not 8 <= int(controller.get("max_frame_bytes", 0)) <= 260:
+            raise ValueError("controller.max_frame_bytes must be within 8..260")
+        if float(controller.get("state_poll_hz", 1.0)) <= 0.0:
+            raise ValueError("controller.state_poll_hz must be positive")
+        state_registers = controller.get("state_registers", {}) or {}
+        state_codec = controller.get("state_codec", {}) or {}
+        if not isinstance(state_registers, dict) or not isinstance(state_codec, dict):
+            raise ValueError("controller state_registers/state_codec must be mappings")
+        register_encodings = {
+            "u16", "s16", "u32", "s32", "f32_be",
+            "u32_le_words", "s32_le_words", "f32_le_words",
+        }
+        for field, spec in state_registers.items():
+            if not isinstance(spec, dict):
+                raise ValueError("controller.state_registers.{} must be a mapping".format(field))
+            if "address" not in spec or not 0 <= int(spec["address"]) <= 65535:
+                raise ValueError("controller.state_registers.{} address is invalid".format(field))
+            source = str(spec.get("source", "holding")).lower()
+            if source not in ("holding", "input", "coil", "coils", "discrete", "discrete_input", "discrete_inputs"):
+                raise ValueError("controller.state_registers.{} source is invalid".format(field))
+            encoding = str(spec.get("encoding", "u16")).lower()
+            if source in ("holding", "input") and encoding not in register_encodings:
+                raise ValueError("controller.state_registers.{} encoding is invalid".format(field))
+            minimum_quantity = 2 if encoding in {
+                "u32", "s32", "f32_be", "u32_le_words", "s32_le_words", "f32_le_words",
+            } else 1
+            if int(spec.get("quantity", minimum_quantity)) < minimum_quantity:
+                raise ValueError("controller.state_registers.{} quantity is too small".format(field))
+        if bool(controller.get("enabled", False)):
+            if not str(controller.get("host", "")).strip():
+                raise ValueError("enabled controller requires controller.host")
+            port = controller.get("port")
+            if port is None or not 1 <= int(port) <= 65535:
+                raise ValueError("enabled controller.port must be within 1..65535")
+            if unit_id is None:
+                raise ValueError("enabled controller requires controller.unit_id")
+        motion = controller.get("motion", {})
+        if not isinstance(motion, dict):
+            raise ValueError("controller.motion must be a mapping")
+        if bool(motion.get("enabled", False)):
+            raise ValueError(
+                "controller.motion is fail-closed: enable it only after the official motion protocol is implemented"
+            )
+        remote_io = controller.get("remote_io", {})
+        if not isinstance(remote_io, dict):
+            raise ValueError("controller.remote_io must be a mapping")
+        for direction in ("outputs", "inputs"):
+            mapping = remote_io.get(direction, {})
+            if not isinstance(mapping, dict):
+                raise ValueError("controller.remote_io.{} must be a mapping".format(direction))
+            for name, address in mapping.items():
+                if not 0 <= int(address) <= 65535:
+                    raise ValueError(
+                        "controller.remote_io.{}[{}] must be within 0..65535".format(
+                            direction, name
+                        )
+                    )
+        fallback = controller.get("modbus_global_point_fallback", {}) or {}
+        if not isinstance(fallback, dict):
+            raise ValueError("controller.modbus_global_point_fallback must be a mapping")
+        if bool(fallback.get("enabled", False)):
+            if not bool(fallback.get("local_program_verified", False)):
+                raise ValueError("enabled Modbus fallback requires local_program_verified")
+            point_fields = fallback.get("global_point_fields", {}) or {}
+            required_fields = {
+                "coordinate_system", "angle_unit", "shape", "tool_id", "user_id",
+                "reserved_1", "reserved_2", "axis_1", "axis_2", "axis_3", "axis_4",
+                "axis_5", "axis_6", "axis_7",
+            }
+            if not required_fields.issubset(point_fields):
+                raise ValueError(
+                    "enabled Modbus fallback is missing GP fields: {}".format(
+                        ", ".join(sorted(required_fields.difference(point_fields)))
+                    )
+                )
+            for signal_name in (
+                "command_fields", "start_signal", "complete_signal", "stop_signal",
+            ):
+                signal = fallback.get(signal_name, {}) or {}
+                if signal_name == "command_fields":
+                    if not {"motion_code", "sequence_id"}.issubset(signal):
+                        raise ValueError("fallback command_fields needs motion_code and sequence_id")
+                elif "address" not in signal:
+                    raise ValueError("fallback {} needs address".format(signal_name))
         safety = self.data.get("safety", {})
         for name in ("workspace_min_mm", "workspace_max_mm"):
             if len(safety.get(name, [])) != 3:
@@ -380,6 +638,11 @@ class CompetitionConfig:
     @property
     def camera(self):
         return self.camera_profiles[self.active_camera_profile]
+
+    @property
+    def controller(self):
+        """Detached controller settings; endpoint values may remain unset."""
+        return self.data.get("controller", {})
 
     def set_active_camera_profile(self, profile_name, save=True):
         profile_name = str(profile_name)

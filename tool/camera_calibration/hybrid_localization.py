@@ -197,6 +197,45 @@ class TagMapPoseEstimator:
             visible,
         )
 
+    def _single_tag_fallback(
+        self,
+        detections: Dict[int, np.ndarray],
+        visible: Tuple[int, ...],
+        camera_matrix: np.ndarray,
+        distortion: np.ndarray,
+    ) -> Optional[VisualPoseEstimate]:
+        """Retry one marker when a second marker is geometrically inconsistent."""
+        if self.minimum_tags != 1 or len(visible) <= 1:
+            return None
+        candidates = []
+        for tag_id in visible:
+            candidate = self.estimate(
+                {int(tag_id): detections[int(tag_id)]},
+                camera_matrix,
+                distortion,
+            )
+            if candidate.valid:
+                candidates.append(candidate)
+        if not candidates:
+            return None
+        best = min(
+            candidates,
+            key=lambda item: float(
+                item.rms_reprojection_error_px
+                if item.rms_reprojection_error_px is not None
+                else float("inf")
+            ),
+        )
+        return VisualPoseEstimate(
+            True,
+            best.workspace_from_camera,
+            best.camera_from_workspace,
+            best.visible_tag_ids,
+            best.rms_reprojection_error_px,
+            best.max_reprojection_error_px,
+            "single Tag fallback (joint Tag pose rejected): {}".format(best.reason),
+        )
+
     def estimate(
         self,
         detections: Dict[int, np.ndarray],
@@ -226,6 +265,11 @@ class TagMapPoseEstimator:
             flags=flag,
         )
         if not ok:
+            fallback = self._single_tag_fallback(
+                detections, visible, camera_matrix, distortion
+            )
+            if fallback is not None:
+                return fallback
             return VisualPoseEstimate(
                 False, None, None, visible, None, None, "cv2.solvePnP failed"
             )
@@ -247,6 +291,11 @@ class TagMapPoseEstimator:
         rms = float(np.sqrt(np.mean(errors ** 2)))
         maximum = float(errors.max())
         if rms > self.max_rms_reprojection_error_px:
+            fallback = self._single_tag_fallback(
+                detections, visible, camera_matrix, distortion
+            )
+            if fallback is not None:
+                return fallback
             return VisualPoseEstimate(
                 False,
                 None,

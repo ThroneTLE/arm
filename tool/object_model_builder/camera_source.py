@@ -471,12 +471,316 @@ class AstraRosSource:
             self._driver_log = None
 
 
+class OrbbecRosSource:
+    """Orbbec SDK ROS source using live factory ``CameraInfo`` values.
+
+    Unlike :class:`AstraRosSource`, Gemini color is owned by the Orbbec SDK
+    driver as well.  Subscribing to all three ROS streams keeps one process in
+    control of the USB device and, importantly, ties every RGB frame to the
+    intrinsics returned by that same connected camera.
+    """
+
+    def __init__(
+        self,
+        color_topic="/camera/color/image_raw",
+        color_info_topic="/camera/color/camera_info",
+        depth_topic="/camera/depth/image_raw",
+        depth_info_topic="/camera/depth/camera_info",
+        ir_topic="/camera/ir/image_raw",
+        start_ros_driver=True,
+        driver_log_path=None,
+        driver_package="orbbec_camera",
+        driver_launch_file="gemini.launch",
+        driver_arguments=None,
+        driver_startup_timeout_s=2.0,
+        laser_service="/camera/set_laser",
+        depth_aligned_to_color=True,
+        expected_serial=None,
+        ros_node_name="orbbec_rgbd_source",
+    ):
+        self.color_topic = str(color_topic)
+        self.color_info_topic = str(color_info_topic)
+        self.depth_topic = str(depth_topic)
+        self.depth_info_topic = str(depth_info_topic)
+        self.ir_topic = str(ir_topic)
+        self.start_ros_driver = bool(start_ros_driver)
+        self.driver_log_path = (
+            Path(driver_log_path).expanduser() if driver_log_path else None
+        )
+        self.driver_package = str(driver_package)
+        self.driver_launch_file = str(driver_launch_file)
+        self.driver_arguments = dict(driver_arguments or {})
+        self.driver_startup_timeout_s = float(driver_startup_timeout_s)
+        self.laser_service = str(laser_service)
+        self.depth_aligned_to_color = bool(depth_aligned_to_color)
+        self.expected_serial = str(expected_serial or "").strip()
+        self.ros_node_name = str(ros_node_name)
+        self._laser_enabled = None
+        self._lock = threading.Lock()
+        self._driver_process = None
+        self._driver_log = None
+        self._subscribers = []
+        self._color_history = deque(maxlen=12)
+        self._depth_history = deque(maxlen=8)
+        self._ir_history = deque(maxlen=8)
+        self._color_intrinsics = None
+        self._depth_intrinsics = None
+
+    def start(self) -> None:
+        if self._subscribers:
+            return
+        try:
+            if self.start_ros_driver:
+                self._start_driver()
+            self._start_ros_subscribers()
+            self._verify_device_serial()
+        except Exception:
+            self.stop()
+            raise
+
+    @property
+    def laser_enabled(self) -> Optional[bool]:
+        return self._laser_enabled
+
+    def set_laser_enabled(self, enabled: bool, timeout_s: float = 3.0) -> None:
+        try:
+            import rospy
+            from std_srvs.srv import SetBool
+        except ImportError as error:
+            raise RuntimeError("ROS 激光控制服务不可用") from error
+        try:
+            rospy.wait_for_service(self.laser_service, timeout=float(timeout_s))
+            rospy.ServiceProxy(self.laser_service, SetBool, persistent=False)(
+                bool(enabled)
+            )
+        except Exception as error:
+            raise RuntimeError(
+                "无法{} Orbbec 红外投影器（{}）：{}".format(
+                    "打开" if enabled else "关闭", self.laser_service, error
+                )
+            ) from error
+        self._laser_enabled = bool(enabled)
+
+    def _start_driver(self) -> None:
+        environment = native_ros_environment()
+        self._validate_driver(environment)
+        command = ["roslaunch", self.driver_package, self.driver_launch_file]
+        command.extend(
+            "{}:={}".format(name, self._roslaunch_value(value))
+            for name, value in self.driver_arguments.items()
+        )
+        if self.driver_log_path:
+            self.driver_log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._driver_log = open(self.driver_log_path, "w", encoding="utf-8")
+        self._driver_process = subprocess.Popen(
+            command,
+            stdout=self._driver_log or subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env=environment,
+        )
+        time.sleep(self.driver_startup_timeout_s)
+        if self._driver_process.poll() is not None:
+            raise RuntimeError("Orbbec ROS 驱动启动后异常退出")
+
+    def _validate_driver(self, environment) -> None:
+        if shutil.which("roslaunch") is None or shutil.which("rospack") is None:
+            raise RuntimeError("当前环境找不到 ROS 命令，请使用工作台启动脚本")
+        result = subprocess.run(
+            ["rospack", "find", self.driver_package],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            env=environment,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "ROS 找不到软件包 '{}'. 请加载 /home/throne/orbbec_ws/devel/setup.bash\n{}".format(
+                    self.driver_package, result.stdout.strip()
+                )
+            )
+        launch_path = (
+            Path(result.stdout.strip().splitlines()[-1])
+            / "launch"
+            / self.driver_launch_file
+        )
+        if not launch_path.is_file():
+            raise RuntimeError("未找到 Orbbec 启动文件：{}".format(launch_path))
+
+    @staticmethod
+    def _roslaunch_value(value) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    @staticmethod
+    def _intrinsics_from_info(message) -> CameraIntrinsics:
+        return CameraIntrinsics(
+            width=int(message.width),
+            height=int(message.height),
+            matrix=np.asarray(message.K, dtype=np.float64).reshape(3, 3),
+            distortion=np.asarray(message.D, dtype=np.float64),
+        )
+
+    def _start_ros_subscribers(self) -> None:
+        try:
+            import rospy
+            from sensor_msgs.msg import CameraInfo, Image
+        except ImportError as error:
+            raise RuntimeError("ROS Noetic Python 消息模块不可用") from error
+        if not rospy.core.is_initialized():
+            rospy.init_node(self.ros_node_name, anonymous=True, disable_signals=True)
+
+        def color_callback(message):
+            image = ros_image_to_numpy(message)
+            if str(message.encoding) == "rgb8":
+                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            elif image.ndim == 2:
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            timestamp = time.monotonic()
+            with self._lock:
+                self._color_history.append((timestamp, image))
+
+        def depth_callback(message):
+            depth = ros_image_to_numpy(message)
+            if depth.dtype == np.uint16:
+                depth = depth.astype(np.float32) * 0.001
+            else:
+                depth = depth.astype(np.float32)
+            timestamp = time.monotonic()
+            with self._lock:
+                self._depth_history.append((timestamp, depth))
+
+        def ir_callback(message):
+            image = ros_image_to_numpy(message)
+            timestamp = time.monotonic()
+            with self._lock:
+                self._ir_history.append((timestamp, image))
+
+        def color_info_callback(message):
+            try:
+                intrinsics = self._intrinsics_from_info(message)
+            except ValueError:
+                return
+            with self._lock:
+                self._color_intrinsics = intrinsics
+
+        def depth_info_callback(message):
+            try:
+                intrinsics = self._intrinsics_from_info(message)
+            except ValueError:
+                return
+            with self._lock:
+                self._depth_intrinsics = intrinsics
+
+        self._subscribers = [
+            rospy.Subscriber(self.color_topic, Image, color_callback, queue_size=1),
+            rospy.Subscriber(self.depth_topic, Image, depth_callback, queue_size=1),
+            rospy.Subscriber(self.ir_topic, Image, ir_callback, queue_size=1),
+            rospy.Subscriber(
+                self.color_info_topic, CameraInfo, color_info_callback, queue_size=1
+            ),
+            rospy.Subscriber(
+                self.depth_info_topic, CameraInfo, depth_info_callback, queue_size=1
+            ),
+        ]
+
+    def _verify_device_serial(self) -> None:
+        if not self.expected_serial:
+            return
+        try:
+            import rospy
+            from orbbec_camera.srv import GetString
+
+            rospy.wait_for_service("/camera/get_serial", timeout=5.0)
+            response = rospy.ServiceProxy(
+                "/camera/get_serial", GetString, persistent=False
+            )()
+            actual = str(response.data).strip()
+        except Exception as error:
+            raise RuntimeError("无法读取 Orbbec 设备序列号：{}".format(error)) from error
+        if actual != self.expected_serial:
+            raise RuntimeError(
+                "连接的 Orbbec 序列号为 {}，配置要求 {}".format(
+                    actual or "<empty>", self.expected_serial
+                )
+            )
+
+    def latest(
+        self, anchor: str = "color", copy_frames: bool = True,
+    ) -> Optional[FrameBundle]:
+        with self._lock:
+            # Never expose an Orbbec RGB frame without the live factory
+            # intrinsics read from the same driver/device.
+            if not self._color_history or self._color_intrinsics is None:
+                return None
+            if anchor == "ir" and self._ir_history:
+                ir_timestamp, infrared = self._ir_history[-1]
+                color_timestamp, color = nearest_timestamped_frame(
+                    self._color_history, ir_timestamp
+                )
+                depth_timestamp, depth = nearest_timestamped_frame(
+                    self._depth_history, color_timestamp
+                )
+            elif anchor == "depth" and self._depth_history:
+                depth_timestamp, depth = self._depth_history[-1]
+                color_timestamp, color = nearest_timestamped_frame(
+                    self._color_history, depth_timestamp
+                )
+                ir_timestamp, infrared = nearest_timestamped_frame(
+                    self._ir_history, color_timestamp
+                )
+            else:
+                color_timestamp, color = self._color_history[-1]
+                depth_timestamp, depth = nearest_timestamped_frame(
+                    self._depth_history, color_timestamp
+                )
+                ir_timestamp, infrared = nearest_timestamped_frame(
+                    self._ir_history, color_timestamp
+                )
+            clone = (lambda value: value.copy()) if copy_frames else (lambda value: value)
+            return FrameBundle(
+                color_bgr=clone(color),
+                color_timestamp_s=float(color_timestamp),
+                depth_m=None if depth is None else clone(depth),
+                depth_timestamp_s=depth_timestamp,
+                depth_intrinsics=self._depth_intrinsics,
+                ir_image=None if infrared is None else clone(infrared),
+                ir_timestamp_s=ir_timestamp,
+                color_intrinsics=self._color_intrinsics,
+                depth_aligned_to_color=self.depth_aligned_to_color,
+                color_is_rectified=False,
+            )
+
+    def stop(self) -> None:
+        for subscriber in self._subscribers:
+            try:
+                subscriber.unregister()
+            except Exception:
+                pass
+        self._subscribers = []
+        if self._driver_process is not None:
+            if self._driver_process.poll() is None:
+                try:
+                    self._driver_process.send_signal(signal.SIGINT)
+                    self._driver_process.wait(timeout=5.0)
+                except Exception:
+                    self._driver_process.terminate()
+            self._driver_process = None
+        if self._driver_log is not None:
+            self._driver_log.close()
+            self._driver_log = None
+
+
 class OakDProSource:
     """DepthAI source using device calibration and depth aligned to RGB."""
 
     def __init__(
         self, color_width=1280, color_height=720, fps=30,
         dot_projector_mA=800, floodlight_mA=0, mono_resolution="800p",
+        extended_disparity=True, subpixel=False, left_right_check=True,
+        focus_mode="device_default", manual_focus=None,
     ):
         self.color_width = int(color_width)
         self.color_height = int(color_height)
@@ -484,12 +788,25 @@ class OakDProSource:
         self.dot_projector_mA = int(dot_projector_mA)
         self.floodlight_mA = int(floodlight_mA)
         self.mono_resolution = str(mono_resolution).lower()
+        self.extended_disparity = bool(extended_disparity)
+        self.subpixel = bool(subpixel)
+        self.left_right_check = bool(left_right_check)
+        self.focus_mode = str(focus_mode).strip().lower()
+        self.manual_focus = manual_focus
         if self.mono_resolution not in ("400p", "800p"):
             raise ValueError("OAK mono resolution must be 400p or 800p")
         if not 0 <= self.dot_projector_mA <= 1200:
             raise ValueError("OAK dot projector current must be within 0..1200 mA")
         if not 0 <= self.floodlight_mA <= 1500:
             raise ValueError("OAK floodlight current must be within 0..1500 mA")
+        if self.extended_disparity and self.subpixel:
+            raise ValueError("OAK extended disparity and subpixel cannot both be enabled")
+        if self.focus_mode not in ("device_default", "continuous_auto", "manual"):
+            raise ValueError("OAK focus mode is invalid")
+        if self.focus_mode == "manual" and (
+            manual_focus is None or not 0 <= int(manual_focus) <= 255
+        ):
+            raise ValueError("OAK manual focus must be within 0..255")
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._device = None
@@ -520,6 +837,12 @@ class OakDProSource:
         color.setVideoSize(self.color_width, self.color_height)
         color.setFps(self.fps)
         color.setInterleaved(False)
+        if self.focus_mode == "continuous_auto":
+            color.initialControl.setAutoFocusMode(
+                dai.CameraControl.AutoFocusMode.CONTINUOUS_PICTURE
+            )
+        elif self.focus_mode == "manual":
+            color.initialControl.setManualFocus(int(self.manual_focus))
         left.setBoardSocket(dai.CameraBoardSocket.LEFT)
         right.setBoardSocket(dai.CameraBoardSocket.RIGHT)
         mono_mode = (
@@ -534,8 +857,9 @@ class OakDProSource:
         stereo.setDefaultProfilePreset(
             dai.node.StereoDepth.PresetMode.HIGH_DENSITY
         )
-        stereo.setLeftRightCheck(True)
-        stereo.setSubpixel(True)
+        stereo.setLeftRightCheck(self.left_right_check)
+        stereo.setExtendedDisparity(self.extended_disparity)
+        stereo.setSubpixel(self.subpixel)
         stereo.setDepthAlign(dai.CameraBoardSocket.RGB)
         stereo.setOutputSize(self.color_width, self.color_height)
         left.out.link(stereo.left)
