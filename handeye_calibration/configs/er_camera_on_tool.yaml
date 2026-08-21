@@ -1,0 +1,3 @@
+robot: er
+setup: camera_on_tool
+pose_format: er_mm_rpy_deg

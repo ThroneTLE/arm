@@ -1,0 +1,3 @@
+robot: inexbot
+setup: camera_on_tool
+pose_format: inexbot_m_quaternion_xyzw
