@@ -104,4 +104,4 @@ cd /home/throne/workspaces/arm
 
 RGB 是独立 UVC 模组，不能通过缩放像素直接与 `640×480` 红外/深度图对齐。
 RGB-D 融合前还需分别标定 RGB/IR 内参和 `IR -> RGB` 外参，再通过深度反投影完成
-三维重投影。当前标定 UI 尚不包含 RGB-IR 双目标定。
+三维重投影。当前标定 UI 尚不包含 RGB-IR 双目标定
