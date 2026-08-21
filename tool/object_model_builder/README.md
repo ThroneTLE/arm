@@ -204,7 +204,8 @@ RGB-D 视角。当前 Gemini Tag Map 使用 `DICT_APRILTAG_25h9`、75 mm Tag 边
 BundleSDF/Neural Object Field，也可先执行 TSDF 快速预览；生成的米制模型加载到
 FoundationPose 实时测试后，即可在界面中看到 `camera_from_object` 的相对 XYZ 和相机到
 物体原点距离。实时输出始终以相机光学坐标系为原点，且该入口不会执行机械臂动作。采集
-时两个 Tag 必须同时可见且物体与 Tag 保持刚性不动；相邻视角仍需有足够重叠。更详细说明见
+时双 Tag 会优先联合求解，单个 Tag 也允许作为定位回退；物体与 Tag 仍需保持刚性不动，
+相邻视角仍需有足够重叠。更详细说明见
 [`GEMINI_FOUNDATIONPOSE_DEBUG.md`](GEMINI_FOUNDATIONPOSE_DEBUG.md)。
 当前 `SV1301S_U3` 配置保持稳定的 RGB `640×480@30` 和对齐深度 `640×400@30`，
 同时请求 IR `1280×800@30`；UI 图像栏会显示驱动实际返回的尺寸。不要在未重新查询设备

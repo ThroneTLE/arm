@@ -846,7 +846,7 @@ class QtModelBuilderController(ModelBuilderApp):
         if self.capture_config.get("pose_source") == "rgbd_odometry":
             gate_text = "RGB-D 里程计 · Mask · 对齐深度 · 新视角"
         elif self.camera_config.get("backend") == "orbbec_ros":
-            gate_text = "双 AprilTag（ID0 左 / ID1 右）· Mask · 对齐深度 · 新视角"
+            gate_text = "AprilTag（ID0 左 / ID1 右，双 Tag 优先、单个也可）· Mask · 对齐深度"
         else:
             gate_text = "AprilTag · Mask · 对齐深度 · 新视角"
         gates = QLabel(gate_text)

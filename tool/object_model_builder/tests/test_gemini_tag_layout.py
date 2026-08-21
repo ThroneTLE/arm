@@ -40,6 +40,11 @@ class GeminiTagLayoutTests(unittest.TestCase):
         self.assertTrue(estimate.valid, estimate.reason)
         self.assertEqual(estimate.visible_tag_ids, (0, 1))
         self.assertLess(float(estimate.rms_reprojection_error_px), 1e-5)
+        single = TagMapPoseEstimator(layout, minimum_tags=1).estimate(
+            {0: detections[0]}, camera_matrix, distortion
+        )
+        self.assertTrue(single.valid, single.reason)
+        self.assertEqual(single.visible_tag_ids, (0,))
 
 
 if __name__ == "__main__":

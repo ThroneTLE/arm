@@ -28,11 +28,12 @@ class name once the model labels are known.
 The Model-free button follows the official FoundationPose route. Place the
 object between AprilTag ID0 (left) and ID1 (right), keep the object and the
 tags rigidly fixed, then move **only the camera** around the object and take 16
-accepted RGB-D reference views. This Gemini profile uses both Tags for every
-camera pose. The tags use the `DICT_APRILTAG_25h9` family. The Tag size is 75 mm; the black-frame bottom-right corners of ID0
+accepted RGB-D reference views. This Gemini profile prefers the joint pose from
+both Tags and falls back to a single visible Tag when necessary. The tags use
+the `DICT_APRILTAG_25h9` family. The Tag size is 75 mm; the black-frame bottom-right corners of ID0
 and ID1 are configured 150 mm apart, which means their top-left origins are also
 150 mm apart because both tags have the same yaw and size. Keep both Tags in
-view during capture. The button exports
+view during capture when possible; a single clean Tag is also accepted. The button exports
 the upstream reference layout, calls
 `FoundationPose/bundlesdf/run_nerf.py::run_neural_object_field`, trains a Neural
 Object Field, and extracts `model/model.obj`. Select that generated OBJ and

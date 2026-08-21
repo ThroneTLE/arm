@@ -948,7 +948,7 @@ class ModelBuilderApp:
             )
         elif self.camera_config.get("backend") == "orbbec_ros":
             gates = (
-                "双 AprilTag：ID0 左、ID1 右，两个 Tag 必须同时可见；"
+                "AprilTag：ID0 左、ID1 右，双 Tag 优先、单个 Tag 也可定位；"
                 "边长 75 mm，右下角间距 150 mm，物体与 Tag 保持固定。"
             )
         else:
