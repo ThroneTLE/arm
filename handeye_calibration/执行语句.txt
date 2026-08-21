@@ -1,0 +1,41 @@
+在 Ubuntu 中执行：
+cd /mnt/f/SEU/003/handeye_calibration
+PYTHON=/home/user/.venvs/handeye-003/bin/python
+运行测试：
+$PYTHON -m handeye.cli test
+终端结果：
+adapter_coordinates=PASS
+synthetic_handeye=PASS
+ER 采集一组样本：
+$PYTHON -m handeye.cli capture \
+  --robot er \
+  --robot-pose tests/fixtures/er_pose.json \
+  --camera-pose tests/fixtures/target_to_camera.json \
+  --samples data/er_samples.jsonl
+生成位置：
+/mnt/f/SEU/003/handeye_calibration/data/er_samples.jsonl
+iNeXBot 采集一组样本：
+$PYTHON -m handeye.cli capture \
+  --robot inexbot \
+  --robot-pose tests/fixtures/inexbot_pose.json \
+  --camera-pose tests/fixtures/target_to_camera.json \
+  --samples data/inexbot_samples.jsonl
+生成位置：
+/mnt/f/SEU/003/handeye_calibration/data/inexbot_samples.jsonl
+每台机械臂采集至少 15 组不同姿态后，执行求解。ER：
+$PYTHON -m handeye.cli solve \
+  --config configs/er_camera_on_tool.yaml \
+  --samples data/er_samples.jsonl \
+  --output results/er_handeye.yaml \
+  --method park
+结果文件：
+/mnt/f/SEU/003/handeye_calibration/results/er_handeye.yaml
+iNeXBot：
+$PYTHON -m handeye.cli solve \
+  --config configs/inexbot_camera_fixed.yaml \
+  --samples data/inexbot_samples.jsonl \
+  --output results/inexbot_handeye.yaml \
+  --method park
+结果文件：
+/mnt/f/SEU/003/handeye_calibration/results/inexbot_handeye.yaml
+结果 YAML 包含采样数量、求解方法和 tool_T_camera 坐标变换，平移单位为米、旋转为弧度旋转向量。
