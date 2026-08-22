@@ -51,6 +51,53 @@ def xyz_rpy_from_transform(value):
     return transform[:3, 3].copy(), np.degrees([roll, pitch, yaw])
 
 
+def transform_from_inexbot_abc(xyz_m, abc_rad):
+    """Build parent_from_child from an Inexbot/NexBot pose readback.
+
+    NexBot reports A/B/C as intrinsic X'Y'Z' Euler angles, which by the
+    duality theorem equal fixed-frame ZYX, so ``R = Rx(A) Ry(B) Rz(C)`` --
+    the REVERSE order of :func:`transform_from_xyz_rpy` (fixed XYZ).
+    Field-verified 2026-08-22 on MOKA MR07S-930 / Inexbot C1102: the wrong
+    order broke the checkerboard hand-eye solve (~190 mm / 170 deg); this
+    order collapses it (<= 2.4 mm / <= 0.74 deg with ambiguity fix).
+    """
+    a, b, c = np.asarray(abc_rad, dtype=np.float64).reshape(3)
+    ca, sa = math.cos(a), math.sin(a)
+    cb, sb = math.cos(b), math.sin(b)
+    cc, sc = math.cos(c), math.sin(c)
+    rotation_x = np.asarray([[1, 0, 0], [0, ca, -sa], [0, sa, ca]], dtype=np.float64)
+    rotation_y = np.asarray([[cb, 0, sb], [0, 1, 0], [-sb, 0, cb]], dtype=np.float64)
+    rotation_z = np.asarray([[cc, -sc, 0], [sc, cc, 0], [0, 0, 1]], dtype=np.float64)
+    transform = np.eye(4, dtype=np.float64)
+    transform[:3, :3] = rotation_x @ rotation_y @ rotation_z
+    transform[:3, 3] = np.asarray(xyz_m, dtype=np.float64).reshape(3)
+    return transform
+
+
+def transform_from_inexbot_abc_mm(xyz_mm, abc_deg):
+    return transform_from_inexbot_abc(
+        np.asarray(xyz_mm, dtype=np.float64) / 1000.0,
+        np.radians(np.asarray(abc_deg, dtype=np.float64).reshape(3)),
+    )
+
+
+def inexbot_abc_from_transform(value):
+    """Inverse of :func:`transform_from_inexbot_abc` -> ``(xyz_m, abc_rad)``.
+
+    ``R = Rx(A) Ry(B) Rz(C)``; with ``M = Rx(A)^T @ R`` one reads
+    ``A = atan2(-R[1,2], R[2,2])``, ``B = asin(R[0,2])`` and
+    ``C = atan2(M[1,0], M[1,1])``.
+    """
+    transform = as_transform(value)
+    rotation = transform[:3, :3]
+    a = math.atan2(-rotation[1, 2], rotation[2, 2])
+    sa, ca = math.sin(a), math.cos(a)
+    b = math.asin(np.clip(rotation[0, 2], -1.0, 1.0))
+    c = math.atan2(ca * rotation[1, 0] + sa * rotation[2, 0],
+                   ca * rotation[1, 1] + sa * rotation[2, 1])
+    return transform[:3, 3].copy(), np.asarray([a, b, c], dtype=np.float64)
+
+
 def rotation_angle_deg(first, second):
     relative = as_transform(first)[:3, :3].T @ as_transform(second)[:3, :3]
     cosine = np.clip((np.trace(relative) - 1.0) * 0.5, -1.0, 1.0)

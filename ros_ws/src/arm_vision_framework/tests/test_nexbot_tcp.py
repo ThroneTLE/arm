@@ -33,7 +33,7 @@ from arm_vision_framework.adapters.nexbot_tcp import (
     build_frame,
     read_frame,
 )
-from arm_vision_framework.transforms import transform_from_xyz_rpy
+from arm_vision_framework.transforms import transform_from_inexbot_abc
 
 
 class FakeController:
@@ -193,8 +193,11 @@ class NexBotControllerTest(unittest.TestCase):
         state = controller.read_state()
         controller.close()
         self.assertTrue(state.valid)
-        expected = transform_from_xyz_rpy(
-            [0.8637, -0.0564, 0.92296], np.degrees([3.14159265359, 0.0, 0.065227250055])
+        # NexBot A/B/C are intrinsic X'Y'Z' (== fixed ZYX): R = Rx Ry Rz.
+        # Field-verified 2026-08-22 on MOKA MR07S-930 / Inexbot C1102 (the
+        # old fixed-XYZ order broke checkerboard hand-eye by ~190 mm).
+        expected = transform_from_inexbot_abc(
+            [0.8637, -0.0564, 0.92296], [3.14159265359, 0.0, 0.065227250055]
         )
         self.assertTrue(np.allclose(state.base_from_gripper, expected, atol=1e-9))
         self.assertAlmostEqual(state.timestamp_s, 1759052356.2641383, places=6)

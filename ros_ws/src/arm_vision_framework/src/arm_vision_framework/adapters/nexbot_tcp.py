@@ -35,7 +35,13 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 import numpy as np
 
 from ..interfaces import RobotController
-from ..transforms import as_transform, transform_from_xyz_rpy, xyz_rpy_from_transform
+from ..transforms import (
+    as_transform,
+    inexbot_abc_from_transform,
+    transform_from_inexbot_abc,
+    transform_from_xyz_rpy,
+    xyz_rpy_from_transform,
+)
 from ..types import RobotState
 from .inexbot_modbus import (
     ControllerConnectionError,
@@ -422,8 +428,12 @@ class NexBotTcpRobotController(RobotController):
             timestamp_s = float(timestamp[0]) + float(timestamp[1]) / 1e9
         xyz_mm = np.asarray(pose[:3], dtype=np.float64)
         abc_rad = np.asarray(pose[3:6], dtype=np.float64)
-        base_from_gripper = transform_from_xyz_rpy(
-            xyz_mm / 1000.0, np.degrees(abc_rad)
+        # IMPORTANT: NexBot A/B/C are intrinsic X'Y'Z' (== fixed ZYX), so the
+        # rotation is Rx(A)Ry(B)Rz(C) -- NOT the fixed XYZ order that
+        # transform_from_xyz_rpy uses.  Field-verified 2026-08-22: using the
+        # wrong order broke the checkerboard hand-eye solve by ~190 mm.
+        base_from_gripper = transform_from_inexbot_abc(
+            xyz_mm / 1000.0, abc_rad
         )
         return RobotState(
             valid=True,
@@ -435,7 +445,7 @@ class NexBotTcpRobotController(RobotController):
 
     def move_to(self, base_from_gripper, speed_scale=0.1):
         matrix = as_transform(base_from_gripper, "base_from_gripper")
-        xyz_m, rpy_deg = xyz_rpy_from_transform(matrix)
+        xyz_m, abc_rad = inexbot_abc_from_transform(matrix)
         point = InexbotPoint(
             name="P0001",
             coordinate_system=COORD_CARTESIAN,
@@ -443,7 +453,7 @@ class NexBotTcpRobotController(RobotController):
             shape=1,
             tool_id=0,
             user_id=0,
-            axes=[*(xyz_m * 1000.0), *np.radians(np.asarray(rpy_deg, dtype=np.float64)), 0.0],
+            axes=[*(xyz_m * 1000.0), *abc_rad, 0.0],
         )
         velocity = _clamp(round(float(speed_scale) * 1000.0), 1, 1000)
         self.move_l([point], speed_mm_s=velocity)

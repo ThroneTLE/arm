@@ -35,6 +35,49 @@ def transform_from_xyz_rpy(xyz_m: Sequence[float], rpy_deg: Sequence[float]):
     return transform
 
 
+def transform_from_inexbot_abc(xyz_m: Sequence[float], abc_rad: Sequence[float]):
+    """Build a parent_from_child matrix from an Inexbot/NexBot pose readback.
+
+    The NexBot controller reports A/B/C as intrinsic X'Y'Z' Euler angles,
+    which by the duality theorem equal fixed-frame ZYX, so the rotation is
+    ``R = Rx(A) @ Ry(B) @ Rz(C)`` -- the REVERSE composition order of
+    :func:`transform_from_xyz_rpy` (fixed-frame XYZ / intrinsic ZYX).
+
+    Field-verified 2026-08-22 on MOKA MR07S-930 / Inexbot C1102 (RTL-22.07,
+    state service ``realPosPCS``): using this order collapsed the checkerboard
+    hand-eye residuals from ~190 mm / 170 deg to <= 2.4 mm / <= 0.74 deg.
+    """
+    a, b, c = np.asarray(abc_rad, dtype=np.float64).reshape(3)
+    ca, sa = math.cos(a), math.sin(a)
+    cb, sb = math.cos(b), math.sin(b)
+    cc, sc = math.cos(c), math.sin(c)
+    rotation_x = np.asarray([[1, 0, 0], [0, ca, -sa], [0, sa, ca]], dtype=np.float64)
+    rotation_y = np.asarray([[cb, 0, sb], [0, 1, 0], [-sb, 0, cb]], dtype=np.float64)
+    rotation_z = np.asarray([[cc, -sc, 0], [sc, cc, 0], [0, 0, 1]], dtype=np.float64)
+    transform = np.eye(4, dtype=np.float64)
+    transform[:3, :3] = rotation_x @ rotation_y @ rotation_z
+    transform[:3, 3] = np.asarray(xyz_m, dtype=np.float64).reshape(3)
+    return transform
+
+
+def inexbot_abc_from_transform(matrix) -> Tuple[np.ndarray, np.ndarray]:
+    """Inverse of :func:`transform_from_inexbot_abc`: extract ``(xyz_m, abc_rad)``.
+
+    ``R = Rx(A) Ry(B) Rz(C)``, so with ``M = Rx(A)^T @ R`` one reads
+    ``A = atan2(-R[1,2], R[2,2])``, ``B = asin(R[0,2])`` and
+    ``C = atan2(M[1,0], M[1,1])`` (angles in radians).
+    """
+    transform = as_transform(matrix)
+    rotation = transform[:3, :3]
+    r11, r12, r21, r22 = rotation[1, 1], rotation[1, 2], rotation[2, 1], rotation[2, 2]
+    a = math.atan2(-r12, r22)
+    sa, ca = math.sin(a), math.cos(a)
+    b = math.asin(np.clip(rotation[0, 2], -1.0, 1.0))
+    c = math.atan2(ca * rotation[1, 0] + sa * rotation[2, 0],
+                   ca * rotation[1, 1] + sa * rotation[2, 1])
+    return transform[:3, 3].copy(), np.asarray([a, b, c], dtype=np.float64)
+
+
 def xyz_rpy_from_transform(matrix) -> Tuple[np.ndarray, np.ndarray]:
     transform = as_transform(matrix)
     rotation = transform[:3, :3]

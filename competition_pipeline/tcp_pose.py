@@ -9,11 +9,13 @@ This module is Qt-free: the UI thread worker lives in ``ui.py`` and only this
 thin boundary (endpoint, read, close) is covered by offline tests.
 """
 
-from .geometry import xyz_rpy_from_transform
+from .geometry import inexbot_abc_from_transform
 from .nexbot_tcp import (
     NexBotTcpEndpoint,
     NexBotTcpRobotController,
 )
+
+import numpy as np
 
 
 def pose_endpoint_from_config(controller_settings):
@@ -59,11 +61,16 @@ class NexBotTcpPoseSource:
         return self
 
     def read(self):
-        """Return ``(xyz_mm, rpy_deg)`` of the current controller TCP pose."""
+        """Return ``(xyz_mm, abc_deg)`` of the current controller TCP pose.
+
+        Angles are the controller-native A/B/C (intrinsic X'Y'Z'), so the
+        numbers match the teach pendant's tool-coordinate display -- this is
+        the verification step before every hand-eye sample.
+        """
         controller = self.connect().controller
         state = controller.read_state()
-        xyz_m, rpy_deg = xyz_rpy_from_transform(state.base_from_gripper)
-        return tuple(xyz_m * 1000.0), tuple(rpy_deg)
+        xyz_m, abc_rad = inexbot_abc_from_transform(state.base_from_gripper)
+        return tuple(xyz_m * 1000.0), tuple(np.degrees(abc_rad))
 
     def close(self):
         if self._controller is not None:

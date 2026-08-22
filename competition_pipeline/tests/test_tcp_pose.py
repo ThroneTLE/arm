@@ -116,22 +116,19 @@ class PoseSourceTest(unittest.TestCase):
         ))
 
     def test_read_returns_mm_and_deg(self):
-        from competition_pipeline.geometry import transform_from_xyz_rpy_mm
+        from competition_pipeline.geometry import transform_from_inexbot_abc_mm
         source = self._source()
-        xyz_mm, rpy_deg = source.read()
+        xyz_mm, abc_deg = source.read()
         source.close()
         self.assertTrue(np.allclose(xyz_mm, [863.7, -56.4, 922.96], atol=1e-9))
-        # Convention-independent check: the returned mm/deg re-builds the same
-        # 4x4 transform the wire pose encoded (roll is reported as -180 deg
-        # for the antipodal equivalent; both are the same rotation).
-        rebuilt = transform_from_xyz_rpy_mm(xyz_mm, rpy_deg)
-        yaw = 0.065227250055
-        expected = np.asarray([
-            [np.cos(yaw), np.sin(yaw), 0.0, 0.8637],
-            [np.sin(yaw), -np.cos(yaw), 0.0, -0.0564],
-            [0.0, 0.0, -1.0, 0.92296],
-            [0.0, 0.0, 0.0, 1.0],
-        ])
+        # The returned mm/deg re-builds the same 4x4 transform the wire pose
+        # encoded, under the controller-native A/B/C convention (intrinsic
+        # X'Y'Z' -> R = Rx(A) Ry(B) Rz(C)); field-verified 2026-08-22.
+        rebuilt = transform_from_inexbot_abc_mm(xyz_mm, abc_deg)
+        a, b, c = 3.14159265359, 0.0, 0.065227250055
+        expected = transform_from_inexbot_abc_mm(
+            [863.7, -56.4, 922.96], np.degrees([a, b, c])
+        )
         self.assertTrue(np.allclose(rebuilt, expected, atol=1e-6))
         # the wire saw exactly one 0x9512 state query
         self.assertEqual(self.server.received[0][0], CMD_QUERY)

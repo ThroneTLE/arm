@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import cv2
+import itertools
 import numpy as np
 
 from .checkerboard_target import CHECKERBOARD_TARGET, CheckerboardTarget
@@ -175,6 +176,99 @@ class HandEyeCalibrator:
         ])
         return translation_errors, rotation_errors
 
+    def _checkerboard_ambiguity_options(self):
+        """Return per-sample candidate branches for the 180-degree corner ambiguity.
+
+        A symmetric checkerboard has no unique "first corner": depending on the
+        camera roll at capture time OpenCV may order the corners starting from
+        the opposite corner, which also shifts the object-frame origin.  The
+        second PnP correspondence therefore equals ``T @ inv(M)`` with
+        ``M = [diag(-1,-1,1), (cols*square, rows*square, 0); 0 1]``.
+        Field-verified 2026-08-22: without this, checkerboard hand-eye samples
+        split into two internally-consistent clusters where pairwise
+        delta-rotation angles disagreed by ~140-178 deg.
+        """
+        settings = self.config.data["hand_eye"]["calibration_target"]["checkerboard"]
+        cols = int(settings["squares_x"]) - 1
+        rows = int(settings["squares_y"]) - 1
+        side = float(settings["square_size_mm"]) / 1000.0
+        offset = np.asarray([cols * side, rows * side, 0.0], dtype=np.float64)
+        matrix = np.eye(4, dtype=np.float64)
+        matrix[:3, :3] = np.diag([-1.0, -1.0, 1.0])
+        matrix[:3, 3] = offset
+        inverse = np.linalg.inv(matrix)
+        options = []
+        for sample in self.samples:
+            camera_from_target = sample.camera_from_target
+            options.append([camera_from_target, camera_from_target @ inverse])
+        return options
+
+    def _resolve_checkerboard_ambiguity(self):
+        """Normalize the checkerboard correspondence branch per sample."""
+        options = self._checkerboard_ambiguity_options()
+        count = len(self.samples)
+
+        def costs(branches):
+            cal = type(self)(self.config)
+            for index, branch in enumerate(branches):
+                cal.samples.append(type("S", (), {
+                    "base_from_tcp": self.samples[index].base_from_tcp,
+                    "camera_from_target": branch,
+                    "target_type": CHECKERBOARD_TARGET,
+                    "target_corner_count": self.samples[index].target_corner_count,
+                })())
+            try:
+                estimate = self._hand_eye_from_samples(
+                    cal.samples, tuple(range(count))
+                )
+                translation_errors, rotation_errors = self._checkerboard_residuals(
+                    cal.samples, estimate
+                )
+            except (ValueError, cv2.error, np.linalg.LinAlgError):
+                return None
+            return translation_errors, rotation_errors, estimate
+
+        def spread(result):
+            return float(np.max(result[0])) * 3.0 + float(np.max(result[1]))
+
+        if count <= 10:
+            best = None
+            for combo in itertools.product((0, 1), repeat=count):
+                branches = [options[index][combo[index]] for index in range(count)]
+                result = costs(branches)
+                if result is None:
+                    continue
+                value = spread(result)
+                if best is None or value < best[0]:
+                    best = (value, combo)
+            if best is not None:
+                return [options[index][best[1][index]] for index in range(count)]
+        # Greedy fallback for large sessions.
+        branches = [option[0] for option in options]
+        for _ in range(max(2, count * 2)):
+            result = costs(branches)
+            if result is None:
+                break
+            current = spread(result)
+            improved = False
+            for index in range(count):
+                flipped = list(branches)
+                flipped[index] = (
+                    options[index][1]
+                    if branches[index] is options[index][0]
+                    else options[index][0]
+                )
+                result = costs(flipped)
+                if result is None:
+                    continue
+                if spread(result) < current - 1e-9:
+                    branches = flipped
+                    current = spread(result)
+                    improved = True
+            if not improved:
+                break
+        return branches
+
     def _solve_checkerboard(self, minimum, max_translation, max_rotation):
         if any(
             sample.target_type != CHECKERBOARD_TARGET
@@ -182,6 +276,12 @@ class HandEyeCalibrator:
             for sample in self.samples
         ):
             raise ValueError("checkerboard session contains incompatible Tag samples")
+        # Normalize the symmetric-board 180-degree correspondence ambiguity:
+        # samples may be split between two internally-consistent branches
+        # (verified 2026-08-22; see _checkerboard_ambiguity_options).
+        resolved = self._resolve_checkerboard_ambiguity()
+        for sample, camera_from_target in zip(self.samples, resolved):
+            sample.camera_from_target = camera_from_target
         settings = self.config.data["hand_eye"]["calibration_target"]["checkerboard"]
         translation_span = max(
             np.linalg.norm(a.base_from_tcp[:3, 3] - b.base_from_tcp[:3, 3]) * 1000.0
