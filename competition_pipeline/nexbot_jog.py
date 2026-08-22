@@ -21,6 +21,7 @@ from .geometry import as_transform, inexbot_abc_from_transform
 from .nexbot_tcp import (
     NexBotTcpEndpoint,
     NexBotTcpRobotController,
+    ControllerConnectionError,
 )
 
 #: 现场实测 (2026-08-22): DOUT15/16 = 双线圈气阀; (15,16)=(1,0) 关闭 <-> (0,1) 打开
@@ -60,22 +61,31 @@ class NexBotTcpJog:
 
         绝对运动：当前位姿 + 轴偏移 -> MOVL(coord=用户坐标)。小步长专为
         坐标核对设计，速度按 JOG_SPEED_SCALE。自动确保伺服上电（0x2311）。
+        6001 为单客户端端口，连接被抢占时重连重试一次（绝对运动幂等）。
         """
-        controller = self.controller
-        try:
-            if controller.servo_status() != 3:
-                controller.enable_servo()
-        except Exception:
-            # 上电失败不阻塞读数类动作；运动指令自会报错提示
-            pass
-        state = controller.read_state()
-        matrix = as_transform(state.base_from_gripper, "world_from_gripper")
-        delta = np.zeros(3, dtype=np.float64)
-        delta[int(axis)] = float(step_mm) / 1000.0
-        target = np.eye(4, dtype=np.float64)
-        target[:3, :3] = matrix[:3, :3]
-        target[:3, 3] = matrix[:3, 3] + delta
-        controller.move_to(target, speed_scale=JOG_SPEED_SCALE)
+        last_error = None
+        for _attempt in (1, 2):
+            try:
+                controller = self.controller
+                try:
+                    if controller.servo_status() != 3:
+                        controller.enable_servo()
+                except Exception:
+                    pass
+                state = controller.read_state()
+                matrix = as_transform(state.base_from_gripper, "world_from_gripper")
+                delta = np.zeros(3, dtype=np.float64)
+                delta[int(axis)] = float(step_mm) / 1000.0
+                target = np.eye(4, dtype=np.float64)
+                target[:3, :3] = matrix[:3, :3]
+                target[:3, 3] = matrix[:3, 3] + delta
+                controller.move_to(target, speed_scale=JOG_SPEED_SCALE)
+                return
+            except ControllerConnectionError as error:
+                last_error = error
+                self.close()
+                time.sleep(0.5)
+        raise last_error
 
     def gripper(self, open_: bool):
         """开/关夹爪：开=(15,16)=(0,1) 关=(15,16)=(1,0)。"""
