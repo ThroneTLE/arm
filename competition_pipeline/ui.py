@@ -3526,7 +3526,7 @@ state_codec:
         tcp_config = controller.setdefault("nexbot_tcp", {})
         tcp_config.update({
             "host": self.nexbot_host.text().strip(),
-            "port_motion": 6000,
+            "port_motion": 6001,   # 现场实测：本机实时命令口在 6001（6000 不存在）
             "port_state": int(self.nexbot_port.value()),
             "robot": int(self.nexbot_robot.value()),
         })

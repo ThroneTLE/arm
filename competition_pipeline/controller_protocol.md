@@ -111,21 +111,20 @@ controller:
 ```
 
 未拿到现场协议前保持 `enabled: false`。确认协议后，只填入现场提供的 IP、端口、单元
-号和地址映射，例如：
+号和地址映射，例如（**现场实测 2026-08-22**，MOKA MR07S-930 / Inexbot C1102 /
+RTL-22.07：控制器 192.168.1.200，Modbus TCP 从站端口 502 可读写，但地址映射需官方
+《Modbus地址码列表》，主控制通道请用下方 `nexbot_tcp`：运动 6001 / 状态 7000）：
 
 ```yaml
 controller:
-  enabled: true
+  enabled: false            # Modbus 备用通道未完成地址映射前保持关闭
   transport: modbus_tcp
-  host: 192.168.1.20       # 示例占位，不能直接使用
-  port: 502                # 仅在现场确认 Modbus TCP 后填写
+  host: 192.168.1.200       # 现场实测值（原示例占位 192.168.1.20 已作废）
+  port: 502
   unit_id: 1
   remote_io:
-    outputs:
-      gripper_open: 100    # 待现场确认
-      gripper_close: 101   # 待现场确认
-    inputs:
-      gripper_done: 200    # 待现场确认
+    outputs: {}
+    inputs: {}
 ```
 
 配置校验会拒绝空的启用端点、非法单元号/地址，并始终拒绝

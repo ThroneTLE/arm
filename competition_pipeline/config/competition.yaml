@@ -5,11 +5,13 @@ frames:
   color_camera: camera_color_optical_frame
   depth_camera: camera_color_optical_frame
 controller:
+  # 现场实测（2026-08-22）：Modbus TCP 从站 192.168.1.200:502 可读写，
+  # 但完整寄存器映射需官方《Modbus地址码列表》；主控制通道用 nexbot_tcp（6001/7000）。
   enabled: false
   transport: modbus_tcp
-  host: ''
-  port: null
-  unit_id: null
+  host: '192.168.1.200'
+  port: 502
+  unit_id: 1
   connect_timeout_s: 2.0
   io_timeout_s: 1.0
   keepalive: true
@@ -41,11 +43,19 @@ controller:
     enabled: false
     protocol: vendor_sdk_required
   nexbot_tcp:
-    host: ''
-    port_motion: 6000
+    # 现场实测（2026-08-22，MOKA MR07S-930 / Inexbot C1102 / RTL-22.07）：
+    #   控制器通过"交换机共享示教器口"接入，IP 192.168.1.200；
+    #   实时命令口在 6001（6000 不存在）；状态查询 7000（0x9512）。
+    #   已标定：工具手 1（0x380B 实测 curToolNum=1）、用户坐标系 1；
+    #   复位点 = 拍摄点（回退/复位即取图位姿，拍照时相机视野覆盖工作区）。
+    #   read_state 优先解析 realPosPCS（工具坐标=TCP 相对基座）。
+    host: '192.168.1.200'
+    port_motion: 6001
     port_state: 7000
     robot: 1
     channel: 1
+    tool_id: 1
+    user_id: 1
   remote_io:
     outputs: {}
     inputs: {}

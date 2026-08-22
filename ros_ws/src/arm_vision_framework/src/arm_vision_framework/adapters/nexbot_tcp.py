@@ -404,19 +404,24 @@ class NexBotTcpRobotController(RobotController):
     # -- RobotController interface ----------------------------------------
 
     def read_state(self, now_s=None) -> RobotState:
-        data = self._request_state(["realPosMCS", "realPosACS"])
+        # Field-tested on MOKA MR07S-930 / Inexbot C1102 (RTL-22.07): with the
+        # calibrated 工具手1 active the state service reports the TCP pose in
+        # "realPosPCS" (tool coordinate = TCP w.r.t. robot base), which is the
+        # pose the hand-eye calibration samples need.  MCS is kept as fallback
+        # (older builds / fake-server tests) and for cross-checking.
+        data = self._request_state(["realPosPCS", "realPosMCS", "realPosACS"])
         reply = data.get("replyData") or {}
-        mcs = reply.get("realPosMCS")
-        if not isinstance(mcs, list) or len(mcs) < 6:
+        pose = reply.get("realPosPCS") or reply.get("realPosMCS")
+        if not isinstance(pose, list) or len(pose) < 6:
             raise ControllerProtocolError(
-                "state reply is missing realPosMCS: {}".format(json.dumps(data, ensure_ascii=False)[:200])
+                "state reply is missing realPosPCS/realPosMCS: {}".format(json.dumps(data, ensure_ascii=False)[:200])
             )
         timestamp = reply.get("timestamp")
         timestamp_s = None
         if isinstance(timestamp, list) and len(timestamp) >= 2:
             timestamp_s = float(timestamp[0]) + float(timestamp[1]) / 1e9
-        xyz_mm = np.asarray(mcs[:3], dtype=np.float64)
-        abc_rad = np.asarray(mcs[3:6], dtype=np.float64)
+        xyz_mm = np.asarray(pose[:3], dtype=np.float64)
+        abc_rad = np.asarray(pose[3:6], dtype=np.float64)
         base_from_gripper = transform_from_xyz_rpy(
             xyz_mm / 1000.0, np.degrees(abc_rad)
         )
