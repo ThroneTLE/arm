@@ -1,12 +1,15 @@
 """一键抓取 demo（用户坐标系1）：设抓取位/放置位 → 一键抓取。
 
-序列（每段 move_to_ucs 都做"等到位"验证，出轨/超差立即报错停止）：
+序列（每段 move_to_ucs 都做"等到位"验证，超差/出错立即停止）：
     抓取位上方(抬起高度) → 抓取位 → 夹爪合 → 抬升 → 放置位上方 → 放置位
     → 夹爪开 → 抬升 → 完成
 速度默认 100 mm/s（= 传送面板同一档，实测 ±0.01mm 级）。
 
 急停：面板【急停】直发 0x2314（jog 的 _estop_lock 通道，不排队），
-并置中止标志——demo 在步骤间 0.3s 检查一次，中止后不再发后续运动。
+并置中止标志——demo 序列在步骤间检查，中止后不再发后续运动。
+
+线程纪律：所有 QThread 读取/执行，仅通过 pyqtSignal 回调到 Qt 主线程
+更新控件（禁止非主线程 setValue/setText，会闪退）。
 """
 
 import threading
@@ -20,7 +23,7 @@ from PyQt5.QtWidgets import (
 
 
 class GraspDemoWorker(QThread):
-    """一键抓取序列（工作线程，独立强引用防 QThread 崩溃）。"""
+    """一键抓取序列（工作线程，上层强引用防 QThread 被 GC）。"""
 
     done = pyqtSignal(bool, str)
 
@@ -57,24 +60,59 @@ class GraspDemoWorker(QThread):
                 if self.abort.is_set():
                     self.done.emit(False, "已急停中止（跳过：{}）".format(name))
                     return
-                if xyz is None:                      # 夹爪动作
-                    if "合" in name:
-                        jog.gripper(False)
-                    else:
-                        jog.gripper(True)
+                if xyz is None:
+                    jog.gripper(False) if "合" in name else jog.gripper(True)
                     time.sleep(0.5)                  # 气阀动作时间
                     continue
                 jog.move_to_ucs(xyz, abc, vel_mm_s=self.vel,
                                 tolerance_mm=self.tolerance)
             self.done.emit(True, "✅ 一键抓取完成：抓取({:.1f},{:.1f},{:.1f}) → "
-                                "放置({:.1f},{:.1f},{:.1f}) mm".format(
-                                    *g_xyz, *p_xyz))
+                                 "放置({:.1f},{:.1f},{:.1f}) mm".format(
+                                     *g_xyz, *p_xyz))
         except Exception as error:
             self.done.emit(False, "抓取失败：{}".format(error))
 
 
+class _ReadbackThread(QThread):
+    """回读当前位姿（回调自动回到 Qt 主线程）。"""
+
+    done = pyqtSignal(object)
+
+    def __init__(self, jog_provider, parent=None):
+        super().__init__(parent)
+        self.jog_provider = jog_provider
+
+    def run(self):
+        try:
+            jog = self.jog_provider()
+            xyz, abc_deg = jog.current_pose()
+            self.done.emit(("OK", xyz, abc_deg))
+        except Exception as error:
+            self.done.emit(("ERR", str(error)))
+
+
+class _EstopThread(QThread):
+    """急停直发 + 中止序列标志（回调主线程更新状态）。"""
+
+    done = pyqtSignal(object)
+
+    def __init__(self, jog_provider, demo_worker, parent=None):
+        super().__init__(parent)
+        self.jog_provider = jog_provider
+        self.demo_worker = demo_worker
+
+    def run(self):
+        try:
+            self.jog_provider().emergency_stop()
+            if self.demo_worker is not None:
+                self.demo_worker.abort.set()
+            self.done.emit(("OK",))
+        except Exception as error:
+            self.done.emit(("ERR", str(error)))
+
+
 def _pose_rows(group):
-    """紧凑布局：X/Y/Z 一行 + A/B/C 一行 + 按钮行。返回 dict。"""
+    """紧凑布局：X/Y/Z 一行 + A/B/C 一行。返回 dict。"""
     out = {}
 
     def _add(axis, unit, rng, row, col):
@@ -102,10 +140,8 @@ def _pose_rows(group):
     return out
 
 
-class _ReadbackThread(QThread):
-    """回读当前位姿（QThread：回调自动回到 Qt 主线程，绝不非主线程操作控件）。"""
-
-    done = pyqtSignal(object)
+class GraspDemoPanel(QGroupBox):
+    """一键抓取（用户坐标系1）：移到目标后【设为当前…】，再一键执行。"""
 
     def __init__(self, jog_provider, parent=None):
         super().__init__("一键抓取（用户坐标系1）· 移到目标后【设为当前…】再一键执行", parent)
@@ -117,7 +153,7 @@ class _ReadbackThread(QThread):
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
 
-        g_box = QGroupBox("抓取位")
+        g_box = QGroupBox("抓取位（先移到目标处再点【设为当前抓取位】）")
         g_layout = QGridLayout(g_box)
         self.g_spins = _pose_rows(g_layout)
         self.g_set = QPushButton("设为当前抓取位")
@@ -125,7 +161,7 @@ class _ReadbackThread(QThread):
         g_layout.addWidget(self.g_set, 2, 0, 1, 6)
         grid.addWidget(g_box, 0, 0, 1, 4)
 
-        p_box = QGroupBox("放置位")
+        p_box = QGroupBox("放置位（先移到目标处再点【设为当前放置位】）")
         p_layout = QGridLayout(p_box)
         self.p_spins = _pose_rows(p_layout)
         self.p_set = QPushButton("设为当前放置位")
@@ -141,7 +177,7 @@ class _ReadbackThread(QThread):
         self.vel.setRange(10.0, 250.0)
         self.vel.setValue(100.0)
         self.vel.setSuffix(" mm/s")
-        grid.addWidget(QLabel("抬起高度"), 2, 0)
+        grid.addWidget(QLabel("抬起"), 2, 0)
         grid.addWidget(self.lift, 2, 1)
         grid.addWidget(QLabel("速度"), 2, 2)
         grid.addWidget(self.vel, 2, 3)
@@ -167,6 +203,7 @@ class _ReadbackThread(QThread):
 
     def _read_into(self, spins, label):
         self.status.setText("⏳ 回读当前位姿…")
+        worker = _ReadbackThread(self.jog_provider)
 
         def _done(payload):
             if payload[0] == "ERR":
@@ -174,7 +211,7 @@ class _ReadbackThread(QThread):
                 return
             _ok, xyz, abc_deg = payload
             for k, v in zip(("X", "Y", "Z"), xyz):
-                spins[k].setValue(float(v))          # 主线程回调，安全
+                spins[k].setValue(float(v))
             for k, v in zip(("A", "B", "C"), abc_deg):
                 spins[k].setValue(float(v))
             self.status.setText(
@@ -182,7 +219,6 @@ class _ReadbackThread(QThread):
                     label, *xyz)
             )
 
-        worker = _ReadbackThread(self.jog_provider)
         worker.done.connect(_done)
         self._keep(worker)
 
@@ -220,27 +256,16 @@ class _ReadbackThread(QThread):
 
     def _on_estop(self):
         self.status.setText("🚨 急停发送中…")
-
-        class _EstopThread(QThread):
-            done = pyqtSignal(object)
-
-            def run(self):
-                try:
-                    self.jog_provider().emergency_stop()
-                    for worker in self._workers:
-                        if isinstance(worker, GraspDemoWorker):
-                            worker.abort.set()
-                    self.done.emit(("OK",))
-                except Exception as error:
-                    self.done.emit(("ERR", str(error)))
-
-        worker = _EstopThread(self.jog_provider)
+        demo_worker = next(
+            (w for w in self._workers if isinstance(w, GraspDemoWorker)), None
+        )
+        worker = _EstopThread(self.jog_provider, demo_worker)
 
         def _done(payload):
             if payload[0] == "ERR":
                 self.status.setText("急停失败：{}".format(payload[1]))
             else:
-                self.status.setText("🚨 急停已发送并中止序列（请现场确认机器人已停）")
+                self.status.setText("🚨 急停已发送并中止序列（现场确认机器人已停）")
 
         worker.done.connect(_done)
         self._keep(worker)
