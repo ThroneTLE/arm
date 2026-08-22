@@ -7,10 +7,11 @@ knowledge base, summarized in ``docs/纳博特通讯协议.md``.  Wire frame::
 
 CRC32 covers Length+Command+data and is sent big-endian; verified against the
 official example (``zlib.crc32`` of the documented query frame equals
-``0x9090FA38``).  Port 6000 is the real-time command channel (MOVJ ``0x4501``,
-MOVL ``0x4502``, MOVC ``0x4503``, MOVS ``0x4504``, GO_HOME ``0x3002``,
-emergency stop ``0x2314``); port 7000 is the host-computer state service
-(``0x9512`` query / ``0x9513`` reply).
+``0x9090FA38``).  Port 6001 is the real-time command channel (field-tested on
+the MOKA MR07S-930 / Inexbot C1102: 6000 stays closed, 6001 answers; MOVJ
+``0x4501``, MOVL ``0x4502``, MOVC ``0x4503``, MOVS ``0x4504``, GO_HOME
+``0x3002``, emergency stop ``0x2314``, DOUT set ``0x3601``); port 7000 is the
+host-computer state service (``0x9512`` query / ``0x9513`` reply).
 
 This adapter implements the framework ``RobotController`` boundary only.
 Every motion safety gate (dry-run, workspace, segmentation, pose freshness)
@@ -122,10 +123,15 @@ def read_frame(sock: socket.socket, max_frame_bytes: int) -> Tuple[int, Any]:
 
 @dataclass(frozen=True)
 class NexBotTcpEndpoint:
-    """Controller endpoint facts for the 6000 (motion) and 7000 (state) ports."""
+    """Controller endpoint facts for the 6001 (motion) and 7000 (state) ports.
+
+    Field-tested on the MOKA MR07S-930 (Inexbot C1102, RTL-22.07): the
+    real-time command port answers on **6001**, not 6000 (6000 stays closed;
+    verified 2026-08-22).
+    """
 
     host: str
-    port_motion: int = 6000
+    port_motion: int = 6001
     port_state: int = 7000
     robot: int = 1
     channel: int = 1
@@ -267,9 +273,9 @@ def _clamp(value: int, minimum: int, maximum: int) -> int:
 
 
 class NexBotTcpRobotController(RobotController):
-    """Framework ``RobotController`` over the NexBot 6000/7000 ports.
+    """Framework ``RobotController`` over the NexBot 6001/7000 ports.
 
-    Motion commands go to port 6000 (MOVJ ``0x4501``, MOVL ``0x4502``,
+    Motion commands go to port 6001 (MOVJ ``0x4501``, MOVL ``0x4502``,
     emergency stop ``0x2314``); state queries go to port 7000 (``0x9512``).
     Both connections are lazy and guarded by per-port locks, so one instance
     is safe to share across polling and execution threads.
@@ -477,7 +483,7 @@ def nexbot_tcp_client_from_config(settings):
         )
     return NexBotTcpEndpoint(
         host=host,
-        port_motion=int(config.get("port_motion", 6000)),
+        port_motion=int(config.get("port_motion", 6001)),
         port_state=int(config.get("port_state", 7000)),
         robot=int(config.get("robot", 1)),
         channel=int(config.get("channel", 1)),
