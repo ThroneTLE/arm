@@ -1,9 +1,12 @@
 schema_version: 1
 
+# 大权重/网格不入 Git。以下路径是本机验证过的位置。
+# 注意 fp_release 有两份：
+#   tool/arm_project_20260822/fp_release_20260821_155930/  <- 完整(含 lemon/orange), 用这份
+#   /home/throne/workspaces/fp_release_20260821_155930/    <- 缺 lemon/orange, 不要用
 paths:
-  # The migrated release keeps large weights/meshes outside Git.  These defaults
-  # match the local workspace used for verification; change them on other hosts.
-  yolo_weights: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/yolo_model.pt
+  # 2026-08-22 新权重。类别名与旧权重有两处不同, 见 yolo_to_object 的说明。
+  yolo_weights: /home/throne/workspaces/arm/trans/merged_best.pt
   foundationpose_root: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus
   static_frame_dir: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/static_frame
   debug_dir: /home/throne/workspaces/arm_data/foundationpose_gemini_debug/runtime
@@ -17,26 +20,43 @@ object_models:
   lemon: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/lemon/mesh/lemon.obj
   red_apple: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/apple/mesh/apple.obj
   green_apple: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/apple/mesh/apple.obj
-  bottle: ''
+  # 2026-08-22 新增(来自 trans/)。GLB 直接可用——banana 早就是 GLB, 无需转换。
+  cola: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/cola/mesh/cola.glb
+  nescafe: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/nescafe/mesh/nescafe.glb
+  # 备选柠檬(trans/柠檬.glb)。**未启用**: 它与已验证的 lemon.obj 比例不同 ——
+  # 同样按长轴 90mm 缩放时次轴只有 49.5mm, 而实测柠檬是 68.1mm。现场验证过的是
+  # lemon.obj, 不在验收前一晚换掉。要切换就把上面 lemon: 指到这里。
+  lemon_glb: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/lemon_glb/mesh/lemon.glb
 
 object_model_scales:
-  wangzai: 0.001
-  sprite: 0.001
+  wangzai: 0.001    # 实测: 66 x 66 x 92mm, 长轴 Z, 原点=几何中心
+  sprite: 0.001     # 实测: 57 x 57 x 146.5mm, 长轴 Z, 原点=几何中心
   banana: 1.0
-  apple: 0.0213
-  orange: 1.0
-  lemon: 0.0343
+  apple: 0.0213     # 实测: 直径75mm(模型X-Z=3.52m), 果身~64mm 高
+  orange: 1.0    # orange_fixed.obj 已是米制 70mm 球形, 无需再缩放
+  lemon: 0.0343     # 实测: 长90mm(模型长轴2.62m), 直径→68mm≈65
   red_apple: 0.0213
   green_apple: 0.0213
+  cola: 1.0         # 实测: GLB 已是米制, 54.9 x 245 x 54.9mm, 长轴 Y, 原点=几何中心
+  nescafe: 0.001    # 实测: GLB 是毫米制, 60 x 169 x 60mm, 长轴 Y, 原点在瓶底下方 10mm
+  lemon_glb: 0.0236817   # 任意单位(长轴 3.8004) -> 按真实柠檬 90mm 长换算; 未启用
 
+# ⚠️ 映射按**类别名**匹配(config.resolve_object_key 先查 name 再退回 class_id),
+# 名字取自权重文件自带的 model.names, 所以新旧权重的红/绿罐索引互换是安全的。
+# 但 2026-08-22 的新权重把 6 号从 black_cola_bottle 改名为 black_red_cola_bottle,
+# 漏配就会静默落到 default_object(=sprite), 把可乐瓶当成雪碧罐去估位姿。
+# 两个名字都留着, 新旧权重都能跑。
+#   旧 yolo_model.pt : {0 apple, 1 orange, 2 lemon, 3 red_can, 4 green_can, 5 brown_bottle, 6 black_cola_bottle}
+#   新 merged_best.pt: {0 apple, 1 orange, 2 lemon, 3 green_can, 4 red_can, 5 brown_bottle, 6 black_red_cola_bottle}
 yolo_to_object:
-  apple: apple
-  orange: orange
-  lemon: lemon
-  red_can: sprite
-  green_can: sprite
-  brown_bottle: bottle
-  black_cola_bottle: bottle
+  apple: apple              # 苹果(爱给网 OBJ 模型, 米制尺寸已按真实大小缩放)
+  orange: orange            # 橙子/橘子(Orange_internal OBJ)
+  lemon: lemon              # 柠檬(柠檬 OBJ)
+  red_can: sprite           # 红罐与绿罐用同一模型(can2/mesh/can.obj)
+  green_can: sprite         # 绿罐(雪碧) -> 罐体模型 can2/mesh/can.obj
+  brown_bottle: nescafe     # 棕瓶 -> 雀巢咖啡 GLB
+  black_cola_bottle: cola       # 旧权重的名字
+  black_red_cola_bottle: cola   # 新权重(merged_best.pt)改的名字
 
 grasp_rules:
   wangzai: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
@@ -48,10 +68,12 @@ grasp_rules:
   green_apple: {type: sphere, offset_mm: 0.0, yaw_align: any}
   lemon: {type: elongated, offset_mm: 0.0, yaw_align: "y+"}
   bottle: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
+  cola: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
+  nescafe: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
 
 pipeline:
   default_object: sprite
-  target_label: lemon
+  target_label: null
   force_object: null
   tag_size_mm: 80.0
   yolo_conf: 0.85

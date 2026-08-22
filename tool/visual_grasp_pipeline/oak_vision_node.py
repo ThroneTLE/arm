@@ -52,6 +52,14 @@ from tool.visual_grasp_pipeline.geometry import (
     to_world_and_compensate,
 )
 from tool.visual_grasp_pipeline.tracking import StableTracker, parse_sequence
+from tool.visual_grasp_pipeline.ucs_grasp import (
+    UCS_PLACE_X_MM,
+    UCS_PLACE_Y_MM,
+    UcsGraspExecutorError,
+    UcsGraspRunner,
+    UcsGraspSafetyError,
+    build_jog,
+)
 
 try:
     from PIL import Image, ImageTk
@@ -66,7 +74,6 @@ DEFAULT_VISUAL_CONFIG = (
 DEFAULT_CAMERA_CONFIG = (
     PROJECT_ROOT / "tool/object_model_builder/config/object_model_builder.yaml"
 )
-
 
 @dataclass(frozen=True)
 class OakSnapshot:
@@ -215,6 +222,289 @@ def draw_pose_axes(image, camera_from_object, camera_matrix, length_m=0.06):
     return output
 
 
+def draw_mask_overlay(image, mask, alpha=0.25):
+    """旧版 draw_2d 同款: 目标掩膜绿色半透明填充 + 绿色轮廓。"""
+    output = np.asarray(image).copy()
+    mask = np.asarray(mask) > 0
+    if not np.any(mask):
+        return output
+    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    overlay = output.copy()
+    cv2.drawContours(overlay, contours, -1, (0, 255, 0), -1)
+    output = cv2.addWeighted(overlay, alpha, output, 1.0 - alpha, 0)
+    cv2.drawContours(output, contours, -1, (0, 255, 0), 2)
+    return output
+
+
+def draw_pose_box_2d(image, camera_from_object, mesh_bounds, camera_matrix):
+    """旧版 draw_posed_3d_box 同款: 物体包围盒按位姿投影, 画黄色 3D 姿态框。"""
+    output = np.asarray(image).copy()
+    pose = np.asarray(camera_from_object, dtype=np.float64).reshape(4, 4)
+    if mesh_bounds is None:
+        return output
+    mn, mx = (np.asarray(mesh_bounds[0], dtype=np.float64),
+              np.asarray(mesh_bounds[1], dtype=np.float64))
+    corners = np.array([[x, y, z]
+                        for x in (mn[0], mx[0])
+                        for y in (mn[1], mx[1])
+                        for z in (mn[2], mx[2])])
+    points = corners @ pose[:3, :3].T + pose[:3, 3]
+    if np.any(points[:, 2] <= 0.02):
+        return output
+    K = np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3)
+    px = points[:, 0] * K[0, 0] / points[:, 2] + K[0, 2]
+    py = points[:, 1] * K[1, 1] / points[:, 2] + K[1, 2]
+    pix = np.rint(np.column_stack([px, py])).astype(int)
+    edges = [(0, 1), (0, 2), (0, 4), (7, 6), (7, 5), (7, 3),
+             (1, 3), (1, 5), (2, 3), (2, 6), (4, 5), (4, 6)]
+    for a, b in edges:
+        cv2.line(output, tuple(pix[a]), tuple(pix[b]), (0, 255, 255), 2, cv2.LINE_AA)
+    return output
+
+
+def draw_mesh_contour_2d(image, camera_from_object, mesh_path, camera_matrix,
+                         scale=1.0):
+    """旧版 draw_2d 同款: 模型在估计位姿下的投影轮廓(绿色)。"""
+    output = np.asarray(image).copy()
+    try:
+        import trimesh
+        mesh = trimesh.load(str(mesh_path), process=False)
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+        vertices = np.asarray(mesh.vertices, dtype=np.float64) * float(scale)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+    except Exception:
+        return output
+    pose = np.asarray(camera_from_object, dtype=np.float64).reshape(4, 4)
+    points = vertices @ pose[:3, :3].T + pose[:3, 3]
+    z = points[:, 2]
+    if np.all(z <= 0.02):
+        return output
+    K = np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        px = points[:, 0] * K[0, 0] / np.where(z > 0.02, z, 1e-9) + K[0, 2]
+        py = points[:, 1] * K[1, 1] / np.where(z > 0.02, z, 1e-9) + K[1, 2]
+    good = np.all(z[faces] > 0.02, axis=1)
+    polygons = [np.column_stack([px[f], py[f]]).astype(np.int32)
+                for f in faces[good]]
+    silhouette = np.zeros(output.shape[:2], dtype=np.uint8)
+    if polygons:
+        cv2.fillPoly(silhouette, polygons, 255)
+    if not silhouette.any():
+        return output
+    contours, _ = cv2.findContours(silhouette, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(output, contours, -1, (0, 255, 0), 2)
+    return output
+
+
+def load_hand_eye_tcp_from_camera(competition_yaml: Path) -> np.ndarray:
+    """从 competition.yaml 读取现场手眼标定 T_tcp_color_camera(15/16 内点)。"""
+    data = yaml.safe_load(competition_yaml.read_text(encoding="utf-8"))
+    entry = data["hand_eye"]["tcp_from_color_camera"]
+    if entry.get("valid") is not True:
+        raise RuntimeError("hand_eye.tcp_from_color_camera.valid != true")
+    from competition_pipeline.geometry import as_transform
+
+    return as_transform(
+        np.asarray(entry["matrix"], dtype=np.float64),
+        "tcp_from_color_camera",
+    )
+
+
+def compose_user1_object(user1_from_tcp, tcp_from_camera, camera_from_object):
+    """Map one camera-frame object pose into controller UCS1."""
+    from competition_pipeline.geometry import as_transform
+
+    return as_transform(user1_from_tcp, "user1_from_tcp") @ as_transform(
+        tcp_from_camera, "tcp_from_camera"
+    ) @ as_transform(camera_from_object, "camera_from_object")
+
+
+def user1_pose_values(user1_from_object):
+    """Return UI-ready ``(XYZ mm, ABC deg)`` under NexBot convention."""
+    from competition_pipeline.geometry import inexbot_abc_from_transform
+
+    xyz_m, abc_rad = inexbot_abc_from_transform(user1_from_object)
+    return np.asarray(xyz_m) * 1000.0, np.degrees(np.asarray(abc_rad))
+
+
+class LiveTcpPoseReader:
+    """Best-effort live read of ``T_user1_tcp`` from the NexBot controller.
+
+    Uses the same verified path as the competition UI
+    (``competition_pipeline.tcp_pose`` -> official 7000-port ``0x9512`` state
+    service, ``pose_frame=UCS``), so the object pose can be mapped into
+    用户坐标系1 with the arm pose that is actually current at capture time
+    instead of a hand-typed constant.
+
+    ``read()`` is a one-shot state query (read-only, never sends motion).
+    """
+
+    def __init__(self, competition_yaml: Path, host: str = ""):
+        from competition_pipeline.tcp_pose import (
+            NexBotTcpPoseSource,
+            pose_endpoint_from_config,
+        )
+
+        data = yaml.safe_load(competition_yaml.read_text(encoding="utf-8"))
+        settings = json.loads(json.dumps(data.get("controller", {}) or {}))
+        if host:
+            tcp_section = settings.setdefault("nexbot_tcp", {})
+            tcp_section["host"] = str(host)
+        # Field-verified: background 0x7266 can interleave with MOVL 0x4502
+        # and make this controller reject both commands.
+        settings.setdefault("nexbot_tcp", {})["heartbeat_s"] = 0.0
+        if not settings.get("nexbot_tcp"):
+            raise RuntimeError("competition.yaml 缺少 controller.nexbot_tcp 配置")
+        self._endpoint = pose_endpoint_from_config(settings)
+        if str(self._endpoint.pose_frame).upper() != "UCS":
+            raise RuntimeError(
+                "用户系映射要求 controller.nexbot_tcp.pose_frame=UCS"
+            )
+        self._source = None
+        self._closed = False
+
+    def _ensure_source(self):
+        from competition_pipeline.tcp_pose import NexBotTcpPoseSource
+
+        if self._source is None:
+            self._source = NexBotTcpPoseSource(self._endpoint).connect()
+        return self._source
+
+    def read(self) -> np.ndarray:
+        """Return ``T_user1_tcp`` (4x4, frame=用户坐标系1).
+
+        On failure the connection is dropped so the next call reconnects
+        (the single-client state port may be held by the competition UI or
+        the controller comms service may be restarting).
+        """
+        from competition_pipeline.geometry import transform_from_inexbot_abc
+
+        try:
+            xyz_mm, abc_deg = self._ensure_source().read()
+        except Exception:
+            self._drop_source()
+            raise
+        return transform_from_inexbot_abc(
+            np.asarray(xyz_mm, dtype=np.float64) / 1000.0,
+            np.radians(np.asarray(abc_deg, dtype=np.float64)),
+        )
+
+    def _drop_source(self):
+        if self._source is not None:
+            try:
+                self._source.close()
+            except Exception:
+                pass
+            self._source = None
+
+    def detach_controller(self):
+        """Transfer the persistent controller without closing 6001/7000.
+
+        The controller accepts one client per port.  Closing this controller
+        and immediately constructing another one races the controller's slot
+        release and produces ``Connection refused``.  Execution therefore
+        takes ownership of the exact controller already used for visual TCP
+        reads.
+        """
+        source = self._ensure_source()
+        controller = source.controller
+        if controller is None:
+            raise RuntimeError("视觉 TCP reader 尚未建立 controller")
+        # NexBotTcpPoseSource owns this reference; detach it so source.close()
+        # cannot close the transferred persistent sockets.
+        source._controller = None
+        self._source = None
+        self._closed = True
+        return controller
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        self._drop_source()
+
+
+def render_workspace_3d(workspace_from_object, grasp, mesh_bounds, pose_frame,
+                        debug_dir, out_name="workspace_3d.png"):
+    """旧版 vision_node 同款 3D 工作台视图: 工作系原点 + 物体位姿框 + 抓取三叉戟."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    from matplotlib import font_manager
+
+    for _fp in ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"):
+        try:
+            font_manager.fontManager.addfont(_fp)
+        except Exception:
+            pass
+    plt.rcParams["font.sans-serif"] = ["Noto Sans CJK SC", "WenQuanYi Micro Hei",
+                                       "Noto Sans CJK JP", "DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
+
+    fig = plt.figure(figsize=(6, 6), dpi=100)
+    ax = fig.add_subplot(111, projection="3d")
+
+    # 工作系原点三叉戟(0.12 m, 同旧版 draw_3d)
+    length = 0.12
+    for i, (color, label) in enumerate(zip(["r", "g", "b"], ["X", "Y", "Z"])):
+        v = np.zeros(3)
+        v[i] = length
+        ax.plot([0, v[0]], [0, v[1]], [0, v[2]], color=color, lw=2)
+        ax.text(v[0] * 1.1, v[1] * 1.1, v[2] * 1.1, label, color=color)
+
+    # 物体位姿框(mesh bounds 米制, 由工作系位姿旋转平移)
+    if mesh_bounds is not None:
+        mn, mx = (np.asarray(mesh_bounds[0], dtype=np.float64),
+                  np.asarray(mesh_bounds[1], dtype=np.float64))
+        corners = np.array([[x, y, z]
+                            for x in (mn[0], mx[0])
+                            for y in (mn[1], mx[1])
+                            for z in (mn[2], mx[2])])
+        pts = corners @ workspace_from_object[:3, :3].T + workspace_from_object[:3, 3]
+        edges = [(0, 1), (0, 2), (0, 4), (7, 6), (7, 5), (7, 3),
+                 (1, 3), (1, 5), (2, 3), (2, 6), (4, 5), (4, 6)]
+        for a, b in edges:
+            ax.plot([pts[a, 0], pts[b, 0]], [pts[a, 1], pts[b, 1]],
+                    [pts[a, 2], pts[b, 2]], color="y", lw=2)
+    # 物体自身坐标轴
+    origin = workspace_from_object[:3, 3]
+    for i, color in enumerate(["r", "g", "b"]):
+        d = workspace_from_object[:3, i] * length * 0.5
+        ax.plot([origin[0], origin[0] + d[0]], [origin[1], origin[1] + d[1]],
+                [origin[2], origin[2] + d[2]], color=color, lw=1.5)
+    # 抓取三叉戟 + 点(加粗加大, 突出显示)
+    g0 = grasp[:3, 3]
+    for i, color in enumerate(["m", "c", "k"]):
+        d = grasp[:3, i] * 0.15
+        ax.plot([g0[0], g0[0] + d[0]], [g0[1], g0[1] + d[1]],
+                [g0[2], g0[2] + d[2]], color=color, lw=3, linestyle="--")
+    ax.scatter([g0[0]], [g0[1]], [g0[2]], color="magenta", s=60, edgecolors="k")
+    ax.text(g0[0], g0[1], g0[2] + 0.02, "  grasp", color="magenta", fontsize=9)
+
+    span = 0.35
+    ax.set_xlim(origin[0] - span, origin[0] + span)
+    ax.set_ylim(origin[1] - span, origin[1] + span)
+    ax.set_zlim(origin[2] - span, origin[2] + span)
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_zlabel("Z (m)")
+    g_mm = g0 * 1000.0
+    ax.set_title("{} | grasp t=({:.0f}, {:.0f}, {:.0f}) mm".format(
+        pose_frame, g_mm[0], g_mm[1], g_mm[2]))
+    fig.tight_layout()
+    out_dir = Path(debug_dir).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = str(out_dir / out_name)
+    fig.savefig(out_path, dpi=100)
+    plt.close(fig)
+    return out_path
+
+
 class LegacyArmClient:
     """Optional client for the legacy simulated arm_node.py only."""
 
@@ -261,6 +551,13 @@ class OakVisionNode:
         maximum_sync_delta_s: float,
         tag_provider: TagPoseProvider,
         arm_service="",
+        tcp_xyz_mm=None,
+        tcp_rpy_deg=None,
+        controller_host="",
+        no_tcp_read=False,
+        place_x_mm=UCS_PLACE_X_MM,
+        place_y_mm=UCS_PLACE_Y_MM,
+        enable_robot_motion=False,
     ):
         self.root = root
         self.config = visual_config
@@ -268,6 +565,50 @@ class OakVisionNode:
         self.tag_provider = tag_provider
         self.source = build_oak_source(oak_settings)
         self.arm = LegacyArmClient(arm_service)
+        # 用户坐标系链: T_user1_object = T_user1_tcp @ T_tcp_color_camera @ T_camera_from_object
+        # T_user1_tcp 优先控制器实时回读(coord=3 用户系1), 也可用
+        # --tcp-xyz-mm/--tcp-rpy-deg 静态指定; 两者都没有时用户1映射标记为不可用
+        # (绝不静默退化为"用户1原点"单位阵, 那会产生错误坐标)。
+        competition_yaml = (
+            Path(__file__).resolve().parents[2]
+            / "competition_pipeline" / "config" / "competition.yaml"
+        )
+        self._competition_yaml = competition_yaml
+        self._controller_host = str(controller_host or "")
+        self.place_x_mm = float(place_x_mm)
+        self.place_y_mm = float(place_y_mm)
+        self.enable_robot_motion = bool(enable_robot_motion)
+        self._jog = None
+        self._last_grasp_xyz_mm = None
+        self._last_place_xyz_mm = None
+        self._hand_eye = load_hand_eye_tcp_from_camera(competition_yaml)
+        self._live_reader = None
+        self._tcp_user1 = None
+        self._tcp_timestamp = None
+        self._tcp_source = ""
+        if tcp_xyz_mm is not None and tcp_rpy_deg is not None:
+            # 控制器约定 A/B/C(RxRyRz, 与手眼样本修正一致)
+            from competition_pipeline.geometry import transform_from_inexbot_abc
+            self._tcp_user1 = transform_from_inexbot_abc(
+                np.asarray(tcp_xyz_mm, dtype=np.float64) / 1000.0,
+                np.radians(np.asarray(tcp_rpy_deg, dtype=np.float64)),
+            )
+            self._tcp_source = "手动指定 --tcp-xyz-mm/--tcp-rpy-deg (静态)"
+        elif no_tcp_read:
+            self._tcp_source = "--no-tcp-read: 未读取机械臂位姿"
+        else:
+            try:
+                self._live_reader = LiveTcpPoseReader(
+                    competition_yaml, host=controller_host
+                )
+                self._tcp_user1 = self._live_reader.read()
+                self._tcp_timestamp = time.strftime("%H:%M:%S")
+                self._tcp_source = "控制器实时回读 (用户系1 coord=3)"
+            except Exception as error:
+                self._tcp_user1 = None
+                self._tcp_source = "控制器回读失败: {} —— 用户1映射不可用".format(
+                    error
+                )
         self.model = None
         self.tracker = StableTracker(max_miss=10)
         self.active_estimator = None
@@ -287,6 +628,54 @@ class OakVisionNode:
         root.after(50, self._update_ui)
         self._set_busy(True, "正在连接 OAK-D-PRO-FF……")
         threading.Thread(target=self._connect_camera, daemon=True).start()
+
+    def _refresh_tcp_live(self):
+        """Refresh ``T_user1_tcp`` and fail closed on every read error."""
+        if self._jog is not None:
+            # After the first execution, vision and motion intentionally share
+            # the same persistent controller instead of reopening 7000/6001.
+            try:
+                xyz_mm, abc_deg = self._jog.current_pose()
+                from competition_pipeline.geometry import transform_from_inexbot_abc
+
+                self._tcp_user1 = transform_from_inexbot_abc(
+                    np.asarray(xyz_mm, dtype=np.float64) / 1000.0,
+                    np.radians(np.asarray(abc_deg, dtype=np.float64)),
+                )
+                self._tcp_timestamp = time.strftime("%H:%M:%S")
+                self._tcp_source = "视觉/执行共享 controller (用户系1 coord=3)"
+            except Exception as error:
+                self._tcp_user1 = None
+                self._tcp_timestamp = None
+                self._tcp_source = "共享 controller 回读失败: {}".format(error)
+            return self._tcp_user1
+        if self._live_reader is None:
+            # 执行抓取时已释放回读连接(7000 单客户端, 交给执行器独占);
+            # 下次视觉计算前按需重建。
+            try:
+                self._live_reader = LiveTcpPoseReader(
+                    self._competition_yaml, host=self._controller_host
+                )
+            except Exception as error:
+                self._tcp_user1 = None
+                self._tcp_timestamp = None
+                self._tcp_source = "控制器回读失败: {} —— 用户1映射不可用".format(
+                    error
+                )
+                return None
+        try:
+            self._tcp_user1 = self._live_reader.read()
+            self._tcp_timestamp = time.strftime("%H:%M:%S")
+            self._tcp_source = "控制器实时回读 (用户系1 coord=3)"
+        except Exception as error:
+            # Eye-in-hand mapping must never combine a fresh image with a
+            # stale robot pose.  Keep the error text, but invalidate the pose.
+            self._tcp_user1 = None
+            self._tcp_timestamp = None
+            self._tcp_source = "控制器回读失败: {} —— 用户1映射不可用".format(
+                error
+            )
+        return self._tcp_user1
 
     def _build_ui(self):
         toolbar = ttk.Frame(self.root, padding=10)
@@ -316,10 +705,28 @@ class OakVisionNode:
         )
         self.start_button.pack(side="left")
 
+        grasp_row = ttk.Frame(self.root, padding=(10, 0, 10, 8))
+        grasp_row.pack(fill="x")
+        ttk.Label(grasp_row, text="一键抓取(用户1)：").pack(side="left")
+        self.grasp_button = ttk.Button(
+            grasp_row, text="执行抓取", command=self.on_grasp_execute,
+            state="disabled",
+        )
+        self.grasp_button.pack(side="left", padx=6)
+        self.estop_button = ttk.Button(
+            grasp_row, text="急停", command=self.on_grasp_estop,
+            state="disabled",
+        )
+        self.estop_button.pack(side="left")
+        self.grasp_info = ttk.Label(grasp_row, text="先运行目标序列计算坐标")
+        self.grasp_info.pack(side="left", padx=8)
+
         content = ttk.Frame(self.root, padding=(10, 0, 10, 8))
         content.pack(fill="both", expand=True)
         self.image_label = tk.Label(content, bg="#11181c")
         self.image_label.pack(side="left", fill="both", expand=True)
+        self.image3d_label = tk.Label(content, bg="#14171a")
+        self.image3d_label.pack(side="left", fill="both", expand=True, padx=(10, 0))
         result_frame = ttk.Frame(content, width=410)
         result_frame.pack(side="right", fill="y", padx=(10, 0))
         ttk.Label(result_frame, text="算法结果").pack(anchor="w")
@@ -331,7 +738,8 @@ class OakVisionNode:
         self.result_text.insert(
             "end",
             "相机：OAK-D-PRO-FF\n"
-            "流程：YOLO → FoundationPose → AprilTag/相机系 → 抓取位姿\n"
+            "流程：YOLO → FoundationPose → 手眼矩阵 → 用户坐标系1(UCS1)\n"
+            "位姿输出：物体/抓取点均已映射到用户坐标系1；相机系仅作参考\n"
             "安全：默认 Dry-run，不会发送真实机械臂运动。\n",
         )
 
@@ -498,6 +906,15 @@ class OakVisionNode:
 
     def _process_target(self, name, instance):
         snapshot = self._grab_snapshot()
+        # Freeze the TCP immediately after the RGB-D snapshot. FoundationPose
+        # may take seconds; reading TCP afterwards would pair an old image with
+        # a newer arm pose and produce a false user-frame coordinate.
+        self._refresh_tcp_live()
+        tcp_user1_at_capture = (
+            None if self._tcp_user1 is None else self._tcp_user1.copy()
+        )
+        tcp_source_at_capture = str(self._tcp_source)
+        tcp_timestamp_at_capture = self._tcp_timestamp
         objects = self._detect(snapshot)
         target = find_sequence_target(objects, name, instance)
         if target is None:
@@ -506,11 +923,11 @@ class OakVisionNode:
         mesh_path = self.config.mesh_for_object(object_key)
         if not mesh_path or not Path(mesh_path).is_file():
             raise RuntimeError("物体 {} 没有可用 CAD 网格".format(object_key))
-        mask = target.get("mask")
-        if mask is None or not np.any(mask):
-            mask = np.zeros(snapshot.depth_m.shape, dtype=np.uint8)
-            x1, y1, x2, y2 = target["xyxy"]
-            mask[y1:y2, x1:x2] = 255
+        # 掩膜: 直接用 YOLO 识别框(矩形)作为掩膜, 不使用实例分割输出
+        mask = np.zeros(snapshot.depth_m.shape, dtype=np.uint8)
+        bx1, by1, bx2, by2 = (int(round(v)) for v in target["xyxy"])
+        mask[max(0, by1):min(mask.shape[0], by2),
+             max(0, bx1):min(mask.shape[1], bx2)] = 255
         coverage = depth_coverage(snapshot.depth_m, mask)
         valid_depth = int(np.count_nonzero((snapshot.depth_m > 0.0) & (mask > 0)))
         if valid_depth < 30:
@@ -601,7 +1018,68 @@ class OakVisionNode:
         np.save(self.config.pose_file, workspace_from_object)
         np.save(self.config.grasp_file, grasp)
 
+        # 3D 工作台视图: 用户坐标系(UCS1) 基准
+        # T_user1_object = T_user1_tcp @ T_tcp_color_camera @ T_camera_from_object
+        camera_grasp = None
+        user1_from_object = None
+        user1_grasp = None
+        user1_grasp_abc_deg = None
+        viz3d = None
+        user1_object_abc_deg = None
+        if tcp_user1_at_capture is not None:
+            try:
+                camera_grasp = (
+                    compute_grasp_sphere(camera_from_object, rule.offset_mm)
+                    if rule.type == "sphere"
+                    else compute_grasp(camera_from_object, rule.offset_mm)
+                )
+                user1_from_object = compose_user1_object(
+                    tcp_user1_at_capture, self._hand_eye, camera_from_object
+                )
+                user1_grasp = (
+                    compute_grasp_sphere(user1_from_object, rule.offset_mm)
+                    if rule.type == "sphere"
+                    else compute_grasp(user1_from_object, rule.offset_mm)
+                )
+                _, user1_object_abc_deg = user1_pose_values(user1_from_object)
+                _, user1_grasp_abc_deg = user1_pose_values(user1_grasp)
+                viz3d = render_workspace_3d(
+                    user1_from_object,
+                    user1_grasp,
+                    estimator.mesh_bounds,
+                    "用户坐标系 (UCS1)",
+                    self.config.debug_dir,
+                )
+                user1_out = Path(self.config.grasp_file).with_name(
+                    "grasp_user1.npy"
+                )
+                object_user1_out = Path(self.config.pose_file).with_name(
+                    "object_pose_user1.npy"
+                )
+                np.save(user1_out, user1_grasp)
+                np.save(object_user1_out, user1_from_object)
+                print("[用户系] tcp:", tcp_source_at_capture)
+                print("[用户系] grasp XYZ(mm):",
+                      np.round(user1_grasp[:3, 3] * 1000.0, 2).tolist(),
+                      "ABC(deg):", np.round(user1_grasp_abc_deg, 2).tolist())
+            except Exception as error:
+                print("[3d] 3D 视图渲染失败(不影响算法结果):", error)
+                viz3d = None
+        else:
+            print("[用户系] 无机械臂实时位姿: 跳过用户1映射 ({}); 相机系结果不受影响".format(
+                tcp_source_at_capture))
+
         overlay = draw_boxes(overlay_base, objects)
+        # 旧版视觉: 绿框=模型投影轮廓+掩膜轮廓, 黄框=姿态框, 末尾坐标轴
+        overlay = draw_mask_overlay(overlay, mask)
+        overlay = draw_mesh_contour_2d(
+            overlay, camera_from_object, mesh_path, snapshot.intrinsics.matrix,
+            self.config.mesh_scale_for_object(object_key),
+        )
+        overlay = draw_pose_box_2d(
+            overlay, camera_from_object, estimator.mesh_bounds,
+            snapshot.intrinsics.matrix,
+        )
         overlay = draw_pose_axes(
             overlay, camera_from_object, snapshot.intrinsics.matrix
         )
@@ -611,6 +1089,14 @@ class OakVisionNode:
             "camera_from_object": camera_from_object,
             "workspace_from_object": workspace_from_object,
             "grasp": grasp,
+            "camera_grasp": camera_grasp,
+            "user1_from_object": user1_from_object,
+            "user1_object_abc_deg": user1_object_abc_deg,
+            "user1_grasp": user1_grasp,
+            "user1_grasp_abc_deg": user1_grasp_abc_deg,
+            "tcp_source_at_capture": tcp_source_at_capture,
+            "tcp_timestamp_at_capture": tcp_timestamp_at_capture,
+            "viz3d": viz3d,
             "pose_frame": pose_frame,
             "workspace_valid": workspace_valid,
             "tag_ids": tag_ids,
@@ -627,16 +1113,62 @@ class OakVisionNode:
                 ))
                 result = self._process_target(name, instance)
                 self.ui_queue.put(("image", result["overlay"]))
+                if result.get("viz3d"):
+                    self.ui_queue.put(("img3d", result["viz3d"]))
                 camera_xyz = result["camera_from_object"][:3, 3] * 1000.0
                 pose_xyz = result["workspace_from_object"][:3, 3] * 1000.0
                 grasp_xyz = result["grasp"][:3, 3] * 1000.0
+                camera_grasp_xyz = (
+                    result["camera_grasp"][:3, 3] * 1000.0
+                    if result["camera_grasp"] is not None
+                    else np.zeros(3)
+                )
+                tcp_source = result["tcp_source_at_capture"]
+                tcp_timestamp = result.get("tcp_timestamp_at_capture") or "--"
+                if result["user1_from_object"] is None:
+                    user1_text = "user1 object XYZ mm: 未映射（{}）\n".format(
+                        tcp_source
+                    )
+                    user1grasp_text = "user1 grasp XYZ mm: 未映射\n"
+                    user1objectabc_text = ""
+                    user1abc_text = ""
+                else:
+                    user1_xyz = result["user1_from_object"][:3, 3] * 1000.0
+                    user1_grasp_xyz = result["user1_grasp"][:3, 3] * 1000.0
+                    user1_abc = result.get("user1_grasp_abc_deg")
+                    object_abc = result.get("user1_object_abc_deg")
+                    user1_text = "user1 object XYZ mm: {}\n".format(
+                        np.round(user1_xyz, 2).tolist()
+                    )
+                    user1grasp_text = "user1 grasp XYZ mm: {}\n".format(
+                        np.round(user1_grasp_xyz, 2).tolist()
+                    )
+                    user1objectabc_text = (
+                        "user1 object ABC deg: {}\n".format(
+                            np.round(object_abc, 2).tolist()
+                        )
+                        if object_abc is not None
+                        else ""
+                    )
+                    user1abc_text = (
+                        "user1 grasp ABC deg: {}\n".format(
+                            np.round(user1_abc, 2).tolist()
+                        )
+                        if user1_abc is not None
+                        else ""
+                    )
                 text = (
                     "target: {name} #{instance}\n"
                     "object_key: {object_key}\n"
                     "pose_frame: {pose_frame}\n"
                     "tags: {tags}\n"
                     "depth coverage: {coverage:.1%} ({points} points)\n"
-                    "camera XYZ mm: {camera}\n"
+                    "=== 用户坐标系1 (UCS1) ===\n"
+                    "tcp 来源: {tcp_source} @ {tcp_timestamp}\n"
+                    "{user1}{user1objectabc}{user1grasp}{user1abc}"
+                    "--- 相机系 / 工作台系(参考) ---\n"
+                    "camera object XYZ mm: {camera}\n"
+                    "camera grasp XYZ mm: {cameragrasp}\n"
                     "pose XYZ mm: {pose}\n"
                     "grasp XYZ mm: {grasp}\n"
                 ).format(
@@ -647,7 +1179,14 @@ class OakVisionNode:
                     tags=result["tag_ids"],
                     coverage=result["depth_coverage"],
                     points=result["valid_depth"],
+                    tcp_source=tcp_source,
+                    tcp_timestamp=tcp_timestamp,
+                    user1=user1_text,
+                    user1objectabc=user1objectabc_text,
+                    user1grasp=user1grasp_text,
+                    user1abc=user1abc_text,
                     camera=np.round(camera_xyz, 2).tolist(),
+                    cameragrasp=np.round(camera_grasp_xyz, 2).tolist(),
                     pose=np.round(pose_xyz, 2).tolist(),
                     grasp=np.round(grasp_xyz, 2).tolist(),
                 )
@@ -659,6 +1198,24 @@ class OakVisionNode:
                         text += "arm simulator: {}\n".format(response)
                 else:
                     text += "arm: DRY-RUN（未发送运动）\n"
+                if result.get("user1_grasp") is not None:
+                    grasp = np.round(
+                        result["user1_grasp"][:3, 3] * 1000.0, 2
+                    ).tolist()
+                    self._last_grasp_xyz_mm = grasp
+                    self._last_place_xyz_mm = [
+                        self.place_x_mm, self.place_y_mm, float(grasp[2])
+                    ]
+                    text += ("✋ 一键抓取已就绪：抓取 {} → 放置 {} （姿态=复位位置初始姿态）\n".format(
+                        grasp, np.round(self._last_place_xyz_mm, 2).tolist()))
+                    self.ui_queue.put(("grasp_ready", (
+                        list(grasp), list(self._last_place_xyz_mm)
+                    )))
+                else:
+                    self._last_grasp_xyz_mm = None
+                    self._last_place_xyz_mm = None
+                    text += "✋ 一键抓取不可用（无用户1坐标）\n"
+                    self.ui_queue.put(("grasp_ready", None))
                 self.ui_queue.put(("result", text))
             self.ui_queue.put(("status", "目标序列算法运行完成"))
         except Exception as error:
@@ -671,8 +1228,132 @@ class OakVisionNode:
         state = "disabled" if self.busy else "normal"
         self.capture_button.configure(state=state)
         self.start_button.configure(state=state)
+        # Emergency stop must remain clickable during real motion/busy work.
+        self.estop_button.configure(state="normal")
+        self.grasp_button.configure(state=(
+            "disabled"
+            if (self.busy or self._last_grasp_xyz_mm is None)
+            else "normal"
+        ))
         if status is not None:
             self.status.configure(text=str(status))
+
+    # -- 一键抓取(用户坐标系1): 计算 -> 坐标确认 -> 执行 -------------------
+
+    def on_grasp_execute(self):
+        if self.busy:
+            return
+        if self._last_grasp_xyz_mm is None:
+            messagebox.showwarning(
+                "无可执行抓取",
+                "请先运行目标序列，得到用户1抓取坐标。",
+                parent=self.root,
+            )
+            return
+        grasp = list(self._last_grasp_xyz_mm)
+        place = [self.place_x_mm, self.place_y_mm, float(grasp[2])]
+        dry_run = not self.enable_robot_motion
+        if dry_run:
+            proceed = messagebox.askokcancel(
+                "Dry-run 验证（默认）",
+                "未加 --enable-robot-motion，不会发送真实运动。\n\n"
+                "抓取 XYZ(mm): {}\n"
+                "放置 XYZ(mm): {}\n"
+                "姿态: 复位位置初始姿态(只动 XYZ)\n\n"
+                "确认生成执行计划？".format(
+                    np.round(grasp, 2).tolist(), np.round(place, 2).tolist()
+                ),
+                parent=self.root,
+            )
+            if not proceed:
+                return
+        else:
+            proceed = messagebox.askokcancel(
+                "确认执行抓取（真实运动）",
+                "⚠ 机械臂将实际运动！\n\n"
+                "流程: 回复位 -> 抓取 {} -> 夹爪合 -> 放置 {} -> 夹爪开 -> 回复位\n"
+                "姿态: 按复位位置初始姿态\n\n"
+                "确认开始？".format(
+                    np.round(grasp, 2).tolist(), np.round(place, 2).tolist()
+                ),
+                parent=self.root,
+            )
+            if not proceed:
+                return
+        self._set_busy(True, "执行抓取（{}）……".format(
+            "Dry-run" if dry_run else "真实运动"
+        ))
+        threading.Thread(
+            target=self._grasp_worker, args=(grasp, dry_run), daemon=True
+        ).start()
+
+    def _grasp_worker(self, grasp_mm, dry_run):
+        try:
+            if self._jog is None:
+                # 7000/6001 均为单客户端: 不关闭后重连，直接把视觉
+                # 回读的持久 controller 移交给执行器。
+                shared_controller = None
+                if self._live_reader is not None:
+                    try:
+                        shared_controller = self._live_reader.detach_controller()
+                    except Exception as error:
+                        raise UcsGraspExecutorError(
+                            "无法复用视觉 controller: {}".format(error)
+                        ) from error
+                    self._live_reader = None
+                self._jog = build_jog(
+                    self._competition_yaml,
+                    host=self._controller_host,
+                    controller=shared_controller,
+                )
+            runner = UcsGraspRunner(
+                self._jog,
+                place_x_mm=self.place_x_mm,
+                place_y_mm=self.place_y_mm,
+                on_event=lambda message: self.ui_queue.put(("status", message)),
+            )
+            result = runner.execute(grasp_mm, dry_run=dry_run)
+            if result["status"] == "ok":
+                self.ui_queue.put((
+                    "status",
+                    "✅ 抓取-放置完成，已回到复位位置；放置实际 XYZ(mm)={}".format(
+                        np.round(result["place_xyz_mm"], 2).tolist()
+                    ),
+                ))
+            else:
+                self.ui_queue.put(("status", "Dry-run 计划生成（未发送运动）"))
+        except UcsGraspSafetyError as error:
+            self.ui_queue.put(("error", ("安全拦截", str(error))))
+        except UcsGraspExecutorError as error:
+            self.ui_queue.put(("error", ("执行抓取失败", self._grasp_error_with_hint(error))))
+        except Exception as error:
+            self.ui_queue.put(("error", ("执行抓取失败", self._grasp_error_with_hint(error))))
+        finally:
+            self.ui_queue.put(("busy", False))
+
+    def _grasp_error_with_hint(self, error) -> str:
+        message = str(error)
+        if "6001" in message and "connect" in message.lower():
+            message += (
+                "\n\n控制器实时命令口(6001)不可用。请依次确认："
+                "① 示教器切换到远程/运行模式(或拔出示教器)；"
+                "② 关闭其他占用 6001 的程序(比赛UI等，单客户端)；"
+                "③ 控制器已上电且伺服就绪。"
+            )
+        return message
+
+    def on_grasp_estop(self):
+        def _stop():
+            if self._jog is None:
+                self.ui_queue.put(("status", "急停: 尚未建立机械臂连接"))
+                return
+            try:
+                self._jog.emergency_stop()
+                self.ui_queue.put(("status", "急停已发送"))
+            except Exception as error:
+                self.ui_queue.put(("status", "急停异常: {}".format(error)))
+
+        threading.Thread(target=_stop, daemon=True).start()
 
     def _show_image(self, frame):
         rgb = cv2.cvtColor(np.asarray(frame), cv2.COLOR_BGR2RGB)
@@ -687,12 +1368,30 @@ class OakVisionNode:
         self.image_label.configure(image=photo)
         self.image_label.image = photo
 
+    def _show_image_3d(self, frame):
+        """显示 3D 工作台视图(用户1坐标系), 同旧版 vision_node 的右侧 3D 画面。"""
+        rgb = cv2.cvtColor(np.asarray(frame), cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(rgb)
+        max_width, max_height = 560, 560
+        scale = min(max_width / image.width, max_height / image.height, 1.0)
+        if scale < 1.0:
+            image = image.resize(
+                (int(image.width * scale), int(image.height * scale)), Image.LANCZOS
+            )
+        photo = ImageTk.PhotoImage(image)
+        self.image3d_label.configure(image=photo)
+        self.image3d_label.image = photo
+
     def _update_ui(self):
         try:
             while True:
                 kind, value = self.ui_queue.get_nowait()
                 if kind == "image":
                     self._show_image(value)
+                elif kind == "img3d":
+                    frame = cv2.imread(str(value))
+                    if frame is not None:
+                        self._show_image_3d(frame)
                 elif kind == "objects":
                     self.objects = list(value)
                     labels = [
@@ -711,6 +1410,22 @@ class OakVisionNode:
                     self.status.configure(text=str(value))
                 elif kind == "busy":
                     self._set_busy(bool(value))
+                elif kind == "grasp_ready":
+                    if value:
+                        grasp, place = value
+                        self.grasp_info.configure(text=(
+                            "就绪 抓取{} → 放置{}".format(
+                                np.round(grasp, 2).tolist(),
+                                np.round(place, 2).tolist(),
+                            )
+                        ))
+                    else:
+                        self.grasp_info.configure(text="未计算（无用户1坐标）")
+                    self.grasp_button.configure(state=(
+                        "disabled"
+                        if (self.busy or value is None)
+                        else "normal"
+                    ))
                 elif kind == "error":
                     title, message = value
                     self.status.configure(text=message)
@@ -733,6 +1448,18 @@ class OakVisionNode:
                 except Exception:
                     pass
                 self.active_estimator = None
+            if self._live_reader is not None:
+                try:
+                    self._live_reader.close()
+                except Exception:
+                    pass
+                self._live_reader = None
+            if self._jog is not None:
+                try:
+                    self._jog.close()
+                except Exception:
+                    pass
+                self._jog = None
             self.arm.close()
             self.root.destroy()
 
@@ -795,11 +1522,43 @@ def build_parser():
         action="store_true",
         help="capture one OAK frame, run YOLO, print JSON and exit without a UI",
     )
+    parser.add_argument(
+        "--tcp-xyz-mm", nargs=3, type=float, default=None,
+        help="手动指定 T_user1_tcp XYZ(mm), 用户坐标系; 与 --tcp-rpy-deg 同时给出",
+    )
+    parser.add_argument(
+        "--tcp-rpy-deg", nargs=3, type=float, default=None,
+        help="手动指定 A/B/C(deg), 与 --tcp-xyz-mm 同时给出",
+    )
+    parser.add_argument(
+        "--controller-host", default="",
+        help="控制器 IP 覆盖(默认用 competition.yaml 的 controller.nexbot_tcp.host)",
+    )
+    parser.add_argument(
+        "--no-tcp-read", action="store_true",
+        help="不连接控制器读取机械臂位姿(仅相机系输出, 用户1映射标记为不可用)",
+    )
+    parser.add_argument(
+        "--place-x-mm", type=float, default=UCS_PLACE_X_MM,
+        help="放置点 X(mm, 用户坐标系1, 默认 -100)",
+    )
+    parser.add_argument(
+        "--place-y-mm", type=float, default=UCS_PLACE_Y_MM,
+        help="放置点 Y(mm, 用户坐标系1, 默认 100)",
+    )
+    parser.add_argument(
+        "--enable-robot-motion", action="store_true",
+        help="允许真实机械臂运动(默认仅 Dry-run; 需在 UI 二次确认)",
+    )
     return parser
 
 
 def main(argv=None):
     arguments = build_parser().parse_args(argv)
+    if (arguments.tcp_xyz_mm is None) != (arguments.tcp_rpy_deg is None):
+        raise SystemExit(
+            "--tcp-xyz-mm 与 --tcp-rpy-deg 必须同时提供"
+        )
     visual_config = VisualGraspConfig.from_yaml(arguments.config)
     oak_settings, maximum_sync = load_oak_settings(arguments.camera_config)
     tag_provider = build_tag_provider(arguments.camera_config)
@@ -818,6 +1577,13 @@ def main(argv=None):
         maximum_sync,
         tag_provider,
         arm_service=arguments.legacy_arm_service,
+        tcp_xyz_mm=arguments.tcp_xyz_mm,
+        tcp_rpy_deg=arguments.tcp_rpy_deg,
+        controller_host=arguments.controller_host,
+        no_tcp_read=arguments.no_tcp_read,
+        place_x_mm=arguments.place_x_mm,
+        place_y_mm=arguments.place_y_mm,
+        enable_robot_motion=arguments.enable_robot_motion,
     )
     signal.signal(signal.SIGINT, lambda *_args: root.after(0, node.close))
     try:

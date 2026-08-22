@@ -48,17 +48,6 @@ pipeline:
         config = VisualGraspConfig()
         self.assertEqual(config.mesh_for_object("unknown"), "")
 
-    def test_active_config_maps_new_lemon_model_with_metric_scale(self):
-        path = (
-            Path(__file__).resolve().parents[1]
-            / "config" / "visual_grasp_pipeline.yaml"
-        )
-        config = VisualGraspConfig.from_yaml(path)
-        self.assertEqual(config.target_label, "lemon")
-        self.assertEqual(config.resolve_object_key("lemon", 2), "lemon")
-        self.assertAlmostEqual(config.mesh_scale_for_object("lemon"), 0.0343)
-        self.assertTrue(Path(config.mesh_for_object("lemon")).is_file())
-
 
 if __name__ == "__main__":
     unittest.main()

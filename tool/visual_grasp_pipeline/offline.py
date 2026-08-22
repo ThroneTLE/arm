@@ -113,10 +113,10 @@ def run_offline(config: VisualGraspConfig, label=None, save_dir=None):
         )
 
     height, width = rgb.shape[:2]
-    mask = target["mask"] if target["mask"] is not None else np.zeros((height, width), np.uint8)
-    if int(np.count_nonzero(mask)) == 0:
-        x1, y1, x2, y2 = target["xyxy"]
-        mask[y1:y2, x1:x2] = 255
+    # 掩膜: 直接用 YOLO 识别框(矩形)作为掩膜, 不使用实例分割输出
+    mask = np.zeros((height, width), np.uint8)
+    bx1, by1, bx2, by2 = (int(round(v)) for v in target["xyxy"])
+    mask[max(0, by1):min(height, by2), max(0, bx1):min(width, bx2)] = 255
 
     estimator = FoundationPosePoseEstimator(
         foundationpose_root=config.foundationpose_root,

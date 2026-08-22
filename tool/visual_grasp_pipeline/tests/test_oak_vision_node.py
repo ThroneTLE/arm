@@ -8,11 +8,14 @@ import numpy as np
 from tool.object_model_builder.rgbd_geometry import CameraIntrinsics
 from tool.visual_grasp_pipeline.oak_vision_node import (
     LegacyArmClient,
+    LiveTcpPoseReader,
     OakSnapshot,
+    compose_user1_object,
     draw_pose_axes,
     find_sequence_target,
     load_oak_settings,
     prepare_foundationpose_input,
+    user1_pose_values,
 )
 
 
@@ -20,6 +23,47 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class OakVisionNodeTests(unittest.TestCase):
+    def test_live_reader_never_enables_protocol_heartbeat(self):
+        config = PROJECT_ROOT / "competition_pipeline/config/competition.yaml"
+        reader = LiveTcpPoseReader(config)
+        try:
+            self.assertEqual(reader._endpoint.heartbeat_s, 0.0)
+        finally:
+            reader.close()
+
+    def test_live_reader_transfers_controller_without_closing_it(self):
+        controller = object()
+
+        class Source:
+            def __init__(self):
+                self._controller = controller
+
+            @property
+            def controller(self):
+                return self._controller
+
+        reader = LiveTcpPoseReader.__new__(LiveTcpPoseReader)
+        reader._source = Source()
+        reader._closed = False
+        transferred = reader.detach_controller()
+        self.assertIs(transferred, controller)
+        self.assertIsNone(reader._source)
+        self.assertTrue(reader._closed)
+
+    def test_eye_in_hand_pose_is_mapped_into_user1(self):
+        user1_from_tcp = np.eye(4)
+        user1_from_tcp[:3, 3] = [0.10, 0.20, 0.30]
+        tcp_from_camera = np.eye(4)
+        tcp_from_camera[:3, 3] = [-0.10, -0.20, -0.20]
+        camera_from_object = np.eye(4)
+        camera_from_object[:3, 3] = [0.01, -0.02, 0.05]
+        result = compose_user1_object(
+            user1_from_tcp, tcp_from_camera, camera_from_object
+        )
+        xyz_mm, abc_deg = user1_pose_values(result)
+        self.assertTrue(np.allclose(xyz_mm, [10.0, -20.0, 150.0]))
+        self.assertTrue(np.allclose(abc_deg, [0.0, 0.0, 0.0]))
+
     def test_active_camera_config_is_pinned_to_current_oak(self):
         settings, maximum_sync = load_oak_settings(
             PROJECT_ROOT / "tool/object_model_builder/config/object_model_builder.yaml"

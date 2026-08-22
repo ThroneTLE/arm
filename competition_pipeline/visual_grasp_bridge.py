@@ -34,6 +34,16 @@ from tool.object_model_builder.rgbd_geometry import CameraIntrinsics
 from tool.visual_grasp_pipeline.config import VisualGraspConfig
 from tool.visual_grasp_pipeline.geometry import fill_depth_roi
 
+from .grasp_geometry import (
+    JAW_CAVITY_DEPTH_MM,
+    MAX_PLAUSIBLE_TOP_MM,
+    MIN_PLAUSIBLE_TOP_MM,
+    SAFETY_CLEARANCE_MM,
+    grasp_height_mm,
+    object_extent_user1,
+    place_height_mm,
+)
+
 
 def _matrix(entry, name):
     if isinstance(entry, dict):
@@ -53,13 +63,24 @@ def _pose_mapping(transform):
     }
 
 
-def top_down_grasp_frame(user1_from_object, grasp_type="elongated", offset_mm=0.0):
+def top_down_grasp_frame(user1_from_object, grasp_type="elongated", offset_mm=0.0,
+                         grasp_point_user1_m=None):
     """Return the canonical top-down grasp frame used by ``planning.py``.
 
     Local ``+Z`` is the approach direction and therefore points along user
     ``-Z``.  For the lemon mesh the local X axis is the 90 mm long axis; the
     closing axis is chosen perpendicular to its horizontal projection so the
     gripper closes across the smaller diameter.
+
+    ``grasp_point_user1_m`` 覆盖抓取点的位置（米，用户系）。**必须传**，除非调用方
+    确实想要旧行为。旧行为是直接用 ``source[:3,3]``，即**网格原点**，这有两个坑：
+
+    1. 对高物体等于对准中心 -> 伸进夹爪的深度是 高度/2，超过腔体深度 80mm 就压爆
+       （现场隔壁组的瓶子就是这么爆的）；
+    2. 网格原点未必是几何中心 —— apple 偏 49.1mm、nescafe 偏 74.5mm，抓苹果会往
+       桌面下方伸。
+
+    正确的位置由 :mod:`competition_pipeline.grasp_geometry` 算，见 ``build_pick_place_plan``。
     """
 
     source = as_transform(user1_from_object, "user1_from_object")
@@ -78,7 +99,10 @@ def top_down_grasp_frame(user1_from_object, grasp_type="elongated", offset_mm=0.
     lateral = np.cross(closing, approach)
     grasp = np.eye(4, dtype=np.float64)
     grasp[:3, :3] = np.column_stack([lateral, closing, approach])
-    grasp[:3, 3] = source[:3, 3]
+    if grasp_point_user1_m is None:
+        grasp[:3, 3] = source[:3, 3]
+    else:
+        grasp[:3, 3] = np.asarray(grasp_point_user1_m, dtype=np.float64).reshape(3)
     grasp[:3, 3] += approach * (float(offset_mm) / 1000.0)
     return as_transform(grasp, "user1_from_grasp")
 
@@ -92,8 +116,29 @@ def build_pick_place_plan(
     grasp_type="elongated",
     grasp_offset_mm=0.0,
     place_offset_user_mm=(0.0, -50.0, 0.0),
+    mesh_bounds_m=None,
+    place_user_xy_mm=None,
+    jaw_cavity_depth_mm=JAW_CAVITY_DEPTH_MM,
+    safety_clearance_mm=SAFETY_CLEARANCE_MM,
+    place_clearance_mm=2.0,
 ):
-    """Compose user-frame object/grasp poses and TCP pick/place targets."""
+    """Compose user-frame object/grasp poses and TCP pick/place targets.
+
+    ``mesh_bounds_m``（米制、已应用缩放的网格包围盒，来自
+    ``FoundationPosePoseEstimator.mesh_bounds``）在时，抓取高度由
+    :mod:`competition_pipeline.grasp_geometry` 按形状类决定：
+
+        瓶/罐 (cylinder)   z = (顶点 + 中心)/2   -> 伸入深度 = 高度/4
+        水果   (其余)       z = 中心               -> 伸入深度 = 高度/2
+
+    并统一钳位在腔体可用深度内。缺包围盒时退回旧行为（用网格原点），但会在
+    ``blocked_reasons`` 里被 :func:`validate_plan` 挡下 —— 没有高度信息就没法保证
+    不压爆，不能放行。
+
+    ``place_user_xy_mm`` 给定时，放置点用**用户系绝对坐标**（任务要求"放置时需要
+    直立"，位置自定），高度按几何算成"物体底面正好坐回桌面"。未给定时退回旧的
+    ``place_offset_user_mm`` 相对偏移。
+    """
 
     camera_from_object = as_transform(camera_from_object, "camera_from_object")
     user1_from_tcp = as_transform(user1_from_tcp, "user1_from_tcp")
@@ -104,17 +149,44 @@ def build_pick_place_plan(
         raise ValueError("place offset contains non-finite values")
 
     user1_from_object = user1_from_tcp @ tcp_from_camera @ camera_from_object
+
+    extent = None
+    grasp_height = None
+    grasp_point_m = None
+    if mesh_bounds_m is not None:
+        extent = object_extent_user1(user1_from_object, mesh_bounds_m, grasp_type)
+        grasp_height = grasp_height_mm(
+            extent, grasp_type,
+            jaw_cavity_depth_mm=jaw_cavity_depth_mm,
+            safety_clearance_mm=safety_clearance_mm,
+        )
+        # XY 用包围盒中心而不是网格原点（apple/nescafe 的原点偏几十毫米）。
+        grasp_point_m = np.asarray(
+            [extent.center_xy_mm[0], extent.center_xy_mm[1], grasp_height.z_mm],
+            dtype=np.float64,
+        ) / 1000.0
+
     user1_from_grasp = top_down_grasp_frame(
-        user1_from_object, grasp_type, float(grasp_offset_mm)
+        user1_from_object, grasp_type, float(grasp_offset_mm),
+        grasp_point_user1_m=grasp_point_m,
     )
     user1_from_tcp_grasp = user1_from_grasp @ np.linalg.inv(tcp_from_grasp)
 
     user1_from_place_grasp = user1_from_grasp.copy()
-    user1_from_place_grasp[:3, 3] += offset / 1000.0
+    if place_user_xy_mm is not None and extent is not None:
+        place_xy = np.asarray(place_user_xy_mm, dtype=np.float64).reshape(2)
+        place_z_mm = place_height_mm(
+            extent, grasp_height, clearance_mm=place_clearance_mm
+        )
+        user1_from_place_grasp[:3, 3] = np.asarray(
+            [place_xy[0], place_xy[1], place_z_mm], dtype=np.float64
+        ) / 1000.0
+    else:
+        user1_from_place_grasp[:3, 3] += offset / 1000.0
     user1_from_tcp_place = user1_from_place_grasp @ np.linalg.inv(tcp_from_grasp)
 
     object_xyz_mm = user1_from_object[:3, 3] * 1000.0
-    return {
+    plan = {
         "object": _pose_mapping(user1_from_object),
         "grasp_frame": _pose_mapping(user1_from_grasp),
         "grasp_tcp": _pose_mapping(user1_from_tcp_grasp),
@@ -122,12 +194,30 @@ def build_pick_place_plan(
         "place_offset_user_mm": [float(value) for value in offset],
         "origin_xy_error_mm": round(float(np.linalg.norm(object_xyz_mm[:2])), 3),
     }
+    if extent is not None:
+        plan["object_extent"] = {
+            "z_top_mm": round(extent.z_top_mm, 3),
+            "z_bottom_mm": round(extent.z_bottom_mm, 3),
+            "z_center_mm": round(extent.z_center_mm, 3),
+            "height_mm": round(extent.height_mm, 3),
+            "grasp_width_mm": round(extent.grasp_width_mm, 3),
+            "center_xy_mm": [round(value, 3) for value in extent.center_xy_mm],
+        }
+        plan["grasp_height"] = {
+            "rule": grasp_height.rule,
+            "z_mm": round(grasp_height.z_mm, 3),
+            "engage_mm": round(grasp_height.engage_mm, 3),
+            "requested_engage_mm": round(grasp_height.requested_engage_mm, 3),
+            "clamped": bool(grasp_height.clamped),
+            "jaw_cavity_depth_mm": float(jaw_cavity_depth_mm),
+            "safety_clearance_mm": float(safety_clearance_mm),
+        }
+    return plan
 
 
 def validate_plan(
     plan,
     *,
-    origin_xy_tolerance_mm,
     workspace_min_mm,
     workspace_max_mm,
     lift_mm,
@@ -137,8 +227,20 @@ def validate_plan(
     minimum_depth_coverage,
     depth_center_delta_mm,
     maximum_depth_center_delta_mm,
+    table_half_size_mm=None,
+    jaw_max_open_mm=None,
+    width_margin_mm=6.0,
+    origin_xy_tolerance_mm=None,
 ):
-    """Return fail-closed reasons for a preview plan."""
+    """Return fail-closed reasons for a preview plan.
+
+    ``origin_xy_tolerance_mm`` 是**单物体 demo 的遗留闸门**（"柠檬必须摆在用户系
+    原点 50mm 内"）。真实赛题是桌面散放，物体到处都是，这个闸门会把所有目标判死。
+    默认不启用；只有显式传值时才检查，留给"标定/复现"这类场景。
+
+    取代它的是 ``table_half_size_mm``：49.3cm 方桌、原点在中心 -> 半边 246.5mm。
+    物体中心跑出桌面就一定是视觉错了。
+    """
 
     reasons = []
     if float(confidence) < float(minimum_confidence):
@@ -159,12 +261,57 @@ def validate_plan(
                 depth_center_delta_mm, maximum_depth_center_delta_mm
             )
         )
-    if float(plan["origin_xy_error_mm"]) > float(origin_xy_tolerance_mm):
+    if origin_xy_tolerance_mm is not None and (
+        float(plan["origin_xy_error_mm"]) > float(origin_xy_tolerance_mm)
+    ):
         reasons.append(
-            "lemon origin XY error {:.1f} mm > {:.1f} mm".format(
+            "物体到用户系原点的 XY 距离 {:.1f} mm > {:.1f} mm".format(
                 plan["origin_xy_error_mm"], origin_xy_tolerance_mm
             )
         )
+
+    extent = plan.get("object_extent")
+    grasp_height = plan.get("grasp_height")
+    if extent is None or grasp_height is None:
+        # 没有网格包围盒就拿不到物体高度，也就无法保证伸入深度不超过腔体深度。
+        # 这正是压爆的成因，因此必须拒绝而不是"尽力而为"。
+        reasons.append(
+            "缺少物体尺寸（CAD 包围盒不可用），无法判断伸进夹爪的深度是否超过腔体，"
+            "拒绝执行。请检查该物体的 object_models 配置。"
+        )
+    else:
+        if table_half_size_mm is not None:
+            half = float(table_half_size_mm)
+            center_xy = np.asarray(extent["center_xy_mm"], dtype=np.float64)
+            if np.any(np.abs(center_xy) > half):
+                reasons.append(
+                    "物体中心 XY {} mm 超出桌面范围 ±{:.1f} mm，视觉多半错了".format(
+                        np.round(center_xy, 1).tolist(), half
+                    )
+                )
+        if jaw_max_open_mm is not None:
+            usable = float(jaw_max_open_mm) - float(width_margin_mm)
+            if float(extent["grasp_width_mm"]) > usable:
+                reasons.append(
+                    "物体夹持宽度 {:.1f}mm 超过夹爪可用张开 {:.1f}mm。"
+                    "这是**机械限制不是软件问题**，请换目标物体。".format(
+                        extent["grasp_width_mm"], usable
+                    )
+                )
+        if not (MIN_PLAUSIBLE_TOP_MM
+                <= float(extent["z_top_mm"]) <= MAX_PLAUSIBLE_TOP_MM):
+            reasons.append(
+                "物体顶面高度 {:.1f}mm 不在合理区间 [{:.0f}, {:.0f}]mm，"
+                "位姿多半估错了；高度估错的后果正是压爆，拒绝执行。".format(
+                    extent["z_top_mm"], MIN_PLAUSIBLE_TOP_MM, MAX_PLAUSIBLE_TOP_MM
+                )
+            )
+        if float(grasp_height["z_mm"]) <= 0.0:
+            reasons.append(
+                "抓取点 Z={:.1f}mm 在桌面下方，会把夹爪怼进桌子".format(
+                    grasp_height["z_mm"]
+                )
+            )
 
     grasp_matrix = np.asarray(plan["grasp_frame"]["matrix"], dtype=np.float64)
     approach_alignment = float(
@@ -328,6 +475,14 @@ def run(args):
     )
     rule = visual.rule_for_object(object_key)
     place_offset = [float(value) for value in args.place_offset_user_mm]
+    gripper = competition.get("gripper_geometry", {}) or {}
+    planning = competition.get("grasp_planning", {}) or {}
+    workspace = competition.get("workspace", {}) or {}
+    place_xy = args.place_user_xy_mm
+    if place_xy is None:
+        configured = workspace.get("place_user_xy_mm")
+        place_xy = [float(value) for value in configured] if configured else None
+
     plan = build_pick_place_plan(
         camera_from_object,
         user1_from_tcp,
@@ -336,10 +491,19 @@ def run(args):
         grasp_type=rule.type,
         grasp_offset_mm=rule.offset_mm,
         place_offset_user_mm=place_offset,
+        mesh_bounds_m=mesh_bounds,
+        place_user_xy_mm=place_xy,
+        jaw_cavity_depth_mm=float(
+            gripper.get("jaw_cavity_depth_mm", JAW_CAVITY_DEPTH_MM)
+        ),
+        safety_clearance_mm=float(
+            gripper.get("safety_clearance_mm", SAFETY_CLEARANCE_MM)
+        ),
+        place_clearance_mm=float(gripper.get("place_clearance_mm", 2.0)),
     )
+    table_half = workspace.get("table_half_size_mm")
     reasons = validate_plan(
         plan,
-        origin_xy_tolerance_mm=args.origin_xy_tolerance_mm,
         workspace_min_mm=competition["safety"]["workspace_min_mm"],
         workspace_max_mm=competition["safety"]["workspace_max_mm"],
         lift_mm=args.lift_mm,
@@ -349,29 +513,16 @@ def run(args):
         minimum_depth_coverage=args.minimum_depth_coverage,
         depth_center_delta_mm=depth_delta_mm,
         maximum_depth_center_delta_mm=args.maximum_depth_center_delta_mm,
+        table_half_size_mm=None if table_half is None else float(table_half),
+        jaw_max_open_mm=gripper.get("jaw_max_open_mm"),
+        width_margin_mm=float(planning.get("width_margin_mm", 6.0)),
+        # 单物体 demo 遗留闸门, 只在显式要求时启用（见 validate_plan docstring）。
+        origin_xy_tolerance_mm=args.origin_xy_tolerance_mm,
     )
-    estimated_grasp_width_mm = None
-    if mesh_bounds is None:
-        reasons.append("lemon CAD bounds are unavailable")
-    else:
-        extents_mm = np.sort(
-            (np.asarray(mesh_bounds[1]) - np.asarray(mesh_bounds[0])) * 1000.0
-        )
-        # Lemon local X is the long axis.  The larger of the two minor CAD
-        # dimensions is the conservative diameter for the binary gripper.
-        estimated_grasp_width_mm = float(extents_mm[1])
-        minimum_width = float(
-            competition["grasp_planning"]["minimum_grasp_width_mm"]
-        )
-        maximum_width = float(
-            competition["grasp_planning"]["maximum_grasp_width_mm"]
-        )
-        if not minimum_width <= estimated_grasp_width_mm <= maximum_width:
-            reasons.append(
-                "estimated lemon width {:.1f} mm outside gripper {:.1f}..{:.1f} mm".format(
-                    estimated_grasp_width_mm, minimum_width, maximum_width
-                )
-            )
+    estimated_grasp_width_mm = (
+        plan["object_extent"]["grasp_width_mm"]
+        if "object_extent" in plan else None
+    )
 
     overlay = draw_boxes(color, objects)
     contours, _ = cv2.findContours(
@@ -431,7 +582,17 @@ def parse_args(argv=None):
     parser.add_argument(
         "--place-offset-user-mm", nargs=3, type=float, default=(0.0, -50.0, 0.0)
     )
-    parser.add_argument("--origin-xy-tolerance-mm", type=float, default=50.0)
+    # 单物体 demo 的遗留闸门（"物体必须摆在用户系原点附近"）。真实赛题是桌面散放，
+    # 启用它会把所有目标判死，所以默认关闭；桌面边界由 workspace.table_half_size_mm 管。
+    parser.add_argument(
+        "--origin-xy-tolerance-mm", type=float, default=None,
+        help="仅用于单物体标定/复现；默认不启用",
+    )
+    parser.add_argument(
+        "--place-user-xy-mm", nargs=2, type=float, default=None,
+        help="放置点的用户系绝对 XY(mm)。不给则读 competition.yaml 的 "
+             "workspace.place_user_xy_mm；再没有则退回 --place-offset-user-mm 相对偏移",
+    )
     parser.add_argument("--lift-mm", type=float, default=80.0)
     parser.add_argument("--minimum-depth-coverage", type=float, default=0.15)
     parser.add_argument("--maximum-depth-center-delta-mm", type=float, default=80.0)

@@ -406,6 +406,39 @@ hand_eye:
       - 0.0
       - 0.0
       - 1.0
+# 夹爪几何。抓取高度后处理(competition_pipeline/grasp_geometry.py)全靠这几个数,
+# 填错的后果是压爆物体或把夹爪怼进桌面。
+gripper_geometry:
+  # 【实测 2026-08-22】腔体深度 = 物体能伸进夹爪的长度(指尖到掌根)。
+  # 抓取时"物体顶面到指尖"的距离必须小于它, 否则掌根压在物体顶上。
+  # 现场隔壁组把瓶子压爆就是因为对准瓶子中心 -> 需要 高度/2 的深度 -> 超了。
+  jaw_cavity_depth_mm: 80.0
+  # 【未实测, 保守值】最大张开。现场目测"开到最大能夹住所有物体"。
+  # 这个值只用于宽度闸门; 量准之后改这里。苹果实测 75mm 是全场最宽的。
+  jaw_max_open_mm: 85.0
+  # 腔体深度上留的余量: 视觉高度误差 + 罐口凸起 + 到位误差。
+  # 不触发钳位的物体高度上限 = 4 x (jaw_cavity_depth_mm - safety_clearance_mm)。
+  # 当前 = 4 x 65 = 260mm; 可口可乐 245mm 刚好在内。
+  safety_clearance_mm: 15.0
+  # 放置时物体底面离桌面的余量, 松爪后自己坐稳。
+  place_clearance_mm: 2.0
+  # 【必须现场标定】TCP 到指尖平面的距离(mm)。
+  # competition.yaml 的 grasp_planning.tcp_from_grasp 平移是 110mm, 但那 110mm 的
+  # 参考点到底是指尖平面还是夹爪中部, 从来没有写下来过 —— 差 40mm 就是压爆与抓空。
+  # 标定方法(1 分钟, 零风险): 点动把指尖降到刚接触桌面, 读用户坐标系1 的 TCP Z。
+  # 因为用户系 z=0 就是桌面, 这个读数就是本项的值。
+  # 留 null 表示未标定; 抓取执行前应当拒绝放行。
+  tcp_to_fingertip_mm: null
+
+# 赛场工作台。任务书: 49.3cm 方桌, 原点设在桌面中心, 用户坐标系1 的 z=0 即桌面。
+workspace:
+  table_size_mm: 493.0
+  table_half_size_mm: 246.5
+  # 放置点(用户系绝对 XY, mm)。任务要求"放置时需要直立", 位置自定。
+  # 选在 -Y 方向靠近机器人一侧、离桌面中心 160mm, 避开杂物堆放区。
+  # ⚠️ 明天开场必须空载验证该点可达再用(30 秒)。
+  place_user_xy_mm: [0.0, -160.0]
+
 safety:
   dry_run: true
   allow_robot_motion: false

@@ -71,6 +71,69 @@ cd /home/throne/workspaces/arm
 将注册候选限制为 64，并在切换模型时释放上一套 CUDA 运行时，避免完整 1080P × 252
 候选造成显存峰值。
 
+### 物体位姿映射到用户坐标系1（UCS1，默认开启）
+
+识别结果不再只是“相对相机的位置”，而是按现场手眼标定链
+
+```
+T_user1_object = T_user1_tcp @ T_tcp_color_camera @ T_camera_from_object
+```
+
+映射到用户坐标系1（`competition_pipeline/config/competition.yaml` 的
+`hand_eye.tcp_from_color_camera`，15/16 内点 3.02 mm / 0.72°）。其中
+`T_user1_tcp` 默认从控制器实时回读（7000 端口状态服务，`pose_frame=UCS`）。
+程序在冻结 RGB-D 快照后立即冻结 TCP，FoundationPose 即使计算数秒也不会把
+“旧照片”与“新机械臂姿态”混用。算法结果区先显示用户系的物体/抓取点
+XYZ 和 A/B/C，相机系与工作台系仅作参考；同时保存
+`object_pose_user1.npy` 和 `grasp_user1.npy`。
+
+可配置项：
+
+- `--no-tcp-read`：完全不连接控制器（仅相机系输出，用户1映射显示为“未映射”，
+  绝不静默用“用户1原点”单位阵冒充真实位姿）；
+- `--controller-host <ip>`：覆盖 `controller.nexbot_tcp.host`；
+- `--tcp-xyz-mm x y z --tcp-rpy-deg a b c`：不用回读，手动指定用户系下的
+  当前 TCP 位姿（静态值，适合机械臂不可用时验证映射链）；
+- 控制器暂时不可达/被其他程序占用（6001/7000 单客户端）时本次用户系
+  映射直接标记为“未映射（原因）”，绝不沿用上次 TCP。
+
+只读状态查询，不会向机械臂发送任何运动指令。
+
+### 一键抓取：计算 → 出坐标 → 我确认 → 执行（用户坐标系1）
+
+界面流程：目标序列计算完成后，结果区给出用户1抓取点 XYZ（含 ABC 参考值），
+下方按钮 `执行抓取` 变为可用；点击后弹出确认框（显示抓取/放置坐标），确认后
+整轮执行。**每轮开始与结束都回到复位位置**（控制器"复位点设置-安全使能"开启
+后，新一轮运动必须从复位点启动；这是 2026-08-22 日志+官方手册确认的现场
+结论，本轮结束位置=复位点）。
+
+整轮计划（姿态固定为"复位位置的姿态"，只动 XYZ）：
+
+```
+回复位(0x3007) -> 抓取(视觉 user1 XYZ) -> 夹爪合(DOUT15/16)
+-> 放置(X=-100, Y=100, Z=抓取Z) -> 夹爪开 -> 回复位
+```
+
+- 执行器：`tool/visual_grasp_pipeline/ucs_grasp.py`，复用比赛 UI 同款控制栈
+  （`competition_pipeline` 的 NexBotTcpJog：6001 运动口、MOVL coord=3 用户系1、
+  夹爪 DOUT15/16、0x3007 回复位、0x2314 急停）；
+- 安全硬限（用户坐标系1）：XY 不超过 ±300 mm、Z 在 10–350 mm、
+  单段位移 ≤ 600 mm，超限直接拒绝并弹窗；
+- 失败/取消：立即急停，绝不把机器人留在放置位上方；
+- 默认 **Dry-run**（只打印/展示计划，不连接不运动）；真实运动需
+  `--enable-robot-motion` 启动并在确认框二次确认；
+- CLI：`--place-x-mm` / `--place-y-mm`（默认 -100 / 100，放置 Z 恒等于抓取 Z）。
+
+```bash
+# 验证计划（默认，安全）：
+./tool/visual_grasp_pipeline/run_oak_vision_node.sh
+# 真实运动：
+./tool/visual_grasp_pipeline/run_oak_vision_node.sh --enable-robot-motion
+```
+
+注意：6001/7000 为控制器单客户端端口，运行本节点时请勿同时开启比赛 UI，
+避免抢占连接。
+
 ## 离线验证
 
 在 `foundationpose` conda 环境中运行：
