@@ -253,6 +253,40 @@ class UcsGraspRunnerTests(unittest.TestCase):
             runner.execute(np.array([0.0, 0.0, 60.0]), dry_run=False)
         self.assertEqual(jog.calls[-1], "emergency_stop")
 
+    def test_gates_are_passed_explicitly_not_inherited_from_the_teleport_panel(self):
+        """move_to_ucs 的默认 max_translation_mm=400 会在第一段就拒掉本流程。
+
+        第一段是「复位/拍摄点 -> 抓取位上方」。拍摄点要俯视整张 493mm 的桌子，
+        离桌角抓取点很容易超过 400mm —— 那个默认值是给传送面板防"未确认输入
+        (默认 0,0,0)"用的，不该被本流程继承。
+        """
+        from tool.visual_grasp_pipeline.ucs_grasp import (
+            ARRIVAL_TOLERANCE_MM, MAX_LEG_TRANSLATION_MM,
+        )
+
+        jog = FakeJog(reset_pose())
+        seen = []
+        original = jog.move_to_ucs
+
+        def _record(xyz_mm, abc_rad, **kwargs):
+            seen.append(kwargs)
+            return original(xyz_mm, abc_rad, **kwargs)
+
+        jog.move_to_ucs = _record
+        UcsGraspRunner(jog).execute(np.array([0.0, 0.0, 60.0]), dry_run=False)
+        self.assertTrue(seen)
+        for kwargs in seen:
+            self.assertEqual(kwargs["max_translation_mm"], MAX_LEG_TRANSLATION_MM)
+            self.assertEqual(kwargs["tolerance_mm"], ARRIVAL_TOLERANCE_MM)
+        # 上限必须覆盖安全盒的对角线，否则合法目标仍会被拒
+        from tool.visual_grasp_pipeline.ucs_grasp import (
+            SAFE_XY_MM, SAFE_Z_MAX_MM, SAFE_Z_MIN_MM,
+        )
+        diagonal = float(np.linalg.norm([
+            2 * SAFE_XY_MM, 2 * SAFE_XY_MM, SAFE_Z_MAX_MM - SAFE_Z_MIN_MM
+        ]))
+        self.assertGreaterEqual(MAX_LEG_TRANSLATION_MM, diagonal)
+
     def test_the_orientation_stays_at_the_reset_pose_for_every_leg(self):
         """姿态全程不变是这条路径的安全前提：只动 XYZ，绝不换姿态。
 

@@ -64,6 +64,20 @@ MAX_SINGLE_LEG_MM = 600.0
 #: 速度比例（0.05 -> 50 mm/s，与比赛 UI 步进一致，安全）
 SPEED_SCALE = 0.05
 
+#: 单段位移上限（mm）。**不要沿用 move_to_ucs 的 400mm 默认值** —— 那个默认值是给
+#: 传送面板防"未确认输入（默认 0,0,0）"用的。本流程的第一段是「复位/拍摄点 -> 抓取位
+#: 上方」，拍摄点要俯视整张 493mm 的桌子，离桌角的抓取点很容易超过 400mm，
+#: 于是整轮在第一步就被闸门拒掉。
+#: 这里取安全盒对角线上界: sqrt(493^2 * 2 + 340^2) ≈ 775mm，取 800 留余量。
+#: 目标点本身已经被 validate_targets 限制在桌面 ±246.5mm、Z ∈ [10, 350] 内，
+#: 所以这一道只是防离谱值，不需要卡得比工作范围还紧。
+MAX_LEG_TRANSLATION_MM = 800.0
+
+#: 到位容差（mm）。move_to_ucs 默认 1.0mm 是给短距离传送用的；本流程有 300mm+
+#: 的长段，卡到 1mm 容易出现"其实到了但判超差"的假失败。2mm 对 57mm 的罐子是
+#: 3.5%，对抓取毫无影响。
+ARRIVAL_TOLERANCE_MM = 2.0
+
 #: 接近/抬升高度（mm）。抓取位上方这么高开始垂直下降，夹住后垂直抬这么高再横移。
 #: 必须高过场上最高的干扰物，否则横移仍会撞。赛题物件最高是可乐瓶 245mm，
 #: 抓取点在 3/4 高度处(约 184mm)，抬 120mm 后指尖到约 304mm，高过全部物件。
@@ -336,6 +350,10 @@ class UcsGraspRunner:
                     self.jog.move_to_ucs(
                         step["xyz_mm"], abc_rad,
                         vel_mm_s=self.speed_scale * 1000.0,
+                        # 闸门全部显式给值，不要沿用传送面板的默认值 ——
+                        # 那套默认是给短距离手动传送调的，会在第一段就拒掉本流程。
+                        tolerance_mm=ARRIVAL_TOLERANCE_MM,
+                        max_translation_mm=MAX_LEG_TRANSLATION_MM,
                     )
             except Exception as move_error:
                 self._emit("运动失败，紧急停止: {}".format(move_error))

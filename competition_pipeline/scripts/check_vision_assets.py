@@ -294,11 +294,39 @@ def check(config_path, competition_config):
     return 0
 
 
+def record_measurement(config_path, object_key, diameter_mm, height_mm):
+    """把尺子实测尺寸写进 ``measured_object_mm``，避免现场手改 YAML 缩进出错。"""
+    import yaml
+
+    path = Path(config_path)
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    measured = data.setdefault("measured_object_mm", {})
+    measured[str(object_key)] = {
+        "diameter": round(float(diameter_mm), 2),
+        "height": round(float(height_mm), 2),
+    }
+    path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    print("已记录 {}: 直径 {:.1f}mm 高 {:.1f}mm -> {}\n".format(
+        object_key, float(diameter_mm), float(height_mm), path))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--visual-config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--competition-config", default=str(DEFAULT_COMPETITION))
+    parser.add_argument(
+        "--measure", nargs=3, metavar=("物体", "直径mm", "高mm"), action="append",
+        help="记录尺子实测尺寸后再自检，可重复。"
+             "例: --measure nescafe 60 169 --measure apple 75 88",
+    )
     args = parser.parse_args(argv)
+    for object_key, diameter, height in (args.measure or []):
+        record_measurement(
+            Path(args.visual_config), object_key, float(diameter), float(height)
+        )
     return check(Path(args.visual_config), Path(args.competition_config))
 
 
