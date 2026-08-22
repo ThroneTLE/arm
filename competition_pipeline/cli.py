@@ -17,6 +17,7 @@ from .hand_eye import APRILTAG_MAP_TARGET, HandEyeCalibrator
 from .localization import HybridLocalizer
 from .sample_store import HandEyeSampleStore
 from .tag_map import TagMap
+from tool.object_model_builder.camera_source import OakDProSource
 
 
 ROOT = Path(__file__).resolve().parent
@@ -65,14 +66,43 @@ def _open_camera(device, width, height, fps):
 def _hand_eye_live(args, config):
     matrix, distortion, image_size = _configured_intrinsics(config, args.intrinsics)
     capture_width, capture_height = image_size
-    capture = _open_camera(args.camera_device, capture_width, capture_height, args.fps)
+    camera = config.camera
+    oak_source = None
+    capture = None
+    if camera.get("backend") == "oak_depthai":
+        oak_source = OakDProSource(
+            color_width=camera.get("color_width", 1920),
+            color_height=camera.get("color_height", 1080),
+            fps=args.fps or camera.get("color_fps", 10),
+            mxid=camera.get("mxid", ""),
+            dot_projector_mA=camera.get("dot_projector_mA", 800),
+            floodlight_mA=camera.get("floodlight_mA", 0),
+            mono_resolution=camera.get("mono_resolution", "800p"),
+            extended_disparity=camera.get("extended_disparity", True),
+            subpixel=camera.get("subpixel", False),
+            left_right_check=camera.get("left_right_check", True),
+            focus_mode=camera.get("focus_mode", "device_default"),
+            manual_focus=camera.get("manual_focus"),
+        )
+        oak_source.start()
+    else:
+        capture = _open_camera(
+            args.camera_device, capture_width, capture_height, args.fps or 30.0
+        )
     calibrator = HandEyeCalibrator(config)
     print("SPACE freeze and enter TCP X Y Z R P Y | Q quit")
     try:
         while True:
-            ok, frame = capture.read()
-            if not ok:
-                raise RuntimeError("camera read failed")
+            if oak_source is not None:
+                bundle = oak_source.latest()
+                if bundle is None:
+                    time.sleep(0.01)
+                    continue
+                frame = bundle.color_bgr
+            else:
+                ok, frame = capture.read()
+                if not ok:
+                    raise RuntimeError("camera read failed")
             if (frame.shape[1], frame.shape[0]) != image_size:
                 raise RuntimeError(
                     "camera eye size {} does not match intrinsics {}".format(
@@ -110,10 +140,18 @@ def _hand_eye_live(args, config):
                 values = [float(value) for value in text]
                 base_from_tcp = transform_from_xyz_rpy_mm(values[:3], values[3:])
                 sample = calibrator.add_image_sample(frame, base_from_tcp, matrix, distortion)
-                count = _append_sample(args.samples, config, sample, "live:{}".format(args.camera_device))
+                image_source = (
+                    "oak:{}".format(camera.get("mxid", ""))
+                    if oak_source is not None
+                    else "live:{}".format(args.camera_device)
+                )
+                count = _append_sample(args.samples, config, sample, image_source)
                 print("saved sample {}: {} RMS={:.3f}px".format(count, sample.target_label, sample.rms_reprojection_error_px))
     finally:
-        capture.release()
+        if capture is not None:
+            capture.release()
+        if oak_source is not None:
+            oak_source.stop()
         cv2.destroyAllWindows()
 
 
@@ -161,7 +199,7 @@ def parse_args():
     add.add_argument("--samples", type=Path, default=DEFAULT_SAMPLES)
     hand_live = commands.add_parser("hand-eye-live")
     hand_live.add_argument("--camera-device", default="0")
-    hand_live.add_argument("--fps", type=float, default=30.0)
+    hand_live.add_argument("--fps", type=float)
     hand_live.add_argument("--intrinsics", type=Path)
     hand_live.add_argument("--samples", type=Path, default=DEFAULT_SAMPLES)
     solve = commands.add_parser("hand-eye-solve")

@@ -121,12 +121,15 @@ def run_offline(config: VisualGraspConfig, label=None, save_dir=None):
     estimator = FoundationPosePoseEstimator(
         foundationpose_root=config.foundationpose_root,
         mesh_path=mesh_path,
-        mesh_scale_to_meters=config.mesh_scale_to_meters,
+        mesh_scale_to_meters=config.mesh_scale_for_object(object_key),
         debug_dir=config.debug_dir,
         est_refine_iter=config.est_refine_iter,
         track_refine_iter=config.track_refine_iter,
         device=config.device,
         use_mask_center_guidance=config.use_mask_center_guidance,
+        registration_max_hypotheses=(
+            config.foundationpose_registration_hypotheses
+        ),
     )
     try:
         camera_from_object = estimator.register(

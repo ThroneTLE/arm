@@ -312,7 +312,8 @@ TSDF 输出会清理退化面、重复面和小的孤立组件，然后把网格
 
 ## OAK-D Pro 兼容性
 
-配置把采集后端抽象为 `astra_ros` 和 `oak_depthai`：
+默认配置已绑定当前 `OAK-D-PRO-FF`（MXID `14442C10D141C5D600`）；Astra 后端只用于旧数据
+回归。配置仍把采集后端抽象为 `astra_ros` 和 `oak_depthai`：
 
 ```yaml
 camera:

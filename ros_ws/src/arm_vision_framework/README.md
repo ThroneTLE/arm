@@ -67,13 +67,13 @@ arm_vision_framework/
 
 | 项目 | 当前状态 |
 |---|---|
-| Astra Pro RGB 内参 | 有效，`1280 x 720 MJPG` |
+| OAK-D-PRO-FF RGB 内参 | 已从 MXID `14442C10D141C5D600` EEPROM 导入，`1920 x 1080` |
 | Tag 100～102 地图 | 有效，用于算法验证 |
 | 眼在手上 `T_gripper_camera` | 无效，占位单位矩阵 |
 | `T_workspace_base` | 无效，占位单位矩阵 |
-| RGB-D 对齐 | 未标定，FoundationPose 实机输入尚不可用 |
-| YOLO / PyTorch | 当前 Python 环境未安装 |
-| FoundationPose 运行时 | 已接入接口，需在 CUDA 环境和真实网格上运行 |
+| RGB-D 对齐 | DepthAI 硬件对齐到 RGB，实机同步抓帧已通过 |
+| YOLO / PyTorch | 已安装并保留真实模型入口 |
+| FoundationPose 运行时 | 已接入 CUDA 运行时；真实目标仍需匹配网格和 Mask |
 | 机械臂运动 | 强制关闭 |
 
 旧的固定 Astra 外参保存在 `fixed_camera_validation_reference`，只用于追溯之前的桌面
@@ -122,8 +122,8 @@ localization_source: simulated_robot
 ```
 
 该结果仅验证软件坐标链，不是算法准确率或抓取结果。
-当前中央参数仍是 Astra 占位，因此 `camera_profile_ready`、`field_runtime_ready` 必须为
-`false`；导入真实 OAK EEPROM 和真实手眼外参前，不能把 `schema_valid` 误解成实机可运行。
+当前 `camera_profile_ready` 为 `true`；`field_runtime_ready` 仍为 `false`，因为更换相机后
+必须重新标定真实 `T_gripper_camera`。不能把相机就绪误解成机械臂抓取链已经验收。
 
 启动 ROS 节点：
 
@@ -280,6 +280,15 @@ Flash 成功，也不会在没有设备时写硬件 EEPROM。到场后先用官�
 完成真正的设备 EEPROM 写入，再把设备导出的 JSON 通过同一命令导入；相机内参变化后必须
 重新做眼在手上标定。
 
+相机已连接时可以直接读取 EEPROM 并同步中央参数，不需要先手工导出 JSON：
+
+```bash
+rosrun arm_vision_framework calibration_tool.py import-oak-device
+```
+
+检测到多台设备时需增加 `--mxid <设备序列号>`。该命令只读设备 EEPROM，不会写入或
+Flash 相机；原始 EEPROM 会保存为 `config/oak_factory_calibration.json`，旧中央参数自动备份。
+
 ## 机械臂适配边界
 
 ### 两视角抓取与放置执行
@@ -294,19 +303,26 @@ Flash 成功，也不会在没有设备时写硬件 EEPROM。到场后先用官�
 6. 任意失败、取消、拒绝或超时都会 stop 机械臂和夹爪；默认仍是 `dry_run` 且禁止运动。
 
 `ObservationPlan`、`PickPlacePlan`、`TwoViewPickPlaceCoordinator` 是稳定的正式接口。厂商
-MOVJ/MOVL 报文不可从现有手册推导，因此现场取得 SDK/协议后只实现
-`RobotController.move_j/move_l` 桥接；不要改动标定、视觉、规划与状态机。
+MOVJ/MOVL 报文现已有官方公开资料（见 `docs/纳博特通讯协议.md`），
+`RobotController.move_j/move_l` 桥接已按 22.07 协议实现为
+`adapters/nexbot_tcp.py`；不要改动标定、视觉、规划与状态机。
 
 驱动索引见 [docs/readme.txt](../../../docs/readme.txt)。现有资料表明：
 
 - 埃夫特 ER 的笛卡尔点位是 `X/Y/Z/A/B/C`，`A/B/C` 对应绕 `Z/Y/X` 的欧拉角。
 - 纳博特手册描述的远程模式主要是数字 IO 和 Modbus 启停已示教程序。
-- 两份操作手册都不足以可靠实现 Python 笛卡尔在线控制，不能自行猜测端口或报文。
+- 两份操作手册都不足以可靠实现 Python 笛卡尔在线控制，不能自行猜测端口或报文；
+  官方 JSON-over-TCP 协议（RTL-22.07，6000/7000 端口）见 `docs/纳博特通讯协议.md`。
 
 机械臂随机分配后，应取得对应官方 SDK/通信协议，再实现 `RobotController` 或一个桥接到
 canonical topic 的独立节点。当前正式 ROS 包已加入
 `adapters/inexbot_modbus.py`：它实现标准 Modbus-TCP 的传输、MBAP 校验、常用 IO 功能码、
 配置化 IO 和手册中的点位/形态数据模型；`adapters/modbus_global_point.py` 额外提供了
 依赖现场已验证本地程序的 GP-MOVJ/MOVL 保底适配器，但默认关闭，不会连接或运动。
-`competition_pipeline/controller_tcp.py` 仅是离线测试加载器。无论厂商如何变化，YOLO、
-FoundationPose、标定参数和准确性验证脚本都不应修改。
+`adapters/nexbot_tcp.py` 实现官方 22.07 JSON-over-TCP 协议（帧 `0x4E66`+长度+命令字+
+JSON+CRC32；6000 端口 MOVJ `0x4501`/MOVL `0x4502`/急停 `0x2314`，7000 端口状态查询
+`0x9512`），通过 `robot.adapter: nexbot_tcp` + `controller.nexbot_tcp.host` 启用；
+剩余现场确认项（固件版本、pos 数组长度、构型行为）见 `docs/纳博特通讯协议.md` §11。
+`competition_pipeline/controller_tcp.py` 与 `competition_pipeline/nexbot_tcp.py` 仅是
+离线测试加载器。无论厂商如何变化，YOLO、FoundationPose、标定参数和准确性验证脚本
+都不应修改。

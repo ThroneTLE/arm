@@ -1,16 +1,19 @@
 # RGB-D 机械臂比赛标定流水线
 
-`competition_pipeline` 是比赛现场的独立入口，包含两个互不覆盖的相机配置：
+`competition_pipeline` 是比赛现场的独立入口。默认固定当前 OAK-D-PRO-FF，旧相机 profile
+只作为显式回归选项保留：
 
 - `astra_validation`：当前 Astra Pro 验证相机，RGB 走 UVC，IR/Depth 走 ROS。
-- `oak_competition`：比赛 OAK-D Pro，RGB、双 OV9282 和对齐 Depth 走 DepthAI。
+- `oak_competition`：当前默认，绑定 MXID `14442C10D141C5D600`，RGB、双 OV9282 和对齐 Depth 走 DepthAI。
 
-RGB 是 AprilTag 手眼标定和物体定位的主相机；AprilTag 不参与比赛运行时相机定位。切换相机配置会自动使当前手眼矩阵失效，
+RGB 是手眼标定和物体定位的主相机；当前手眼默认使用张正友棋盘格，AprilTag 保留为兼容
+流程和单独诊断，不参与比赛运行时相机定位。切换相机配置会自动使当前手眼矩阵失效，
 并使用各自独立的手眼样本文件，避免把 Astra 的结果误用于 OAK-D Pro。
 
 ## 现场 UI
 
-从干净 shell 启动，脚本会自动加载 `/opt/ros/noetic` 和 `/home/throne/astra_ws`：
+从干净 shell 启动，脚本会自动加载 `/opt/ros/noetic`、`/home/throne/astra_ws`
+和 `/home/throne/orbbec_ws`（Astra / Gemini 两种相机后端都能直接使用）：
 
 ```bash
 cd /home/throne/workspaces/arm
@@ -35,12 +38,14 @@ Astra 还可在侧栏切换 Depth/IR 模式：默认 `640×480 @ 30` 用于流�
    会替换成官方 EEPROM 标定页面，不会重复执行 Astra 的 RGB/IR 标定。
 3. **Tag 地图**：录入任意数量的 AprilTag ID，以及每个黑框右下角 `BR` 在机器人基座的
    XYZ（毫米）。表格中的 R/P/Y 是 Tag 平面朝向，默认值可一次填充到所有行。
-4. **眼在手上**：机械臂停稳后输入当前 `T_base_tcp`（X/Y/Z 毫米，R/P/Y 度），采集
-   至少 8 个姿态。默认“已建图 AprilTag”流程由 RGB Tag PnP 求
-   `T_base_color_camera`，再求并写回 `T_tcp_color_camera`。若现场提供张正友棋盘格，
-   在本页选择“张正友棋盘格”：固定棋盘无需录入其基座坐标，程序使用多姿态
-   `T_base_tcp` 与每帧 `T_camera_board` 的 OpenCV `calibrateHandEye` 求
-   `T_tcp_color_camera`。
+4. **眼在手上**：页面顶部先连接“TCP 通信验证”（NexBot 官方 7000 端口协议，直读
+   控制器当前 `T_base_tcp`，不再手抄示教器；IP / 7000 端口 / Robot 号保存在
+   `controller.nexbot_tcp`）。连接成功且读数与示教器一致后再采样：机械臂停稳，
+   输入当前 `T_base_tcp`（X/Y/Z 毫米，R/P/Y 度；可勾选“读取值自动填入”），采集
+   至少 8 个姿态。当前默认使用“张正友棋盘格”：固定棋盘无需录入其基座坐标，程序使用
+   多姿态 `T_base_tcp` 与每帧 `T_camera_board` 的 OpenCV `calibrateHandEye` 求
+   `T_tcp_color_camera`。也可以切回“已建图 AprilTag”流程，由 RGB Tag PnP 求
+   `T_base_color_camera`，再求并写回 `T_tcp_color_camera`。
 5. **定位验证**：比赛主线只接受时间戳新鲜的控制器 TCP 回读，并计算
    `T_base_camera = T_base_tcp × T_tcp_color_camera`。AprilTag 只用于手眼采样和单独诊断；
    `localization.use_apriltag_runtime` 默认 `false`，不要在抓取时改成视觉优先。
@@ -106,9 +111,8 @@ OAK-D Pro 出厂 EEPROM 已包含 RGB/左右相机内参、畸变、双目外参
 ./competition_pipeline/install_oak_support.sh
 ```
 
-目前没有 OAK-D Pro 实物，因此软件接口、JSON 导入和离屏 UI 已验证，但相机枚举、投影器
-电流、实时帧率和实机 EEPROM 导出必须到场后再做一次硬件验收。正式 ROS 参数的一键导入
-入口是：
+当前 OAK-D-PRO-FF 已完成枚举、EEPROM 导入、投影器启动、1920×1080 RGB-D 同步和 IMU
+发布验证。机械臂安装后仍需重新做手眼标定。正式 ROS 参数的一键导入入口是：
 
 ```bash
 rosrun arm_vision_framework calibration_tool.py \
@@ -194,13 +198,12 @@ Depth 内参，并继续使用刚性不变的 `T_color_depth` 外参完成三维
 
 ### 张正友棋盘格手眼标定
 
-`hand_eye.calibration_target` 同时兼容原有 `apriltag_map` 和 `checkerboard`。当前已按你
-可能拿到的板预留了外板 **60 × 45 mm**、单格 **5 mm**，但**不会**再由这三个数字推断
-棋盘规格：实际板可能有白边，外板尺寸并不等于印刷网格尺寸。手眼页面的“长边总格数（黑+白）”
-和“短边总格数（黑+白）”默认留空，现场面对实物填入即可。这里数的是该方向全部黑白格子，
-不是只数黑格；例如填 `11 × 8` 时，OpenCV `findChessboardCorners` 的 `patternSize` 自动为
-**`[10, 7]` 个内角点**（共 70 点）。未填写时棋盘实时预览会明确显示“待设置”，不会误按
-AprilTag 或虚构的角点数采样。
+`hand_eye.calibration_target` 同时兼容原有 `apriltag_map` 和 `checkerboard`。当前流水线默认
+使用棋盘格，标定板为黑白格合计 **12 × 9**、单格 **25 mm**，因此印刷网格尺寸为
+**300 × 225 mm**，OpenCV `findChessboardCorners` 的 `patternSize` 自动为
+**`[11, 8]` 个内角点**（共 88 点）。若现场换成其他棋盘，请在“眼在手上”页填写长边/短边的
+黑白格总数和单格尺寸；这里数的是该方向全部黑白格子，不是只数黑格，未填写时棋盘实时预览
+会明确显示“待设置”，不会误按 AprilTag 或虚构的角点数采样。
 
 棋盘格路径使用固定外部靶标的标准手眼方程，不需要输入 `T_base_board`：
 
@@ -258,8 +261,8 @@ python3 -m competition_pipeline.cli localize-image --image data/check.png
 ```bash
 python3 -m competition_pipeline.cli hand-eye-target \
   --type checkerboard \
-  --board-width-mm 60 --board-height-mm 45 --square-size-mm 5 \
-  --squares-x 11 --squares-y 8
+  --board-width-mm 300 --board-height-mm 225 --square-size-mm 25 \
+  --squares-x 12 --squares-y 9
 ```
 
 `check` 只检查配置和路径字段，不会自动连接硬件。RGB 图像分辨率必须与

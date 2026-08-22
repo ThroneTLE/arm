@@ -30,6 +30,7 @@ from tool.object_model_builder.rgbd_geometry import (
     align_depth_to_color,
     depth_coverage,
     masked_depth_centroid,
+    load_runtime_calibration,
 )
 
 
@@ -43,6 +44,20 @@ def intrinsics(width, height, fx, fy, cx, cy):
 
 
 class RgbdGeometryTests(unittest.TestCase):
+    def test_hardware_aligned_oak_runtime_uses_identity_geometry(self):
+        calibration = load_runtime_calibration(
+            str(
+                Path(__file__).resolve().parents[3]
+                / "ros_ws/src/arm_vision_framework/config/calibration_parameters.yaml"
+            )
+        )
+        calibration.require_valid()
+        self.assertEqual(
+            (calibration.color.width, calibration.color.height), (1920, 1080)
+        )
+        self.assertEqual(calibration.color.distortion_model, "rational_polynomial")
+        np.testing.assert_allclose(calibration.color_from_depth, np.eye(4))
+
     def test_different_resolutions_use_3d_projection(self):
         depth_camera = intrinsics(4, 3, 2.0, 2.0, 0.0, 0.0)
         color_camera = intrinsics(8, 6, 4.0, 4.0, 0.0, 0.0)

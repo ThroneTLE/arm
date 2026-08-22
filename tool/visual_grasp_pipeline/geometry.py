@@ -11,12 +11,6 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
-try:
-    from scipy.spatial.transform import Rotation as _Rotation
-except Exception:  # pragma: no cover - SciPy is required only for smoothing
-    _Rotation = None
-
-
 def fill_depth_roi(depth_m: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """Fill zero-depth holes inside a mask with the median valid depth.
 
@@ -169,20 +163,24 @@ def smooth_pose(
 
     ``current`` may be ``None``; in that case ``new_pose`` is returned unchanged.
     """
-    if _Rotation is None:
-        return np.asarray(new_pose, dtype=np.float64).copy()
     new_pose = np.asarray(new_pose, dtype=np.float64)
     if current is None:
         return new_pose.copy()
-    new_q = _Rotation.from_matrix(new_pose[:3, :3]).as_quat()
-    old_q = _Rotation.from_matrix(current[:3, :3]).as_quat()
+    current = np.asarray(current, dtype=np.float64)
+    new_q = np.asarray(rot2quat(new_pose[:3, :3]), dtype=np.float64)
+    old_q = np.asarray(rot2quat(current[:3, :3]), dtype=np.float64)
     if np.dot(old_q, new_q) < 0.0:
         new_q = -new_q
     q = old_q + alpha * (new_q - old_q)
     q /= np.linalg.norm(q)
     t = current[:3, 3] + alpha * (new_pose[:3, 3] - current[:3, 3])
+    x, y, z, w = q
     out = np.eye(4, dtype=np.float64)
-    out[:3, :3] = _Rotation.from_quat(q).as_matrix()
+    out[:3, :3] = np.asarray([
+        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+        [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+        [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+    ])
     out[:3, 3] = t
     return out
 

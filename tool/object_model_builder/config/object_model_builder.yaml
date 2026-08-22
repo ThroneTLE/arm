@@ -2,9 +2,9 @@ schema_version: 1
 paths:
   foundationpose_root: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus
   runtime_calibration: /home/throne/workspaces/arm/ros_ws/src/arm_vision_framework/config/calibration_parameters.yaml
-  color_intrinsics: /home/throne/workspaces/arm/tool/camera_calibration/output/astra_pro_rgb_1280x720.yaml
+  color_intrinsics: /home/throne/workspaces/arm/ros_ws/src/arm_vision_framework/config/calibration_parameters.yaml
   tag_layout: /home/throne/workspaces/arm/tool/camera_calibration/config/tag_layout.yaml
-  yolo_weights: ''
+  yolo_weights: /home/throne/workspaces/arm/model/yolo_model.pt
   capture_root: /home/throne/workspaces/arm_data/model_sessions
   rgbd_calibration_root: /home/throne/workspaces/arm_data/calibration_sessions
   mesh_root: /home/throne/workspaces/arm_data/meshes
@@ -18,7 +18,9 @@ rgbd_calibration_target:
   pattern_rows: 3
   square_size_m: 0.029
 camera:
-  backend: astra_ros
+  backend: oak_depthai
+  # The fields below are retained only for an explicit legacy Astra switch.
+  # Active OAK settings live under camera.oak and are the runtime defaults.
   color_device: /dev/v4l/by-id/usb-Astra_Pro_HD_Camera_Astra_Pro_HD_Camera-video-index0
   color_width: 1280
   color_height: 720
@@ -58,11 +60,20 @@ camera:
   # Host-arrival timestamps include ROS/UVC transport latency. The capture
   # button waits for the next depth pair, so 200 ms is a guard rather than a
   # request to accept an arbitrarily stale frame.
-  maximum_sync_delta_s: 0.20
+  maximum_sync_delta_s: 0.03
   oak:
-    color_width: 1280
-    color_height: 720
-    fps: 30
+    mxid: 14442C10D141C5D600
+    color_width: 1920
+    color_height: 1080
+    fps: 10
+    mono_resolution: 800p
+    extended_disparity: true
+    subpixel: false
+    left_right_check: true
+    dot_projector_mA: 800
+    floodlight_mA: 0
+    focus_mode: device_default
+    manual_focus: null
 segmentation:
   target_classes: [bottle]
   confidence_threshold: 0.5

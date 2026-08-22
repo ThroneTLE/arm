@@ -777,7 +777,7 @@ class OakDProSource:
     """DepthAI source using device calibration and depth aligned to RGB."""
 
     def __init__(
-        self, color_width=1280, color_height=720, fps=30,
+        self, color_width=1920, color_height=1080, fps=10, mxid="",
         dot_projector_mA=800, floodlight_mA=0, mono_resolution="800p",
         extended_disparity=True, subpixel=False, left_right_check=True,
         focus_mode="device_default", manual_focus=None,
@@ -785,6 +785,7 @@ class OakDProSource:
         self.color_width = int(color_width)
         self.color_height = int(color_height)
         self.fps = int(fps)
+        self.mxid = str(mxid or "").strip()
         self.dot_projector_mA = int(dot_projector_mA)
         self.floodlight_mA = int(floodlight_mA)
         self.mono_resolution = str(mono_resolution).lower()
@@ -793,6 +794,8 @@ class OakDProSource:
         self.left_right_check = bool(left_right_check)
         self.focus_mode = str(focus_mode).strip().lower()
         self.manual_focus = manual_focus
+        if self.color_width <= 0 or self.color_height <= 0 or self.fps <= 0:
+            raise ValueError("OAK color size and FPS must be positive")
         if self.mono_resolution not in ("400p", "800p"):
             raise ValueError("OAK mono resolution must be 400p or 800p")
         if not 0 <= self.dot_projector_mA <= 1200:
@@ -812,6 +815,7 @@ class OakDProSource:
         self._device = None
         self._thread = None
         self._queues = {}
+        self._pending_packets = {"color": {}, "depth": {}, "ir": {}}
         self._color = None
         self._color_timestamp = None
         self._depth = None
@@ -827,6 +831,7 @@ class OakDProSource:
             raise RuntimeError("depthai 2.x is not installed in the active environment") from error
         if self._device is not None:
             return
+        self._stop_event.clear()
         pipeline = dai.Pipeline()
         color = pipeline.create(dai.node.ColorCamera)
         left = pipeline.create(dai.node.MonoCamera)
@@ -876,7 +881,26 @@ class OakDProSource:
         color.video.link(color_output.input)
         stereo.depth.link(depth_output.input)
         left.out.link(ir_output.input)
-        self._device = dai.Device(pipeline)
+        devices = list(dai.Device.getAllAvailableDevices())
+        if self.mxid:
+            deadline = time.monotonic() + 5.0
+            devices = []
+            while not devices and time.monotonic() < deadline:
+                devices = [
+                    info for info in dai.Device.getAllAvailableDevices()
+                    if str(info.getMxId()).strip() == self.mxid
+                ]
+                if not devices:
+                    time.sleep(0.25)
+            if not devices:
+                raise RuntimeError(
+                    "configured OAK MXID {} is not connected".format(self.mxid)
+                )
+        elif len(devices) > 1:
+            raise RuntimeError("multiple OAK devices connected; configure camera.oak.mxid")
+        self._device = (
+            dai.Device(pipeline, devices[0]) if devices else dai.Device(pipeline)
+        )
         self._device.setIrLaserDotProjectorBrightness(self.dot_projector_mA)
         self._device.setIrFloodLightBrightness(self.floodlight_mA)
         self._queues = {
@@ -908,26 +932,56 @@ class OakDProSource:
 
     def _capture_loop(self) -> None:
         while not self._stop_event.is_set():
-            updated = False
-            color = self._queues["color"].tryGet()
-            depth = self._queues["depth"].tryGet()
-            infrared = self._queues["ir"].tryGet()
-            now = time.monotonic()
+            received = False
+            for name, queue in self._queues.items():
+                while True:
+                    packet = queue.tryGet()
+                    if packet is None:
+                        break
+                    self._pending_packets[name][int(packet.getSequenceNum())] = packet
+                    received = True
+            common = set(self._pending_packets["color"]).intersection(
+                self._pending_packets["depth"]
+            )
+            if not common:
+                # Bound unmatched packets while waiting for the corresponding
+                # RGB/depth sequence number.
+                for pending in self._pending_packets.values():
+                    for sequence in sorted(pending)[:-6]:
+                        pending.pop(sequence, None)
+                if not received:
+                    time.sleep(0.003)
+                continue
+            sequence = max(common)
+            color = self._pending_packets["color"].pop(sequence)
+            depth = self._pending_packets["depth"].pop(sequence)
+            infrared = self._pending_packets["ir"].pop(sequence, None)
+            color_frame = color.getCvFrame()
+            depth_frame = depth.getFrame().astype(np.float32) * 0.001
+            ir_frame = None if infrared is None else infrared.getFrame()
             with self._lock:
-                if color is not None:
-                    self._color = color.getCvFrame()
-                    self._color_timestamp = now
-                    updated = True
-                if depth is not None:
-                    self._depth = depth.getFrame().astype(np.float32) * 0.001
-                    self._depth_timestamp = now
-                    updated = True
-                if infrared is not None:
-                    self._ir = infrared.getFrame()
-                    self._ir_timestamp = now
-                    updated = True
-            if not updated:
+                self._color = color_frame
+                self._color_timestamp = self._packet_timestamp(color)
+                self._depth = depth_frame
+                self._depth_timestamp = self._packet_timestamp(depth)
+                if ir_frame is not None:
+                    self._ir = ir_frame
+                    self._ir_timestamp = self._packet_timestamp(infrared)
+            for pending in self._pending_packets.values():
+                for old_sequence in [value for value in pending if value <= sequence]:
+                    pending.pop(old_sequence, None)
                 time.sleep(0.003)
+
+    @staticmethod
+    def _packet_timestamp(packet) -> float:
+        stamp = packet.getTimestampDevice()
+        if hasattr(stamp, "total_seconds"):
+            return float(stamp.total_seconds())
+        if hasattr(stamp, "get"):
+            stamp = stamp.get()
+            if hasattr(stamp, "total_seconds"):
+                return float(stamp.total_seconds())
+        return float(stamp)
 
     def latest(
         self, anchor: str = "depth", copy_frames: bool = True,
@@ -955,10 +1009,15 @@ class OakDProSource:
             self._thread.join(timeout=1.0)
             self._thread = None
         self._queues = {}
-        if self._device is not None:
+        self._pending_packets = {"color": {}, "depth": {}, "ir": {}}
+        device, self._device = self._device, None
+        if device is not None:
             try:
-                self._device.setIrLaserDotProjectorBrightness(0)
-                self._device.setIrFloodLightBrightness(0)
+                device.setIrLaserDotProjectorBrightness(0)
+                device.setIrFloodLightBrightness(0)
             except Exception:
                 pass
-        self._device = None
+            try:
+                device.close()
+            except Exception:
+                pass

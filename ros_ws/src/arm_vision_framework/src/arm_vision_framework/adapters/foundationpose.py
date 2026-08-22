@@ -5,6 +5,7 @@ it from the configured checkout and exposes the small frame-based contract used
 by :class:`FoundationPoseEstimator`.
 """
 
+import gc
 import sys
 from pathlib import Path
 
@@ -104,6 +105,7 @@ class FoundationPoseRuntime:
         track_refine_iter=2,
         device="cuda:0",
         use_mask_center_guidance=True,
+        registration_max_hypotheses=0,
     ):
         self.root = Path(foundationpose_root).expanduser().resolve()
         self.debug_dir = Path(debug_dir).expanduser().resolve()
@@ -112,6 +114,9 @@ class FoundationPoseRuntime:
         self.track_refine_iter = int(track_refine_iter)
         self.device = str(device)
         self.use_mask_center_guidance = bool(use_mask_center_guidance)
+        self.registration_max_hypotheses = max(
+            0, int(registration_max_hypotheses)
+        )
         self._foundation_pose = None
         self._score_predictor = None
         self._refine_predictor = None
@@ -240,6 +245,19 @@ class FoundationPoseRuntime:
             raise BackendUnavailable(
                 "FoundationPose estimator initialization failed: {}".format(error)
             ) from error
+        if (
+            self.registration_max_hypotheses > 0
+            and len(estimator.rot_grid) > self.registration_max_hypotheses
+        ):
+            import torch
+
+            indices = torch.linspace(
+                0,
+                len(estimator.rot_grid) - 1,
+                steps=self.registration_max_hypotheses,
+                device=estimator.rot_grid.device,
+            ).round().long()
+            estimator.rot_grid = estimator.rot_grid.index_select(0, indices)
         self.debug_dir.mkdir(parents=True, exist_ok=True)
         self._estimator = estimator
         self._mesh_key = key
@@ -283,6 +301,9 @@ class FoundationPoseRuntime:
             rgb, depth_m, mask, camera_matrix
         )
         try:
+            import torch
+
+            torch.cuda.empty_cache()
             pose = estimator.register(
                 K=K,
                 rgb=rgb,
@@ -359,6 +380,13 @@ class FoundationPoseRuntime:
         self._estimator = None
         self._mesh_key = None
         self._glctx = None
+        gc.collect()
+        try:
+            import torch
+
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 
 class FoundationPoseEstimator(PoseEstimator):

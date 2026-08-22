@@ -32,7 +32,11 @@ source "${CONDA_ROOT}/etc/profile.d/conda.sh"
 exec >> "${LOG_FILE}" 2>&1
 
 echo "== [1/8] 创建环境 ${ENV_NAME} (python 3.9)"
-conda create -y -n "${ENV_NAME}" python=3.9 -c "${TUNA_MAIN}"
+if [[ -x "${CONDA_ROOT}/envs/${ENV_NAME}/bin/python" ]]; then
+  echo "环境已存在，保留已安装包并继续补全"
+else
+  conda create -y -n "${ENV_NAME}" python=3.9 -c "${TUNA_MAIN}"
+fi
 
 conda activate "${ENV_NAME}"
 export PIP_NO_CACHE_DIR=1
@@ -64,9 +68,17 @@ for PAIR in \
   "cuda-nvtx-11-8_11.8.86-1_amd64.deb|/tmp/cuda-nvtx-11-8.deb"; do
   DEB_NAME="${PAIR%%|*}"
   DEB_PATH="${PAIR##*|}"
-  if [[ ! -f "${DEB_PATH}" ]]; then
-    curl -sL --retry 6 --retry-delay 3 -o "${DEB_PATH}" \
+  # ``dpkg-deb --info`` only validates the small control member and can accept
+  # a truncated data member.  Stream the full archive index before deciding a
+  # previous interrupted download is complete, then resume it in place.
+  if ! (dpkg-deb --fsys-tarfile "${DEB_PATH}" 2>/dev/null | tar -tf - >/dev/null 2>&1); then
+    curl -fL --retry 12 --retry-delay 3 --continue-at - \
+      -o "${DEB_PATH}" \
       "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/${DEB_NAME}"
+  fi
+  if ! (dpkg-deb --fsys-tarfile "${DEB_PATH}" 2>/dev/null | tar -tf - >/dev/null 2>&1); then
+    echo "CUDA 开发包下载不完整：${DEB_PATH}" >&2
+    exit 1
   fi
   dpkg -x "${DEB_PATH}" /tmp/cuda_dev_headers
 done
@@ -138,6 +150,17 @@ python -m pip install "numpy<2" -i "${PYPI_TUNA}"
 # ROS Noetic's Python modules import rospkg, which is not included in a fresh
 # Conda environment even after sourcing /opt/ros/noetic/setup.bash.
 python -m pip install rospkg -i "${PYPI_TUNA}"
+
+echo "== [6.5/8] Gemini 静态帧验证依赖（YOLO segmentation）"
+# Pin torchvision to the ABI matching torch 2.5.1+cu118.  Letting pip choose
+# the newest torchvision upgrades torch to CUDA 12.x and breaks gsnet/ME.
+python -m pip install "torchvision==0.20.1+cu118" \
+  --extra-index-url "https://download.pytorch.org/whl/cu118" -i "${PYPI_TUNA}"
+python -m pip install "ultralytics-thop==2.0.14" --no-deps -i "${PYPI_TUNA}"
+python -m pip install "ultralytics==8.3.170" --no-deps -i "${PYPI_TUNA}"
+# graspnetAPI currently resolves to an OpenCV 5 prerelease which requires
+# NumPy 2.x, while the vendor gsnet binary requires the NumPy 1.x ABI.
+python -m pip install "opencv-python==4.10.0.84" psutil py-cpuinfo -i "${PYPI_TUNA}"
 
 echo "== [7/8] pointnet2（AnyGrasp SDK 内）"
 cd "${SDK_DIR}/pointnet2"

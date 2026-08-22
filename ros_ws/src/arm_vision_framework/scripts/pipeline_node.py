@@ -57,8 +57,12 @@ class PipelineNode:
         ).upper()
         level = getattr(logging, level_name, logging.INFO)
         logging.getLogger().setLevel(level)
-        if hasattr(rospy, "core") and hasattr(rospy.core, "_base_logger"):
-            rospy.core._base_logger.setLevel(level)
+        # ``rospy.core._base_logger`` is a logging function in ROS Noetic,
+        # not a ``logging.Logger`` instance. Configure the named loggers
+        # through Python's public logging API so startup works across rospy
+        # patch releases.
+        logging.getLogger("rospy").setLevel(level)
+        logging.getLogger("rosout").setLevel(level)
         self.calibration = CalibrationStore(calibration_path)
         self.pipeline = build_pipeline(self.settings, self.calibration)
         self.bridge = CvBridge()

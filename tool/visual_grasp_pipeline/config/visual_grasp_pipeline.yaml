@@ -17,6 +17,13 @@ object_models:
   orange: ''
   bottle: ''
 
+object_model_scales:
+  wangzai: 0.001
+  sprite: 0.001
+  banana: 1.0
+  red_apple: 1.0
+  green_apple: 1.0
+
 yolo_to_object:
   orange: orange
   banana: banana
@@ -52,6 +59,11 @@ pipeline:
   tag_smoothing_alpha: 0.3
   pose_file: /tmp/can_pose.npy
   grasp_file: /tmp/grasp_pose.npy
+  # Fallback for models without an object_model_scales entry.
   mesh_scale_to_meters: 1.0
   device: cuda:0
   use_mask_center_guidance: true
+  # 8GB GPU profile: crop by the YOLO ROI and bound the registration batch.
+  foundationpose_roi_padding_pixels: 24
+  foundationpose_max_input_size: 640
+  foundationpose_registration_hypotheses: 64

@@ -52,6 +52,12 @@ class CameraIntrinsics:
     def from_mapping(cls, entry: dict) -> "CameraIntrinsics":
         if not isinstance(entry, dict):
             raise ValueError("camera intrinsics entry must be a mapping")
+        # The active projects share arm_vision_framework's central calibration
+        # file. Keep accepting standalone CameraInfo-style YAMLs for legacy
+        # sessions, but unwrap the canonical camera.color entry when present.
+        canonical_color = entry.get("camera", {}).get("color")
+        if isinstance(canonical_color, dict):
+            entry = canonical_color
         matrix_entry = entry.get("camera_matrix", entry.get("K"))
         distortion_entry = entry.get(
             "distortion_coefficients", entry.get("distortion", entry.get("D", []))
@@ -73,10 +79,17 @@ class CameraIntrinsics:
         return {
             "image_width": self.width,
             "image_height": self.height,
-            "distortion_model": "plumb_bob",
+            "distortion_model": self.distortion_model,
             "camera_matrix": self.matrix.tolist(),
             "distortion_coefficients": self.distortion.tolist(),
         }
+
+    @property
+    def distortion_model(self) -> str:
+        rational = self.distortion.size >= 8 and np.any(
+            np.abs(self.distortion[5:8]) > 1.0e-12
+        )
+        return "rational_polynomial" if rational else "plumb_bob"
 
 
 @dataclass(frozen=True)
@@ -113,15 +126,23 @@ def load_runtime_calibration(path: str) -> RgbdCalibration:
     color = CameraIntrinsics.from_mapping(color_entry)
     depth = CameraIntrinsics.from_mapping(depth_entry)
     transform_entry = data.get("transforms", {}).get("color_from_depth", {})
-    if "matrix" not in transform_entry:
+    hardware_aligned = bool(depth_entry.get("aligned_to_color", False))
+    if "matrix" not in transform_entry and not hardware_aligned:
         raise ValueError("transforms.color_from_depth.matrix is missing")
-    valid = bool(transform_entry.get("valid", False))
-    valid = valid and bool(depth_entry.get("intrinsics_valid", depth_entry.get("valid", False)))
+    transform = (
+        np.eye(4, dtype=np.float64)
+        if hardware_aligned else transform_entry["matrix"]
+    )
+    valid = bool(depth_entry.get("intrinsics_valid", depth_entry.get("valid", False)))
+    valid = valid and bool(color_entry.get("valid", False))
+    valid = valid and (hardware_aligned or bool(transform_entry.get("valid", False)))
+    if hardware_aligned:
+        valid = valid and (color.width, color.height) == (depth.width, depth.height)
     quality = data.get("quality", {})
     return RgbdCalibration(
         color=color,
         depth=depth,
-        color_from_depth=transform_entry["matrix"],
+        color_from_depth=transform,
         valid=valid,
         source=str(calibration_path),
         rms_reprojection_error_px=quality.get("rgbd_stereo_rms_px"),

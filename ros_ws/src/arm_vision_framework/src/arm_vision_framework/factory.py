@@ -8,6 +8,9 @@ from .adapters.mock import MockPoseEstimator, MockRobotController, MockSegmenter
 from .adapters.modbus_global_point import (
     ModbusFallbackError, ModbusGlobalPointRobotController,
 )
+from .adapters.nexbot_tcp import (
+    NexBotTcpRobotController, nexbot_tcp_client_from_config,
+)
 from .adapters.topic_robot import TopicRobotController
 from .adapters.yolo import YoloSegmenter
 from .controller_state_reader import ControllerStateReader
@@ -134,6 +137,12 @@ def build_robot(settings, controller_client=None, state_provider=None):
             robot.controller_state_provider = provider
             return robot
         except (ModbusFallbackError, ValueError, KeyError) as error:
+            raise ConfigurationError(str(error)) from error
+    if backend == "nexbot_tcp":
+        try:
+            endpoint = nexbot_tcp_client_from_config(settings)
+            return NexBotTcpRobotController(endpoint)
+        except ValueError as error:
             raise ConfigurationError(str(error)) from error
     raise ConfigurationError(
         "robot adapter {} is not implemented; add a vendor bridge after hardware assignment".format(backend)

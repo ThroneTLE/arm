@@ -131,8 +131,10 @@ controller:
 配置校验会拒绝空的启用端点、非法单元号/地址，并始终拒绝
 `controller.motion.enabled: true`。字节级运动协议现已在
 [`docs/纳博特通讯协议.md`](../docs/纳博特通讯协议.md) 中给出（22.07：6000 端口
-`0x4501/0x4502` 等），实现 `RobotController.move_j/move_l` 后按现场验收结果打开；
-在此之前不能通过本模块写寄存器来“试探” MOVJ/MOVL。
+`0x4501/0x4502` 等），并已实现为 `ros_ws/.../adapters/nexbot_tcp.py`
+（`robot.adapter: nexbot_tcp`，本地假服务器回环测试通过）；实现
+`RobotController.move_j/move_l` 后按现场验收结果打开
+`controller.motion.enabled`——在此之前不能通过本模块写寄存器来“试探” MOVJ/MOVL。
 
 状态映射使用下列字段名；具体地址和编码不能照抄示例，必须逐项对照示教器：
 

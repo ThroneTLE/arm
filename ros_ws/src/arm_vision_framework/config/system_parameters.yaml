@@ -31,6 +31,8 @@ camera:
   depth_frame_id: camera_color_optical_frame
   depth_scale_to_meters: 0.001
   oak_d_pro:
+    # Pin every active project to the EEPROM calibration imported from this unit.
+    mxid: 14442C10D141C5D600
     # Recommended stopped-arm competition profile. RGB and aligned depth have
     # identical dimensions; official EEPROM intrinsics must be imported at
     # this exact output size before real operation.
@@ -109,6 +111,31 @@ controller:
   motion:
     enabled: false
     protocol: vendor_sdk_required
+  # Official NexBot JSON-over-TCP protocol (RTL-22.07, open.inexbot.com):
+  # port 6000 = motion commands (MOVJ 0x4501 / MOVL 0x4502 / stop 0x2314),
+  # port 7000 = host state service (0x9512/0x9513).  Select with
+  # ``robot.adapter: nexbot_tcp``.  Leave host empty until the field endpoint
+  # is known; motion stays gated by safety.dry_run / allow_robot_motion.
+  nexbot_tcp:
+    host: ''
+    port_motion: 6000
+    port_state: 7000
+    robot: 1
+    channel: 1
+    connect_timeout_s: 2.0
+    io_timeout_s: 1.0
+    keepalive: true
+    max_frame_bytes: 1048576
+    # Official text says the pos array is 7 body slots + 5 external-axis
+    # slots, while the published example shows 7 values. 0 = example shape,
+    # 5 = documented full shape; verify against the field controller.
+    external_axes: 0
+    # Poll 7000 axisVel until motion settles (all |v| < velocity_eps_rad_s).
+    wait_for_finish: true
+    motion_finish_timeout_s: 60.0
+    velocity_eps_rad_s: 0.02
+    # Optional heartbeat (0x7266); 0 disables until field-verified.
+    heartbeat_s: 0.0
   remote_io:
     outputs: {}
     inputs: {}

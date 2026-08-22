@@ -1,4 +1,13 @@
-# Astra Pro 固定相机标定
+# 相机标定入口
+
+当前无参数启动会进入比赛流水线的 OAK-D-PRO-FF EEPROM 页面并自动连接当前设备：
+
+```bash
+./tool/camera_calibration/run_ui.sh
+```
+
+以下 Astra Pro 固定相机流程仅作历史回归；需要时显式运行
+`./tool/camera_calibration/run_ui.sh --legacy-astra`。
 
 这套工具完成四件事：
 

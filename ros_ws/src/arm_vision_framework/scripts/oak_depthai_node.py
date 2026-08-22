@@ -26,6 +26,7 @@ from sensor_msgs.msg import CameraInfo, Image, Imu
 from std_srvs.srv import Trigger, TriggerResponse
 
 from arm_vision_framework.oak_depthai import profile_from_config
+from arm_vision_framework.oak_calibration_import import normalize_distortion
 from arm_vision_framework.oak_imu import config_from_camera
 from arm_vision_framework.parameters import load_system_parameters
 
@@ -88,11 +89,23 @@ class OakDepthAiNode:
         )
 
     @staticmethod
-    def _packet_timestamp(packet):
-        stamp = packet.getTimestampDevice()
+    def _timestamp_seconds(stamp):
         if hasattr(stamp, "total_seconds"):
             return float(stamp.total_seconds())
+        # DepthAI 2.30 uses ``depthai.Timestamp`` for IMU reports. Earlier
+        # releases exposed a timedelta-like object instead.
+        if hasattr(stamp, "get"):
+            resolved = stamp.get()
+            if hasattr(resolved, "total_seconds"):
+                return float(resolved.total_seconds())
+            stamp = resolved
+        if hasattr(stamp, "sec") and hasattr(stamp, "nsec"):
+            return float(stamp.sec) + float(stamp.nsec) * 1.0e-9
         return float(stamp)
+
+    @classmethod
+    def _packet_timestamp(cls, packet):
+        return cls._timestamp_seconds(packet.getTimestampDevice())
 
     @staticmethod
     def _imu_timestamp(sample):
@@ -103,9 +116,7 @@ class OakDepthAiNode:
                 continue
             stamp = getattr(source, "timestamp", None)
             if stamp is not None:
-                if hasattr(stamp, "total_seconds"):
-                    return float(stamp.total_seconds())
-                return float(stamp)
+                return OakDepthAiNode._timestamp_seconds(stamp)
         return None
 
     def _output(self, pipeline, name):
@@ -159,7 +170,23 @@ class OakDepthAiNode:
             imu.setMaxBatchReports(10)
             imu_output = self._output(pipeline, "imu")
             imu.out.link(imu_output.input)
-        self.device = dai.Device(pipeline)
+        if self.profile.mxid:
+            deadline = time.monotonic() + 5.0
+            matches = []
+            while not matches and time.monotonic() < deadline:
+                matches = [
+                    info for info in dai.Device.getAllAvailableDevices()
+                    if str(info.getMxId()).strip() == self.profile.mxid
+                ]
+                if not matches:
+                    time.sleep(0.25)
+            if not matches:
+                raise RuntimeError(
+                    "configured OAK MXID {} is not connected".format(self.profile.mxid)
+                )
+            self.device = dai.Device(pipeline, matches[0])
+        else:
+            self.device = dai.Device(pipeline)
         self.device.setIrLaserDotProjectorBrightness(self.profile.dot_projector_mA)
         self.device.setIrFloodLightBrightness(self.profile.floodlight_mA)
         self.queues = {
@@ -173,12 +200,13 @@ class OakDepthAiNode:
             dai.CameraBoardSocket.CAM_A,
             self.profile.color_width, self.profile.color_height,
         ), dtype=np.float64).reshape(3, 3)
-        distortion = np.asarray(calibration.getDistortionCoefficients(
+        raw_distortion = np.asarray(calibration.getDistortionCoefficients(
             dai.CameraBoardSocket.CAM_A
         ), dtype=np.float64).reshape(-1)
+        distortion_model, distortion = normalize_distortion(raw_distortion)
         info = CameraInfo()
         info.width, info.height = self.profile.image_size
-        info.distortion_model = "plumb_bob"
+        info.distortion_model = distortion_model
         info.K = matrix.reshape(-1).tolist()
         info.D = distortion.tolist()
         info.R = np.eye(3, dtype=np.float64).reshape(-1).tolist()

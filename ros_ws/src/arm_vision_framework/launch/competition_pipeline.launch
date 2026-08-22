@@ -1,8 +1,8 @@
 <launch>
   <arg name="config" default="$(find arm_vision_framework)/config/system_parameters.yaml"/>
   <arg name="calibration" default="$(find arm_vision_framework)/config/calibration_parameters.yaml"/>
-  <!-- No hardware is available during development; enable explicitly on site. -->
-  <arg name="start_oak" default="false"/>
+  <!-- The active workspace is pinned to the connected OAK-D-PRO-FF. -->
+  <arg name="start_oak" default="true"/>
   <arg name="start_controller_state" default="false"/>
 
   <node if="$(arg start_oak)"

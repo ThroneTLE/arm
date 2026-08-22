@@ -88,6 +88,23 @@ cd /home/throne/workspaces/arm
 RViz 中新增两个显示：`AnyGrasp candidates`（绿=高分、红=低分的夹爪模型，带逼近方向
 线段与最优抓取文字标签）和 `Best grasp pose`（最优抓取坐标系）。
 
+## Gemini 静态帧离线验证
+
+无需 ROS、实机相机、FoundationPose 或手眼标定。默认复用
+`tool/visual_grasp_pipeline/config/visual_grasp_pipeline.yaml` 中的 Gemini
+`static_frame` 与 `yolo_model.pt` 路径，选择置信度最高的 `can` 实例：
+
+```bash
+cd /home/throne/workspaces/arm
+./tool/grasp_planning/run_gemini_static_validation.sh
+```
+
+结果写入
+`/home/throne/workspaces/arm_data/anygrasp_gemini_static_validation/`：YOLO 检测图、
+清理后的实例 Mask、抓取投影图、带 region-steering 标记的点云和完整 JSON。追加
+`--vis` 可打开 Open3D 三维交互窗口；用 `--instance 1` / `--instance 2` 验证另外两个
+罐子，用 `--label banana` 等切换类别。
+
 ## 调参
 
 所有参数集中在 `config/grasp_planning.yaml`：

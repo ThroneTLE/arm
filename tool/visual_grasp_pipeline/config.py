@@ -31,6 +31,7 @@ class VisualGraspConfig:
     yolo_weights: str = ""
     foundationpose_root: str = ""
     object_models: Dict[str, str] = field(default_factory=dict)
+    object_model_scales: Dict[str, float] = field(default_factory=dict)
     yolo_to_object: Dict[str, str] = field(default_factory=dict)
     grasp_rules: Dict[str, GraspRule] = field(default_factory=dict)
     default_object: str = "sprite"
@@ -55,6 +56,9 @@ class VisualGraspConfig:
     mesh_scale_to_meters: float = 1.0
     device: str = "cuda:0"
     use_mask_center_guidance: bool = True
+    foundationpose_roi_padding_pixels: int = 24
+    foundationpose_max_input_size: int = 640
+    foundationpose_registration_hypotheses: int = 64
 
     @classmethod
     def from_yaml(cls, path) -> "VisualGraspConfig":
@@ -62,6 +66,7 @@ class VisualGraspConfig:
         paths = raw.get("paths", {})
         pipeline = raw.get("pipeline", {})
         objects = raw.get("object_models", {})
+        model_scales = raw.get("object_model_scales", {})
         mapping = raw.get("yolo_to_object", {})
         rules_raw = raw.get("grasp_rules", {})
         rules = {}
@@ -78,6 +83,9 @@ class VisualGraspConfig:
             foundationpose_root=_expand(paths.get("foundationpose_root", "")),
             object_models={
                 k: _expand(v) for k, v in objects.items() if v
+            },
+            object_model_scales={
+                str(key): float(value) for key, value in model_scales.items()
             },
             yolo_to_object=dict(mapping),
             grasp_rules=rules,
@@ -107,6 +115,16 @@ class VisualGraspConfig:
             use_mask_center_guidance=bool(
                 pipeline.get("use_mask_center_guidance", True)
             ),
+            foundationpose_roi_padding_pixels=max(
+                0, int(pipeline.get("foundationpose_roi_padding_pixels", 24))
+            ),
+            foundationpose_max_input_size=max(
+                160, int(pipeline.get("foundationpose_max_input_size", 640))
+            ),
+            foundationpose_registration_hypotheses=max(
+                1,
+                int(pipeline.get("foundationpose_registration_hypotheses", 64)),
+            ),
         )
 
     def resolve_object_key(self, detected_name, class_id=None) -> str:
@@ -119,6 +137,11 @@ class VisualGraspConfig:
 
     def mesh_for_object(self, object_key: str) -> str:
         return self.object_models.get(object_key, "")
+
+    def mesh_scale_for_object(self, object_key: str) -> float:
+        return float(
+            self.object_model_scales.get(object_key, self.mesh_scale_to_meters)
+        )
 
     def rule_for_object(self, object_key: str) -> GraspRule:
         return self.grasp_rules.get(object_key, self.grasp_rules.get(self.default_object, GraspRule()))

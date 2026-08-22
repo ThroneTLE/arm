@@ -23,6 +23,7 @@ class OakDProProfile:
     color_width: int = 1920
     color_height: int = 1080
     fps: float = 10.0
+    mxid: str = ""
     mono_resolution: str = "800p"
     extended_disparity: bool = True
     subpixel: bool = False
@@ -35,6 +36,7 @@ class OakDProProfile:
     maximum_depth_m: float = 3.0
 
     def __post_init__(self):
+        object.__setattr__(self, "mxid", str(self.mxid or "").strip())
         if (int(self.color_width), int(self.color_height)) != (1920, 1080):
             raise ValueError(
                 "OAK-D Pro competition profile must use RGB 1920x1080; "
@@ -77,6 +79,7 @@ class OakDProProfile:
     def metadata(self):
         return {
             "profile": RECOMMENDED_PROFILE_NAME,
+            "mxid": self.mxid,
             "rgb_sensor_size": list(OAK_D_PRO_RGB_SENSOR_SIZE),
             "mono_sensor_size": list(OAK_D_PRO_MONO_SENSOR_SIZE),
             "stereo_baseline_mm": OAK_D_PRO_STEREO_BASELINE_MM,
@@ -103,6 +106,7 @@ def profile_from_config(camera_config):
         color_width=oak.get("color_width", 1920),
         color_height=oak.get("color_height", 1080),
         fps=oak.get("fps", 10.0),
+        mxid=oak.get("mxid", ""),
         mono_resolution=oak.get("mono_resolution", "800p"),
         extended_disparity=oak.get("extended_disparity", True),
         subpixel=oak.get("subpixel", False),

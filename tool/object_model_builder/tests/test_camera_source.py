@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from tool.object_model_builder.camera_source import (
-    AstraRosSource,
+    AstraRosSource, OakDProSource,
     OrbbecRosSource,
     native_ros_environment,
     nearest_timestamped_frame,
@@ -87,6 +87,11 @@ class RosDriverEnvironmentTests(unittest.TestCase):
 
 
 class TimestampPairingTests(unittest.TestCase):
+    def test_oak_defaults_match_the_active_camera_profile(self):
+        source = OakDProSource()
+        self.assertEqual((source.color_width, source.color_height), (1920, 1080))
+        self.assertEqual(source.fps, 10)
+
     def test_selects_nearest_timestamped_frame(self):
         timestamp, frame = nearest_timestamped_frame(
             ((1.0, "old"), (1.1, "near"), (1.3, "new")), 1.16

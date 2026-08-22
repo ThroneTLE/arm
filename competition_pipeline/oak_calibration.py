@@ -3,6 +3,7 @@
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,16 @@ def _depthai():
 
 def _text(value):
     return "" if value is None else str(value).strip()
+
+
+def _normalize_distortion(coefficients):
+    values = np.asarray(coefficients, dtype=np.float64).reshape(-1)
+    rational = values.size >= 8 and np.any(np.abs(values[5:8]) > 1.0e-12)
+    if rational:
+        length = values.size if np.any(np.abs(values[8:]) > 1.0e-12) else 8
+        return "rational_polynomial", values[:length]
+    length = 5 if values.size >= 5 else values.size
+    return "plumb_bob", values[:length]
 
 
 def _eeprom_metadata(calibration):
@@ -59,7 +70,7 @@ def inspect_oak_calibration(path, width=1920, height=1080):
             ),
             dtype=np.float64,
         ).reshape(3, 3)
-        distortion = np.asarray(
+        raw_distortion = np.asarray(
             calibration.getDistortionCoefficients(dai.CameraBoardSocket.CAM_A),
             dtype=np.float64,
         ).reshape(-1)
@@ -69,8 +80,8 @@ def inspect_oak_calibration(path, width=1920, height=1080):
         not np.all(np.isfinite(matrix))
         or matrix[0, 0] <= 0.0
         or matrix[1, 1] <= 0.0
-        or distortion.size < 4
-        or not np.all(np.isfinite(distortion))
+        or raw_distortion.size < 4
+        or not np.all(np.isfinite(raw_distortion))
     ):
         raise ValueError("OAK RGB 内参或畸变参数无效")
     baseline_cm = None
@@ -102,6 +113,7 @@ def inspect_oak_calibration(path, width=1920, height=1080):
         raise ValueError(
             "OAK JSON 缺少有效的 CAM_B/C 双目外参或基线；不能作为 RGB-D 工厂标定导入"
         )
+    distortion_model, distortion = _normalize_distortion(raw_distortion)
     metadata = _eeprom_metadata(calibration)
     metadata.update(
         {
@@ -110,6 +122,7 @@ def inspect_oak_calibration(path, width=1920, height=1080):
             "image_height": height,
             "camera_matrix": matrix,
             "distortion_coefficients": distortion,
+            "distortion_model": distortion_model,
             "baseline_mm": None if baseline_cm is None else baseline_cm * 10.0,
             "cam_b_from_cam_c": stereo_extrinsics,
         }
@@ -162,6 +175,7 @@ def import_oak_calibration(source_json, output_json, output_yaml, width=1920, he
                 "camera_name": "oak_rgb_cam_a",
                 "image_width": int(width),
                 "image_height": int(height),
+                "distortion_model": info["distortion_model"],
                 "camera_matrix": matrix.tolist(),
                 "distortion_coefficients": distortion.tolist(),
             }
@@ -173,14 +187,32 @@ def import_oak_calibration(source_json, output_json, output_yaml, width=1920, he
     return info
 
 
-def export_connected_oak_eeprom(output_json, output_yaml, width=1920, height=1080):
+def export_connected_oak_eeprom(
+    output_json, output_yaml, width=1920, height=1080, mxid="",
+):
     """Read the connected device EEPROM, save official JSON, and import it."""
     dai = _depthai()
     output_json = Path(output_json).expanduser().resolve()
     output_json.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_json.with_name(".{}-device.tmp.json".format(output_json.stem))
     try:
-        with dai.Device() as device:
+        requested = str(mxid or "").strip()
+        devices = list(dai.Device.getAllAvailableDevices())
+        if requested:
+            deadline = time.monotonic() + 5.0
+            devices = []
+            while not devices and time.monotonic() < deadline:
+                devices = [
+                    info for info in dai.Device.getAllAvailableDevices()
+                    if str(info.getMxId()).strip() == requested
+                ]
+                if not devices:
+                    time.sleep(0.25)
+            if not devices:
+                raise RuntimeError("未找到配置的 OAK MXID {}".format(requested))
+        elif len(devices) > 1:
+            raise RuntimeError("检测到多个 OAK，请先配置 camera profile 的 mxid")
+        with (dai.Device(devices[0]) if devices else dai.Device()) as device:
             calibration = device.readCalibration()
             calibration.eepromToJsonFile(str(temporary))
         return import_oak_calibration(

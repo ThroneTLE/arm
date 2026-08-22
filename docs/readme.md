@@ -485,11 +485,11 @@ AprilTag 视觉结果保留为开机验收、手眼质量检查和不触发运�
 `competition_pipeline` 与正式 `ros_ws` 均已默认关闭运行时 Tag 检测，来源固定为
 `tcp_hand_eye` / `robot_tcp_hand_eye`；TCP 不新鲜或手眼无效时直接拒绝物体坐标与抓取。
 
-如果现场提供张正友棋盘格，也可以在 `competition_pipeline` 的“眼在手上”页切换为
-`checkerboard`。已预置板面 60×45 mm、单格 5 mm，对应 12×9 个方格、**11×8 个内角点**；
-这一路采用多姿态 OpenCV `calibrateHandEye`，固定棋盘不需要事先测其基座坐标。切换靶标或
-尺寸会归档旧样本并使手眼矩阵失效；棋盘的纯黑白 180° 朝向二义性需用一个角的物理标签和
-一致摆放方向消除。
+当前 `competition_pipeline` 在“眼在手上”页默认使用张正友棋盘格（`checkerboard`）。
+默认标定板为 12×9 个方格、单格 25 mm（即印刷区 300×225 mm），OpenCV 内角点为
+**11×8 个**；这一路采用多姿态 OpenCV `calibrateHandEye`，固定棋盘不需要事先测其
+基座坐标。切换靶标或尺寸会归档旧样本并使手眼矩阵失效；棋盘的纯黑白 180° 朝向二义性
+需用一个角的物理标签和一致摆放方向消除。
 
 ### 7.5 形态参数与 MoveIt 轨迹
 

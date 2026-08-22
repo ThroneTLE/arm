@@ -6,6 +6,7 @@ the rest of the tool remains usable while the license is pending.
 """
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -102,7 +103,16 @@ class AnyGraspPlanner:
             max_gripper_width=self.max_gripper_width,
             gripper_height=self.gripper_height,
         )
-        detector = create_detector(config)
+        # The vendor extension resolves ``license/licenseCfg.json`` relative to
+        # the process working directory.  The ROS and offline launchers run
+        # from the project root, so load the detector from the SDK directory
+        # and immediately restore the caller's working directory.
+        previous_directory = Path.cwd()
+        try:
+            os.chdir(str(self.sdk_grasp_dir))
+            detector = create_detector(config)
+        finally:
+            os.chdir(str(previous_directory))
         if detector is None:
             raise AnyGraspUnavailableError(
                 "AnyGrasp create_detector 返回 None：license 校验失败或 checkpoint 不匹配"

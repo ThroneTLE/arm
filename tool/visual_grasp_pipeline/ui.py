@@ -210,19 +210,22 @@ class VisualGraspUI:
             label = self.objects[self.obj_combo.current()]["name"]
         threading.Thread(target=self._pose_worker, args=(label,), daemon=True).start()
 
-    def _get_estimator(self, mesh_path):
-        key = str(mesh_path)
+    def _get_estimator(self, mesh_path, mesh_scale_to_meters):
+        key = (str(mesh_path), float(mesh_scale_to_meters))
         estimator = self.pose_estimators.get(key)
         if estimator is None:
             estimator = FoundationPosePoseEstimator(
                 foundationpose_root=self.config.foundationpose_root,
                 mesh_path=mesh_path,
-                mesh_scale_to_meters=self.config.mesh_scale_to_meters,
+                mesh_scale_to_meters=mesh_scale_to_meters,
                 debug_dir=self.config.debug_dir,
                 est_refine_iter=self.config.est_refine_iter,
                 track_refine_iter=self.config.track_refine_iter,
                 device=self.config.device,
                 use_mask_center_guidance=self.config.use_mask_center_guidance,
+                registration_max_hypotheses=(
+                    self.config.foundationpose_registration_hypotheses
+                ),
             )
             self.pose_estimators[key] = estimator
         return estimator
@@ -262,7 +265,9 @@ class VisualGraspUI:
                 x1, y1, x2, y2 = target["xyxy"]
                 mask[y1:y2, x1:x2] = 255
 
-            estimator = self._get_estimator(mesh_path)
+            estimator = self._get_estimator(
+                mesh_path, self.config.mesh_scale_for_object(object_key)
+            )
             camera_from_object = estimator.register(
                 rgb, fill_depth_roi(depth_m, mask), mask, k
             )

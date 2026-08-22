@@ -115,9 +115,9 @@ class CompetitionConfig:
         target = hand_eye.setdefault("calibration_target", {})
         target.setdefault("type", "apriltag_map")
         checkerboard = target.setdefault("checkerboard", {})
-        checkerboard.setdefault("board_width_mm", 60.0)
-        checkerboard.setdefault("board_height_mm", 45.0)
-        checkerboard.setdefault("square_size_mm", 5.0)
+        checkerboard.setdefault("board_width_mm", 300.0)
+        checkerboard.setdefault("board_height_mm", 225.0)
+        checkerboard.setdefault("square_size_mm", 25.0)
         # Never guess the printed grid from the outer-board dimensions. Legacy
         # files did not contain explicit cell counts, so leave them unconfigured
         # until the real board is counted at the venue.

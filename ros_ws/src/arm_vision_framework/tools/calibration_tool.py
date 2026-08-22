@@ -25,7 +25,9 @@ from arm_vision_framework.parameters import (
     CalibrationStore, COORDINATE_CONVENTION_ID, load_system_parameters,
 )
 from arm_vision_framework.transforms import as_transform
-from arm_vision_framework.oak_calibration_import import inspect_oak_eeprom
+from arm_vision_framework.oak_calibration_import import (
+    export_oak_device_eeprom, inspect_oak_eeprom,
+)
 
 
 DEFAULT_PARAMETER = PACKAGE_ROOT / "config" / "calibration_parameters.yaml"
@@ -307,7 +309,8 @@ def _copy_file_atomic(source, destination):
 
 
 def import_oak_eeprom(parameter_path, source_json, color_width=1920, color_height=1080,
-                       depth_width=1280, depth_height=800, factory_output=None):
+                       depth_width=1280, depth_height=800, factory_output=None,
+                       color_fps=10.0, device_mxid=None, device_usb_speed=None):
     """Import an official OAK EEPROM JSON into the ROS calibration file.
 
     This is intentionally an offline import.  It does not claim to flash an
@@ -315,6 +318,8 @@ def import_oak_eeprom(parameter_path, source_json, color_width=1920, color_heigh
     calibration tool when the camera is physically connected.
     """
 
+    if float(color_fps) <= 0.0:
+        raise ValueError("OAK RGB FPS must be positive")
     parameters = read_yaml(parameter_path)
     info = inspect_oak_eeprom(
         source_json,
@@ -339,7 +344,8 @@ def import_oak_eeprom(parameter_path, source_json, color_width=1920, color_heigh
             "image_width": int(info["color"]["image_width"]),
             "image_height": int(info["color"]["image_height"]),
             "pixel_format": "BGR",
-            "distortion_model": "plumb_bob",
+            "fps": float(color_fps),
+            "distortion_model": info["color"]["distortion_model"],
             "camera_matrix": np.asarray(info["color"]["camera_matrix"], dtype=np.float64).tolist(),
             "distortion_coefficients": np.asarray(
                 info["color"]["distortion_coefficients"], dtype=np.float64
@@ -360,7 +366,8 @@ def import_oak_eeprom(parameter_path, source_json, color_width=1920, color_heigh
             "image_height": int(info["color"]["image_height"]),
             "unit": "millimeters_uint16",
             "aligned_to_color": True,
-            "distortion_model": "plumb_bob",
+            "note": "DepthAI depth is aligned and resampled into the RGB pixel grid.",
+            "distortion_model": info["color"]["distortion_model"],
             "camera_matrix": np.asarray(info["color"]["camera_matrix"], dtype=np.float64).tolist(),
             "distortion_coefficients": np.asarray(
                 info["color"]["distortion_coefficients"], dtype=np.float64
@@ -370,6 +377,7 @@ def import_oak_eeprom(parameter_path, source_json, color_width=1920, color_heigh
             "native_cam_c": {
                 "image_width": int(info["depth"]["image_width"]),
                 "image_height": int(info["depth"]["image_height"]),
+                "distortion_model": info["depth"]["distortion_model"],
                 "camera_matrix": np.asarray(
                     info["depth"]["camera_matrix"], dtype=np.float64
                 ).tolist(),
@@ -392,6 +400,19 @@ def import_oak_eeprom(parameter_path, source_json, color_width=1920, color_heigh
             "reason": "OAK runtime alignment is used; verify an explicit color_from_depth transform before enabling it",
         }
     )
+    frames = parameters.setdefault("frames", {})
+    if frames.get("camera_color"):
+        frames["camera_depth"] = frames["camera_color"]
+    hand_eye = parameters.setdefault("transforms", {}).setdefault(
+        "gripper_from_camera", {}
+    )
+    hand_eye.update(
+        {
+            "valid": False,
+            "reason": "camera profile changed to OAK; redo eye-in-hand calibration",
+            "updated_at": timestamp_text(),
+        }
+    )
     metadata = parameters.setdefault("metadata", {})
     metadata.update(
         {
@@ -400,11 +421,25 @@ def import_oak_eeprom(parameter_path, source_json, color_width=1920, color_heigh
             ),
             "updated_at": timestamp_text(),
             "source": str(saved_factory),
+            "note": "OAK-D Pro EEPROM imported for the active competition RGB-D profile.",
             "camera_calibration_source": "official_depthai_eeprom_json",
             "camera_calibration_eeprom_version": int(info["eeprom_version"]),
             "camera_calibration_baseline_mm": info["baseline_mm"],
         }
     )
+    if device_mxid:
+        metadata["camera_mxid"] = str(device_mxid)
+    else:
+        metadata.pop("camera_mxid", None)
+    if device_usb_speed:
+        metadata["camera_usb_speed_at_import"] = str(device_usb_speed)
+    else:
+        metadata.pop("camera_usb_speed_at_import", None)
+    # Every existing quality number was measured with the previous camera;
+    # retaining it after a profile switch would make the report misleading.
+    parameters["quality"] = {
+        "camera_intrinsics_source": "official_depthai_eeprom_json",
+    }
     fixed_reference = parameters.setdefault("fixed_camera_validation_reference", {})
     fixed_reference.update(
         {
@@ -414,6 +449,28 @@ def import_oak_eeprom(parameter_path, source_json, color_width=1920, color_heigh
         }
     )
     return atomic_save(parameter_path, parameters)
+
+
+def import_oak_device(parameter_path, mxid=None, color_width=1920, color_height=1080,
+                      depth_width=1280, depth_height=800, factory_output=None,
+                      color_fps=10.0):
+    """Read one connected OAK device and import its EEPROM calibration."""
+
+    with tempfile.TemporaryDirectory(prefix="arm-oak-eeprom-") as directory:
+        exported = Path(directory) / "device_eeprom.json"
+        device = export_oak_device_eeprom(exported, mxid=mxid)
+        return import_oak_eeprom(
+            parameter_path,
+            exported,
+            color_width=color_width,
+            color_height=color_height,
+            depth_width=depth_width,
+            depth_height=depth_height,
+            factory_output=factory_output,
+            color_fps=color_fps,
+            device_mxid=device["mxid"],
+            device_usb_speed=device["usb_speed"],
+        )
 
 
 def set_transform(parameter_path, name, matrix_values, valid=True):
@@ -489,6 +546,18 @@ def parse_args():
     oak.add_argument("--depth-width", type=int, default=1280)
     oak.add_argument("--depth-height", type=int, default=800)
     oak.add_argument("--factory-output", type=Path)
+    oak.add_argument("--fps", type=float, default=10.0)
+    oak_device = subparsers.add_parser(
+        "import-oak-device",
+        help="read and import EEPROM calibration from a connected OAK device",
+    )
+    oak_device.add_argument("--mxid")
+    oak_device.add_argument("--color-width", type=int, default=1920)
+    oak_device.add_argument("--color-height", type=int, default=1080)
+    oak_device.add_argument("--depth-width", type=int, default=1280)
+    oak_device.add_argument("--depth-height", type=int, default=800)
+    oak_device.add_argument("--factory-output", type=Path)
+    oak_device.add_argument("--fps", type=float, default=10.0)
     transform = subparsers.add_parser("set-transform")
     transform.add_argument(
         "--name", choices=("workspace_from_base", "gripper_from_camera", "color_from_depth"), required=True
@@ -528,6 +597,18 @@ def main():
             depth_width=args.depth_width,
             depth_height=args.depth_height,
             factory_output=args.factory_output,
+            color_fps=args.fps,
+        )
+    elif args.command == "import-oak-device":
+        destination, backup = import_oak_device(
+            args.parameter,
+            mxid=args.mxid,
+            color_width=args.color_width,
+            color_height=args.color_height,
+            depth_width=args.depth_width,
+            depth_height=args.depth_height,
+            factory_output=args.factory_output,
+            color_fps=args.fps,
         )
     elif args.command == "set-transform":
         destination, backup = set_transform(args.parameter, args.name, args.matrix)

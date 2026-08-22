@@ -419,7 +419,7 @@ class QtModelBuilderController(ModelBuilderApp):
         layout.setContentsMargins(24, 0, 20, 0)
         title = QLabel("物体三维模型工作台")
         title.setObjectName("appTitle")
-        backend = self.camera_config.get("backend", "astra_ros")
+        backend = self.camera_config.get("backend", "oak_depthai")
         camera_name = {
             "astra_ros": "Astra Pro",
             "orbbec_ros": "Gemini Max",
@@ -480,7 +480,7 @@ class QtModelBuilderController(ModelBuilderApp):
         source_label = QLabel("图像源")
         source_label.setObjectName("sectionLabel")
         layout.addWidget(source_label)
-        backend = self.camera_config.get("backend", "astra_ros")
+        backend = self.camera_config.get("backend", "oak_depthai")
         source = QLabel({
             "astra_ros": "Astra Pro · ROS",
             "orbbec_ros": "Gemini Max · Orbbec SDK ROS · 实机 CameraInfo",

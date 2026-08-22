@@ -37,6 +37,7 @@ class FoundationPosePoseEstimator:
         track_refine_iter: int = 2,
         device: str = "cuda:0",
         use_mask_center_guidance: bool = True,
+        registration_max_hypotheses: int = 0,
     ):
         self.mesh_path = Path(mesh_path).expanduser().resolve()
         self.mesh_scale_to_meters = float(mesh_scale_to_meters)
@@ -54,6 +55,7 @@ class FoundationPosePoseEstimator:
             self.track_refine_iter,
             self.device,
             self.use_mask_center_guidance,
+            max(0, int(registration_max_hypotheses)),
         )
 
     def _ensure_runtime(self):
@@ -74,6 +76,7 @@ class FoundationPosePoseEstimator:
             track_iter,
             device,
             mask_guidance,
+            registration_max_hypotheses,
         ) = self._runtime_config
         self._runtime = FoundationPoseRuntime(
             foundationpose_root=root,
@@ -83,6 +86,7 @@ class FoundationPosePoseEstimator:
             track_refine_iter=track_iter,
             device=device,
             use_mask_center_guidance=mask_guidance,
+            registration_max_hypotheses=registration_max_hypotheses,
         )
         return self._runtime
 

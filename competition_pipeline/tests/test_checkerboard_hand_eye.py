@@ -23,21 +23,37 @@ class CheckerboardHandEyeTest(unittest.TestCase):
         self.config.data["hand_eye"]["calibration_target"]["type"] = "checkerboard"
         self.config.data["hand_eye"]["calibration_target"]["checkerboard"].update({
             "configured": True,
-            "squares_x": 11,
-            "squares_y": 8,
-            "inner_corners": [10, 7],
+            "board_width_mm": 300.0,
+            "board_height_mm": 225.0,
+            "square_size_mm": 25.0,
+            "squares_x": 12,
+            "squares_y": 9,
+            "inner_corners": [11, 8],
         })
         self.config.data["hand_eye"]["minimum_samples"] = 8
 
-    def test_explicit_11x8_grid_means_10x7_inner_corners(self):
+    def test_active_default_checkerboard_is_12x9_25mm(self):
+        config = CompetitionConfig(CONFIG_PATH)
+        target = config.data["hand_eye"]["calibration_target"]
+        checkerboard = target["checkerboard"]
+        self.assertEqual(target["type"], "checkerboard")
+        self.assertTrue(checkerboard["configured"])
+        self.assertEqual((checkerboard["squares_x"], checkerboard["squares_y"]), (12, 9))
+        self.assertEqual(checkerboard["square_size_mm"], 25.0)
+        self.assertEqual(checkerboard["inner_corners"], [11, 8])
+        self.assertEqual(
+            CheckerboardTarget(checkerboard).pattern_size, (11, 8)
+        )
+
+    def test_explicit_12x9_grid_means_11x8_inner_corners(self):
         target = CheckerboardTarget(
             self.config.data["hand_eye"]["calibration_target"]["checkerboard"]
         )
-        self.assertEqual((target.squares_x, target.squares_y), (11, 8))
-        self.assertEqual(target.pattern_size, (10, 7))
-        self.assertEqual(target.corner_count, 70)
-        self.assertEqual(target.object_points_m.shape, (70, 3))
-        np.testing.assert_allclose(target.object_points_m[-1], [0.045, 0.030, 0.0])
+        self.assertEqual((target.squares_x, target.squares_y), (12, 9))
+        self.assertEqual(target.pattern_size, (11, 8))
+        self.assertEqual(target.corner_count, 88)
+        self.assertEqual(target.object_points_m.shape, (88, 3))
+        np.testing.assert_allclose(target.object_points_m[-1], [0.25, 0.175, 0.0])
 
     def test_outer_board_dimensions_do_not_guess_square_count(self):
         with self.assertRaisesRegex(ValueError, "square counts are not configured"):
@@ -62,8 +78,8 @@ class CheckerboardHandEyeTest(unittest.TestCase):
         square_pixels = 50
         margin = 50
         image = np.full((550, 700, 3), 255, dtype=np.uint8)
-        for row in range(8):
-            for column in range(11):
+        for row in range(9):
+            for column in range(12):
                 value = 0 if (row + column) % 2 == 0 else 255
                 image[
                     margin + row * square_pixels:margin + (row + 1) * square_pixels,
@@ -77,10 +93,10 @@ class CheckerboardHandEyeTest(unittest.TestCase):
         )
         observation = target.estimate(image, camera_matrix, np.zeros(5))
         self.assertTrue(observation.valid, observation.reason)
-        self.assertEqual(len(observation.corners), 70)
-        # 5 mm projects to 50 px at fx=800, so the fronto-parallel board is
-        # approximately 800 * 0.005 / 50 = 0.08 m from the camera.
-        self.assertAlmostEqual(observation.camera_from_board[2, 3], 0.08, places=3)
+        self.assertEqual(len(observation.corners), 88)
+        # 25 mm projects to 50 px at fx=800, so the fronto-parallel board is
+        # approximately 800 * 0.025 / 50 = 0.40 m from the camera.
+        self.assertAlmostEqual(observation.camera_from_board[2, 3], 0.40, places=3)
 
     def test_fixed_checkerboard_solves_tcp_from_camera_without_base_board_pose(self):
         expected_tcp_from_camera = transform_from_xyz_rpy(

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd "${SCRIPT_ROOT}/../.." && pwd -P)"
 CONDA_ROOT="${CONDA_ROOT:-/home/throne/miniconda3}"
-CAMERA_ROS_SETUP="${CAMERA_ROS_SETUP:-${ORBBEC_ROS_SETUP:-/home/throne/astra_ws/devel/setup.bash}}"
+CAMERA_ROS_SETUP="${CAMERA_ROS_SETUP:-${PROJECT_ROOT}/ros_ws/devel/setup.bash}"
 
 if [[ ! -r /opt/ros/noetic/setup.bash ]]; then
     echo "错误：未找到 ROS Noetic，无法启动瓶子定位与 RViz。" >&2

@@ -160,13 +160,22 @@ class BottleLocalizationNode:
         self._last_depth_timestamp = None
 
     def _build_source(self):
-        backend = self.camera_config.get("backend", "astra_ros")
+        backend = self.camera_config.get("backend", "oak_depthai")
         if backend == "oak_depthai":
             oak = self.camera_config.get("oak", {})
             return OakDProSource(
-                color_width=oak.get("color_width", 1280),
-                color_height=oak.get("color_height", 720),
-                fps=oak.get("fps", 30),
+                color_width=oak.get("color_width", 1920),
+                color_height=oak.get("color_height", 1080),
+                fps=oak.get("fps", 10),
+                mxid=oak.get("mxid", ""),
+                dot_projector_mA=oak.get("dot_projector_mA", 800),
+                floodlight_mA=oak.get("floodlight_mA", 0),
+                mono_resolution=oak.get("mono_resolution", "800p"),
+                extended_disparity=oak.get("extended_disparity", True),
+                subpixel=oak.get("subpixel", False),
+                left_right_check=oak.get("left_right_check", True),
+                focus_mode=oak.get("focus_mode", "device_default"),
+                manual_focus=oak.get("manual_focus"),
             )
         if backend != "astra_ros":
             raise ValueError("unsupported camera backend: {}".format(backend))

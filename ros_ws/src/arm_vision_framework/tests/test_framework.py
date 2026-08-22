@@ -66,10 +66,11 @@ class FrameworkTest(unittest.TestCase):
         self.settings = load_system_parameters(SYSTEM_PATH)
 
     def test_central_calibration_is_safe_by_default(self):
-        self.assertEqual(self.calibration.image_size, (1280, 720))
+        self.assertEqual(self.calibration.image_size, (1920, 1080))
+        self.assertEqual(self.calibration.data["camera"]["name"], "OAK-D-PRO-FF")
         self.assertFalse(self.calibration.transform_valid("workspace_from_base"))
         self.assertFalse(self.calibration.transform_valid("gripper_from_camera"))
-        self.assertFalse(self.calibration.depth_aligned_to_color)
+        self.assertTrue(self.calibration.depth_aligned_to_color)
         self.assertEqual(
             self.calibration.tag_map["coordinate_convention"]["id"],
             "tag_top_left_x_right_y_down_v1",
@@ -323,8 +324,31 @@ class FrameworkTest(unittest.TestCase):
                 (1280, 800),
             )
             self.assertIn("OAK-D", updated.data["camera"]["name"])
+            self.assertEqual(
+                updated.data["camera"]["color"]["distortion_model"], "plumb_bob"
+            )
+            self.assertEqual(updated.data["camera"]["color"]["fps"], 10.0)
+            self.assertEqual(
+                updated.data["frames"]["camera_depth"],
+                updated.data["frames"]["camera_color"],
+            )
+            self.assertFalse(updated.transform_valid("gripper_from_camera"))
+            self.assertEqual(
+                updated.data["quality"]["camera_intrinsics_source"],
+                "official_depthai_eeprom_json",
+            )
             self.assertTrue(factory_copy.is_file())
             self.assertTrue(backup.is_file())
+
+    def test_oak_rational_distortion_is_not_labeled_plumb_bob(self):
+        from arm_vision_framework.oak_calibration_import import normalize_distortion
+
+        model, values = normalize_distortion([
+            -6.5, -61.1, -0.006, -0.001, 465.6, -6.7, -58.1, 453.6,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ])
+        self.assertEqual(model, "rational_polynomial")
+        self.assertEqual(values.shape, (8,))
 
     def test_legacy_center_tag_map_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -26,15 +26,15 @@ class CheckerboardTarget:
     OpenCV's pattern size is the number of *inner corners*, not the number of
     black/white squares.  The physical outer-board dimensions are deliberately
     separate from the printed-grid square count: common calibration boards have
-    a white border, so a 60 x 45 mm board with 5 mm cells can, for example,
-    contain an 11 x 8 printed grid (10 x 7 inner corners), rather than 12 x 9.
+    a white border, so a 300 x 225 mm board with 25 mm cells can, for example,
+    contain a 12 x 9 printed grid (11 x 8 inner corners).
     """
 
     def __init__(self, settings):
         settings = dict(settings or {})
-        self.board_width_mm = float(settings.get("board_width_mm", 60.0))
-        self.board_height_mm = float(settings.get("board_height_mm", 45.0))
-        self.square_size_mm = float(settings.get("square_size_mm", 5.0))
+        self.board_width_mm = float(settings.get("board_width_mm", 300.0))
+        self.board_height_mm = float(settings.get("board_height_mm", 225.0))
+        self.square_size_mm = float(settings.get("square_size_mm", 25.0))
         self.maximum_rms_px = float(settings.get("maximum_rms_px", 1.5))
         self.prefer_sb = bool(settings.get("prefer_find_chessboard_sb", True))
         if min(

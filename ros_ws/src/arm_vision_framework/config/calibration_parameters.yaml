@@ -1,70 +1,102 @@
 schema_version: 1
 metadata:
-  updated_at: '2026-08-15T10:01:16+08:00'
-  profile: astra_pro_algorithm_validation
-  source: /home/throne/workspaces/arm/tool/camera_calibration/calibration_snapshots/latest/runtime_calibration.yaml
-  note: Astra Pro is only the current algorithm-validation camera.
+  updated_at: '2026-08-22T08:40:16+08:00'
+  profile: oak_d_pro_competition_1920x1080
+  source: /home/throne/workspaces/arm/ros_ws/src/arm_vision_framework/config/oak_factory_calibration.json
+  note: OAK-D Pro EEPROM imported for the active competition RGB-D profile.
+  camera_calibration_source: official_depthai_eeprom_json
+  camera_calibration_eeprom_version: 7
+  camera_calibration_baseline_mm: 75.36130428314209
+  camera_mxid: 14442C10D141C5D600
+  camera_usb_speed_at_import: UsbSpeed.SUPER
 frames:
-  # Runtime output is expressed directly in the controller's robot-base frame.
-  # AprilTags are calibration targets only and do not define a live workspace.
   workspace: robot_base
   base: robot_base
-  # This frame is the controller's calibrated Tool1 TCP, despite the legacy
-  # key name retained for parameter compatibility.
   gripper: tool1_tcp
   camera_color: camera_color_optical_frame
-  camera_depth: camera_depth_optical_frame
+  camera_depth: camera_color_optical_frame
   object: target_can
 camera:
-  name: Astra Pro HD Camera
+  name: OAK-D-PRO-FF
   color:
     valid: true
-    image_width: 1280
-    image_height: 720
-    pixel_format: MJPG
-    fps: 30
-    distortion_model: plumb_bob
+    image_width: 1920
+    image_height: 1080
+    pixel_format: BGR
+    fps: 10.0
+    distortion_model: rational_polynomial
     camera_matrix:
-    - - 1002.4182631621529
+    - - 1543.9544677734375
       - 0.0
-      - 619.8671122479881
+      - 920.4653930664062
     - - 0.0
-      - 1015.3066916994853
-      - 379.036007223375
+      - 1536.6317138671875
+      - 519.5247802734375
     - - 0.0
       - 0.0
       - 1.0
     distortion_coefficients:
-    - 0.1006132549156806
-    - 0.30287407254781873
-    - -0.006378222028906098
-    - -0.0066305631097934425
-    - -1.4838234189987225
+    - -6.556687355041504
+    - -61.146114349365234
+    - -0.006584018934518099
+    - -0.0012319093802943826
+    - 465.6488952636719
+    - -6.762196063995361
+    - -58.1103401184082
+    - 453.6392517089844
+    source: /home/throne/workspaces/arm/ros_ws/src/arm_vision_framework/config/oak_factory_calibration.json
   depth:
     valid: true
-    image_width: 1280
-    image_height: 1024
+    image_width: 1920
+    image_height: 1080
     unit: millimeters_uint16
-    aligned_to_color: false
-    note: RGB-depth extrinsics are not calibrated; FoundationPose input is not ready.
-    distortion_model: plumb_bob
+    aligned_to_color: true
+    note: DepthAI depth is aligned and resampled into the RGB pixel grid.
+    distortion_model: rational_polynomial
     camera_matrix:
-    - - 1166.0765264521924
+    - - 1543.9544677734375
       - 0.0
-      - 638.9007904839704
+      - 920.4653930664062
     - - 0.0
-      - 1167.3754525205652
-      - 516.3745874407986
+      - 1536.6317138671875
+      - 519.5247802734375
     - - 0.0
       - 0.0
       - 1.0
     distortion_coefficients:
-    - -0.15510907736659432
-    - 1.0157776968129952
-    - -0.003624470188655965
-    - -0.0019377251197423657
-    - -2.4760584564675248
+    - -6.556687355041504
+    - -61.146114349365234
+    - -0.006584018934518099
+    - -0.0012319093802943826
+    - 465.6488952636719
+    - -6.762196063995361
+    - -58.1103401184082
+    - 453.6392517089844
     intrinsics_valid: true
+    source: /home/throne/workspaces/arm/ros_ws/src/arm_vision_framework/config/oak_factory_calibration.json
+    native_cam_c:
+      image_width: 1280
+      image_height: 800
+      distortion_model: rational_polynomial
+      camera_matrix:
+      - - 799.5949096679688
+        - 0.0
+        - 660.2459716796875
+      - - 0.0
+        - 795.7546997070312
+        - 383.7146301269531
+      - - 0.0
+        - 0.0
+        - 1.0
+      distortion_coefficients:
+      - 0.7932010889053345
+      - -52.44925308227539
+      - -0.004194333683699369
+      - 0.0012018188135698438
+      - 572.1080322265625
+      - 0.6949984431266785
+      - -52.43180847167969
+      - 570.6737060546875
 tag_map:
   coordinate_convention:
     id: tag_top_left_x_right_y_down_v1
@@ -143,8 +175,10 @@ transforms:
       - 0.0
       - 0.0
       - 1.0
+    reason: camera profile changed to OAK; redo eye-in-hand calibration
+    updated_at: '2026-08-22T08:40:16+08:00'
   color_from_depth:
-    valid: true
+    valid: false
     description: p_color = T_color_depth * p_depth
     matrix:
     - - 0.9999023619397035
@@ -163,11 +197,14 @@ transforms:
       - 0.0
       - 0.0
       - 1.0
+    source: /home/throne/workspaces/arm/ros_ws/src/arm_vision_framework/config/oak_factory_calibration.json
+    reason: OAK runtime alignment is used; verify an explicit color_from_depth transform
+      before enabling it
 fixed_camera_validation_reference:
   valid: false
   runtime_allowed_for_eye_in_hand: false
   coordinate_convention: legacy_tag_center
-  reason: Preserved legacy reference; incompatible with the top-left-origin convention.
+  reason: camera profile changed to OAK; redo eye-in-hand validation
   workspace_from_camera:
   - - 0.9984036709650452
     - 0.007659325389028561
@@ -186,12 +223,4 @@ fixed_camera_validation_reference:
     - 0.0
     - 1.0
 quality:
-  intrinsic_rms_px: 0.5570756788032288
-  workspace_extrinsic_rms_px: 0.43022218308083626
-  workspace_extrinsic_max_error_px: 0.8766094227507759
-  validation_xy_median_error_mm: 2.1696857936395704
-  validation_xy_std_mm:
-  - 0.2776183891514344
-  - 0.2760620896692181
-  workspace_coordinate_convention_compatible: false
-  rgbd_stereo_rms_px: 4.290078616169168
+  camera_intrinsics_source: official_depthai_eeprom_json

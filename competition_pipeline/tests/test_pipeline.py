@@ -75,14 +75,14 @@ class PipelineTest(unittest.TestCase):
         np.testing.assert_allclose(np.cross(tag_x, tag_y), [0.0, 0.0, size ** 2])
 
     def test_camera_profile_switch_invalidates_hand_eye(self):
-        self.assertEqual(self.config.active_camera_profile, "astra_validation")
-        self.assertEqual(self.config.camera["backend"], "astra_ros")
+        self.assertEqual(self.config.active_camera_profile, "oak_competition")
+        self.assertEqual(self.config.camera["backend"], "oak_depthai")
         self.config.data["hand_eye"]["tcp_from_color_camera"]["valid"] = True
         self.config.save()
-        self.assertTrue(self.config.set_active_camera_profile("oak_competition"))
+        self.assertTrue(self.config.set_active_camera_profile("astra_validation"))
         loaded = CompetitionConfig(self.config_path)
-        self.assertEqual(loaded.active_camera_profile, "oak_competition")
-        self.assertEqual(loaded.camera["backend"], "oak_depthai")
+        self.assertEqual(loaded.active_camera_profile, "astra_validation")
+        self.assertEqual(loaded.camera["backend"], "astra_ros")
         self.assertFalse(loaded.hand_eye_valid)
 
     def test_camera_profile_switch_invalidates_segmentation_validation(self):
@@ -91,14 +91,15 @@ class PipelineTest(unittest.TestCase):
             "valid": True,
             "weights_sha256": "abc",
             "weights_file": settings["weights_file"],
-            "camera_profile": "astra_validation",
+            "camera_profile": "oak_competition",
             "confirmed_at": "test",
         }
         self.assertTrue(self.config.segmentation_valid)
-        self.config.set_active_camera_profile("oak_competition")
+        self.config.set_active_camera_profile("astra_validation")
         self.assertFalse(self.config.segmentation_valid)
 
     def test_astra_depth_mode_is_applied_to_runtime_driver(self):
+        self.config.set_active_camera_profile("astra_validation", save=False)
         active_name = self.config.camera["depth_mode"]
         active = self.config.camera["depth_modes"][active_name]
         arguments = self.config.runtime_camera()["ros_driver"]["arguments"]
@@ -123,6 +124,7 @@ class PipelineTest(unittest.TestCase):
 
     def test_legacy_astra_stream_arguments_are_migrated_to_mode(self):
         data = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        data["camera"]["active_profile"] = "astra_validation"
         camera = data["camera"]["profiles"]["astra_validation"]
         camera.pop("depth_mode")
         camera.pop("depth_modes")
@@ -556,8 +558,8 @@ class PipelineTest(unittest.TestCase):
             visible_tag_ids=(7,),
             rms_reprojection_error_px=0.2,
         )
-        store.append(sample, "astra.png")
-        self.config.set_active_camera_profile("oak_competition")
+        store.append(sample, "oak.png")
+        self.config.set_active_camera_profile("astra_validation")
         with self.assertRaisesRegex(ValueError, "Camera profile changed"):
             HandEyeSampleStore(path, self.config).load()
 

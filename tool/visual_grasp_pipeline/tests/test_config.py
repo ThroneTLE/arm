@@ -20,6 +20,8 @@ paths:
   static_frame_dir: ~/frames
 object_models:
   can: /opt/meshes/can.obj
+object_model_scales:
+  can: 0.001
 yolo_to_object:
   can: sprite
 grasp_rules:
@@ -37,6 +39,10 @@ pipeline:
             self.assertFalse(config.flip_x)
             self.assertEqual(config.rule_for_object("sprite").offset_mm, 7.0)
             self.assertEqual(config.resolve_object_key("can", 5), "sprite")
+            self.assertEqual(config.mesh_scale_for_object("can"), 0.001)
+            self.assertEqual(config.mesh_scale_for_object("sprite"), 1.0)
+            self.assertEqual(config.foundationpose_max_input_size, 640)
+            self.assertEqual(config.foundationpose_registration_hypotheses, 64)
 
     def test_missing_mesh_is_empty_string(self):
         config = VisualGraspConfig()

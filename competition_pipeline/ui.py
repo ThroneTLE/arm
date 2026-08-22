@@ -37,6 +37,7 @@ from .controller_state import ControllerState
 from .controller_state_reader import ControllerStateReader
 from .controller_tcp import InexbotPoint, modbus_client_from_config
 from .shape_latch import ShapeLatch
+from .tcp_pose import NexBotTcpPoseSource, pose_endpoint_from_config
 from .geometry import transform_from_xyz_rpy_mm, xyz_rpy_from_transform
 from .hand_eye import APRILTAG_MAP_TARGET, HandEyeCalibrator
 from .localization import (
@@ -173,6 +174,7 @@ class RgbdCameraWorker(QThread):
                     color_width=int(self.camera_config["color_width"]),
                     color_height=int(self.camera_config["color_height"]),
                     fps=int(self.camera_config["color_fps"]),
+                    mxid=str(self.camera_config.get("mxid", "")),
                     dot_projector_mA=int(self.camera_config.get("dot_projector_mA", 800)),
                     floodlight_mA=int(self.camera_config.get("floodlight_mA", 0)),
                     mono_resolution=str(self.camera_config.get("mono_resolution", "800p")),
@@ -294,6 +296,53 @@ class ControllerStateWorker(QThread):
                 self.client = None
 
 
+class NexBotPoseWorker(QThread):
+    """Live controller TCP pose via the official NexBot 7000-port protocol.
+
+    Used by the hand-eye page so ``T_base_tcp`` is read from the controller
+    directly instead of transcribed from the teach pendant.  This is the
+    verification step placed before every hand-eye sample: connect first,
+    confirm the pose matches the teach pendant, then sample.
+    """
+
+    pose_ready = pyqtSignal(bool, object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, endpoint, interval_s=0.2):
+        super().__init__()
+        self.endpoint = endpoint
+        self.interval_s = max(float(interval_s), 0.1)
+        self.stopping = False
+        self.source = None
+
+    def stop(self):
+        self.stopping = True
+        if self.source is not None:
+            self.source.close()
+
+    def run(self):
+        try:
+            self.source = NexBotTcpPoseSource(self.endpoint)
+            while not self.stopping:
+                try:
+                    xyz_mm, rpy_deg = self.source.read()
+                    if self.stopping:
+                        break
+                    self.pose_ready.emit(True, (tuple(xyz_mm), tuple(rpy_deg)))
+                except Exception as error:
+                    if self.stopping:
+                        break
+                    self.pose_ready.emit(False, str(error))
+                self.msleep(int(self.interval_s * 1000.0))
+        except Exception as error:
+            if not self.stopping:
+                self.failed.emit(str(error))
+        finally:
+            if self.source is not None:
+                self.source.close()
+                self.source = None
+
+
 class TagLocalizationWorker(QThread):
     result_ready = pyqtSignal(object)
     failed = pyqtSignal(str)
@@ -359,6 +408,74 @@ class TagLocalizationWorker(QThread):
                     "pose": pose,
                     "elapsed_ms": (time.perf_counter() - started_s) * 1000.0,
                 })
+        except Exception as error:
+            if not self.stopping:
+                self.failed.emit(str(error))
+
+
+class CheckerboardPreviewWorker(QThread):
+    """Run checkerboard detection/PnP off the UI thread for live hand-eye preview."""
+
+    result_ready = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, config_path):
+        super().__init__()
+        self.config_path = Path(config_path).expanduser().resolve()
+        self.stopping = False
+        self.pending_lock = threading.Lock()
+        self.pending = None
+
+    def submit(self, frame, timestamp_s, target_settings):
+        with self.pending_lock:
+            # Keep only the newest frame so a slow detector never builds a backlog.
+            self.pending = {
+                "frame": np.asarray(frame).copy(),
+                "timestamp_s": float(timestamp_s),
+                "target": dict(target_settings or {}),
+            }
+
+    def stop(self):
+        self.stopping = True
+
+    def run(self):
+        try:
+            config = CompetitionConfig(self.config_path)
+            while not self.stopping:
+                with self.pending_lock:
+                    pending = self.pending
+                    self.pending = None
+                if pending is None:
+                    self.msleep(8)
+                    continue
+                frame = pending["frame"]
+                started_s = time.perf_counter()
+                try:
+                    matrix, distortion, size = load_camera_intrinsics(
+                        config.resolve_path(config.camera["color_intrinsics_file"])
+                    )
+                    checkerboard = CheckerboardTarget(pending["target"])
+                    if (frame.shape[1], frame.shape[0]) != size:
+                        raise ValueError("当前 RGB 分辨率与内参不一致")
+                    observation = checkerboard.estimate(frame, matrix, distortion)
+                    preview = checkerboard.draw(frame, observation)
+                    self.result_ready.emit({
+                        "timestamp_s": pending["timestamp_s"],
+                        "preview": preview,
+                        "observation": observation,
+                        "corner_count": checkerboard.corner_count,
+                        "found": (
+                            checkerboard.corner_count
+                            if observation.corners is not None else 0
+                        ),
+                        "elapsed_ms": (time.perf_counter() - started_s) * 1000.0,
+                    })
+                except Exception as error:
+                    self.result_ready.emit({
+                        "timestamp_s": pending["timestamp_s"],
+                        "preview": np.asarray(frame).copy(),
+                        "error": str(error),
+                    })
         except Exception as error:
             if not self.stopping:
                 self.failed.emit(str(error))
@@ -856,6 +973,7 @@ class CompetitionCalibrationWindow(QMainWindow):
         self.camera_worker = None
         self.tag_pose_worker = None
         self.depth_preview_worker = None
+        self.checkerboard_preview_worker = None
         self.segmentation_worker = None
         self.segmentation_model_ready = False
         self.segmentation_last_submit_s = 0.0
@@ -1401,6 +1519,7 @@ class CompetitionCalibrationWindow(QMainWindow):
         self.hand_squares_x.valueChanged.connect(self._refresh_hand_target_hint)
         self.hand_squares_y.valueChanged.connect(self._refresh_hand_target_hint)
         self._refresh_hand_target_hint()
+        layout.addWidget(self._build_tcp_pose_box())
         box, self.hand_pose_spins = self._pose_box("当前 T_base_tcp")
         layout.addWidget(box)
         capture = action_button(self, "采集当前 RGB 与 TCP", "SP_DialogSaveButton", True)
@@ -1518,6 +1637,10 @@ class CompetitionCalibrationWindow(QMainWindow):
         layout.addWidget(self.hide_tags)
         box, self.verify_pose_spins = self._pose_box("当前 T_base_tcp")
         layout.addWidget(box)
+        layout.addWidget(self._result(
+            "实时 TCP 位姿由“眼在手上”页的 TCP 通信验证面板（NexBot 7000 端口）提供；"
+            "连接后自动填入本页，无需手抄示教器。"
+        ))
         state = QGroupBox("T_base_color_camera")
         grid = QGridLayout(state)
         self.loc_source = self._strong("无有效位姿")
@@ -2243,6 +2366,7 @@ state_codec:
             info = export_connected_oak_eeprom(
                 self._oak_factory_output_path(), self._color_output_path(),
                 camera["color_width"], camera["color_height"],
+                mxid=camera.get("mxid", ""),
             )
             self._accept_oak_calibration(info)
             self._log("已从 OAK EEPROM 导出官方 JSON")
@@ -2326,13 +2450,21 @@ state_codec:
         depth_worker.failed.connect(self._depth_preview_failed)
         self.depth_preview_worker = depth_worker
         depth_worker.start()
+        checker_worker = CheckerboardPreviewWorker(self.config.path)
+        checker_worker.result_ready.connect(self._receive_checkerboard_preview)
+        checker_worker.failed.connect(self._checkerboard_preview_failed)
+        self.checkerboard_preview_worker = checker_worker
+        checker_worker.start()
 
     def _restart_live_processing_workers(self):
         if self.camera_connected:
             self._start_live_processing_workers()
 
     def _stop_live_processing_workers(self):
-        for name in ("tag_pose_worker", "depth_preview_worker"):
+        for name in (
+            "tag_pose_worker", "depth_preview_worker",
+            "checkerboard_preview_worker",
+        ):
             worker = getattr(self, name, None)
             if worker is not None:
                 worker.stop()
@@ -2348,6 +2480,48 @@ state_codec:
     def _depth_preview_failed(self, message):
         self._log("后台 Depth 预览失败：{}".format(message))
         self.statusBar().showMessage(str(message), 5000)
+
+    def _checkerboard_preview_failed(self, message):
+        self._log("后台棋盘格预览失败：{}".format(message))
+        self.statusBar().showMessage(str(message), 5000)
+        self.checkerboard_preview_worker = None
+        if self.current_stage == self.HAND_EYE:
+            self.metric_detection.setText("棋盘角点  后台失败")
+            self.preview_state.setText("棋盘格后台线程失败：{}".format(message))
+
+    def _receive_checkerboard_preview(self, payload):
+        error = payload.get("error")
+        self.color_canvas.set_frame(payload["preview"])
+        if error:
+            self.metric_detection.setText("棋盘角点  识别失败")
+            self.preview_state.setText("棋盘格检测失败：{}".format(error))
+            return
+        observation = payload.get("observation")
+        found = int(payload.get("found", 0))
+        total = int(payload.get("corner_count", 0))
+        self.metric_detection.setText("棋盘角点  {} / {}".format(found, total))
+        try:
+            sample_count = len(self.sample_store.entries())
+        except ValueError:
+            sample_count = 0
+        self.metric_progress.setText(
+            "手眼样本  {} / {}".format(
+                sample_count,
+                int(self.config.data["hand_eye"].get("minimum_samples", 8)),
+            )
+        )
+        if observation is not None:
+            valid = bool(getattr(observation, "valid", False))
+            reason = getattr(observation, "reason", "")
+            self.preview_state.setText(
+                "棋盘格{} · {} · 后台 {:.0f} ms".format(
+                    "有效" if valid else "未通过",
+                    reason,
+                    float(payload.get("elapsed_ms", 0.0)),
+                )
+            )
+        else:
+            self.preview_state.setText(str(error or "棋盘格检测无结果"))
 
     def _receive_depth_preview(self, payload):
         self.last_aligned_preview = payload["preview"]
@@ -2907,7 +3081,7 @@ state_codec:
         if target["type"] != CHECKERBOARD_TARGET:
             self._process_tags(bundle)
             return
-        if not self._stage_due("hand_eye_checkerboard", 10.0):
+        if not self._stage_due("hand_eye_checkerboard", 5.0):
             return
         if not target["checkerboard"].get("configured", False):
             self.color_canvas.set_frame(bundle.color_bgr)
@@ -2915,38 +3089,19 @@ state_codec:
             self.metric_progress.setText("长短边格数未填写")
             self.preview_state.setText("请填写长边和短边的黑白方格总数")
             return
-        try:
-            matrix, distortion, size = self._load_color_intrinsics()
-            color = bundle.color_bgr
-            if (color.shape[1], color.shape[0]) != size:
-                raise ValueError("当前 RGB 分辨率与内参不一致")
-            checkerboard = CheckerboardTarget(target["checkerboard"])
-            observation = checkerboard.estimate(color, matrix, distortion)
-            self.color_canvas.set_frame(checkerboard.draw(color, observation))
-            found = checkerboard.corner_count if observation.corners is not None else 0
-            self.metric_detection.setText(
-                "棋盘角点  {} / {}".format(found, checkerboard.corner_count)
-            )
-            try:
-                sample_count = len(self.sample_store.entries())
-            except ValueError:
-                sample_count = 0
-            self.metric_progress.setText(
-                "手眼样本  {} / {}".format(
-                    sample_count,
-                    int(self.config.data["hand_eye"].get("minimum_samples", 8)),
-                )
-            )
-            self.preview_state.setText(
-                "棋盘格{} · {}".format(
-                    "有效" if observation.valid else "未通过", observation.reason
-                )
-            )
-        except Exception as error:
+        if self.checkerboard_preview_worker is None:
             self.color_canvas.set_frame(bundle.color_bgr)
-            self.metric_detection.setText("棋盘角点  识别失败")
-            self.preview_state.setText(str(error))
-            self.preview_state.setText("棋盘格检测失败：{}".format(error))
+            self.metric_detection.setText("棋盘角点  后台未启动")
+            self.preview_state.setText("棋盘格后台检测线程尚未启动")
+            return
+        # Detection/PnP is intentionally off the UI thread.  The worker keeps
+        # only the newest frame, so a 1920x1080 checkerboard search cannot
+        # freeze the hand-eye page while the user is dragging/sliding widgets.
+        self.checkerboard_preview_worker.submit(
+            bundle.color_bgr,
+            bundle.color_timestamp_s,
+            target["checkerboard"],
+        )
 
     def _load_color_intrinsics(self):
         path = self._color_output_path()
@@ -3306,6 +3461,98 @@ state_codec:
     def _pose_from_spins(spins):
         values = [spin.value() for spin in spins]
         return transform_from_xyz_rpy_mm(values[:3], values[3:])
+
+    def _build_tcp_pose_box(self):
+        """NexBot TCP verification panel: read T_base_tcp before sampling."""
+        box = QGroupBox(
+            "TCP 通信验证（NexBot 官方协议 7000 端口）· 采样前先连接并核对示教器"
+        )
+        grid = QGridLayout(box)
+        controller = self.config.data.get("controller", {}) or {}
+        tcp_config = controller.get("nexbot_tcp", {}) or {}
+        self.nexbot_host = QLineEdit(str(tcp_config.get("host") or ""))
+        self.nexbot_host.setPlaceholderText("控制器 IP，例如 192.168.1.10")
+        self.nexbot_port = QSpinBox()
+        self.nexbot_port.setRange(1, 65535)
+        self.nexbot_port.setValue(int(tcp_config.get("port_state") or 7000))
+        self.nexbot_robot = QSpinBox()
+        self.nexbot_robot.setRange(1, 4)
+        self.nexbot_robot.setValue(int(tcp_config.get("robot") or 1))
+        self.nexbot_autofill = QCheckBox("读取值自动填入“当前 T_base_tcp”")
+        self.nexbot_autofill.setChecked(True)
+        self.nexbot_toggle = action_button(
+            self, "保存参数并连接读取 TCP", "SP_MediaPlay", True
+        )
+        self.nexbot_toggle.clicked.connect(self.toggle_nexbot_pose)
+        self.nexbot_status = self._strong("未连接")
+        for row, (title, value) in enumerate((
+            ("IP", self.nexbot_host),
+            ("7000 端口", self.nexbot_port),
+            ("Robot 号", self.nexbot_robot),
+        )):
+            grid.addWidget(QLabel(title), row, 0)
+            grid.addWidget(value, row, 1)
+        grid.addWidget(self.nexbot_autofill, 3, 0, 1, 2)
+        grid.addWidget(self.nexbot_toggle, 4, 0, 1, 2)
+        grid.addWidget(self.nexbot_status, 5, 0, 1, 2)
+        return box
+
+    def toggle_nexbot_pose(self):
+        worker = getattr(self, "nexbot_pose_worker", None)
+        if worker is not None:
+            worker.stop()
+            worker.wait(1000)
+            self.nexbot_pose_worker = None
+            self.nexbot_toggle.setText("保存参数并连接读取 TCP")
+            self.nexbot_status.setText("已断开")
+            return
+        self.save_nexbot_pose_settings()
+        try:
+            endpoint = pose_endpoint_from_config(self.config.data.get("controller", {}))
+        except Exception as error:
+            self._show_error("TCP 连接参数无效", error)
+            return
+        worker = NexBotPoseWorker(endpoint)
+        worker.pose_ready.connect(self._receive_nexbot_pose)
+        worker.failed.connect(self._nexbot_pose_failed)
+        worker.finished.connect(self._nexbot_pose_finished)
+        self.nexbot_pose_worker = worker
+        self.nexbot_toggle.setText("断开读取")
+        self.nexbot_status.setText("连接中……")
+        worker.start()
+
+    def save_nexbot_pose_settings(self):
+        controller = self.config.data.setdefault("controller", {})
+        tcp_config = controller.setdefault("nexbot_tcp", {})
+        tcp_config.update({
+            "host": self.nexbot_host.text().strip(),
+            "port_motion": 6000,
+            "port_state": int(self.nexbot_port.value()),
+            "robot": int(self.nexbot_robot.value()),
+        })
+        self.config.save()
+
+    def _receive_nexbot_pose(self, ok, payload):
+        if ok:
+            xyz_mm, rpy_deg = payload
+            self.nexbot_status.setText(
+                "已连接 · TCP X/Y/Z {:.1f} {:.1f} {:.1f} mm · R/P/Y {:.2f} {:.2f} {:.2f}°"
+                .format(*xyz_mm, *rpy_deg)
+            )
+            if self.nexbot_autofill.isChecked():
+                values = tuple(xyz_mm) + tuple(rpy_deg)
+                for spins in (self.hand_pose_spins, self.verify_pose_spins):
+                    for spin, value in zip(spins, values):
+                        spin.setValue(float(value))
+        else:
+            self.nexbot_status.setText("读取失败：{}".format(payload))
+
+    def _nexbot_pose_failed(self, message):
+        self.nexbot_status.setText("连接失败：{}".format(message))
+
+    def _nexbot_pose_finished(self):
+        self.nexbot_pose_worker = None
+        self.nexbot_toggle.setText("保存参数并连接读取 TCP")
 
     def capture_hand_eye(self):
         if self.bundle is None:
