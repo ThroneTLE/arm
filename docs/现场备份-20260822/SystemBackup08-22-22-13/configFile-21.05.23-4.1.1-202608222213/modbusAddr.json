@@ -1,0 +1,877 @@
+{
+   "config" : {
+      "coexistIOControl" : false
+   },
+   "controllerID" : "1F16378515D30963",
+   "modbusAddr" : [
+      {
+         "addr" : 1,
+         "cExplain" : "表示与控制器连接的状态",
+         "cName" : "controllerConnectState",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 5,
+         "cExplain" : "选择机器人",
+         "cName" : "robotSelect",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 5,
+         "cExplain" : "当前机器人",
+         "cName" : "currentRobot",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 6,
+         "cExplain" : "选择操作模式",
+         "cName" : "operationModeSelect",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 6,
+         "cExplain" : "当前操作模式",
+         "cName" : "operationModeCurrent",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 9,
+         "cExplain" : "机器人总数",
+         "cName" : "robotSum",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 20,
+         "cExplain" : "全部机器人：伺服控制",
+         "cName" : "serveControlAll",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 21,
+         "cExplain" : "单个机器人：伺服控制",
+         "cName" : "serveControlSingle",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 29,
+         "cExplain" : "当前机器人：伺服控制",
+         "cName" : "serveControlCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 21,
+         "cExplain" : "单个机器人：伺服状态",
+         "cName" : "serveStateSingle",
+         "cSize" : 4,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 29,
+         "cExplain" : "当前机器人：伺服状态",
+         "cName" : "serveStateCurrent",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 30,
+         "cExplain" : "全部机器人：清除伺服报警",
+         "cName" : "clearErrorAll",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 31,
+         "cExplain" : "单个机器人：清除伺服报警",
+         "cName" : "clearError",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 39,
+         "cExplain" : "当前机器人：清除伺服报警",
+         "cName" : "clearErrorCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 200,
+         "cExplain" : "获取当前坐标系",
+         "cName" : "coordStateCurrent",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 202,
+         "cExplain" : "获取机器人在当前坐标系下的坐标值",
+         "cName" : "robotRealPosCurrent",
+         "cSize" : 18,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 400,
+         "cExplain" : "全部机器人：可选作业文件名称列表",
+         "cName" : "allRobotAllJobNameList",
+         "cSize" : 200,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 600,
+         "cExplain" : "当前机器人：可选作业文件名称列表",
+         "cName" : "curRobotAllJobNameList",
+         "cSize" : 50,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 650,
+         "cExplain" : "全部机器人：当前选中作业文件名称",
+         "cName" : "jobNameCurrent",
+         "cSize" : 40,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 690,
+         "cExplain" : "当前机器人：当前选中作业文件名称",
+         "cName" : "curRobotCurJobName",
+         "cSize" : 10,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 401,
+         "cExplain" : "修改或获取BOOL型全局数值变量",
+         "cName" : "gBoolVarOppSet",
+         "cSize" : 100,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 501,
+         "cExplain" : "修改或获取INT型全局数值变量",
+         "cName" : "gIntVarOppSet",
+         "cSize" : 100,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 601,
+         "cExplain" : "修改或获取DOUBLE型全局数值变量",
+         "cName" : "gDoubleVarOppSet",
+         "cSize" : 200,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 801,
+         "cExplain" : "修改或获取IO端口数字输出",
+         "cName" : "gDoutPort",
+         "cSize" : 99,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 900,
+         "cExplain" : "是否允许修改IO端口输出值",
+         "cName" : "gDoutCanSet",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 901,
+         "cExplain" : "IO端口地址映射方式",
+         "cName" : "IOMapMode",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 901,
+         "cExplain" : "获取IO端口数字输入状态",
+         "cName" : "gDinPortStatus",
+         "cSize" : 99,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 140,
+         "cExplain" : "清空报错信息内容",
+         "cName" : "errorMsgClear",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 1000,
+         "cExplain" : "控制器报错信息内容",
+         "cName" : "errorMsgContent",
+         "cSize" : 100,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 10,
+         "cExplain" : "全部机器人：程序启停",
+         "cName" : "runningControlAll",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 11,
+         "cExplain" : "单个机器人：程序启停",
+         "cName" : "runningControlSingle",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 19,
+         "cExplain" : "当前机器人：程序启停",
+         "cName" : "runningControlCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 41,
+         "cExplain" : "单个机器人：选择更改作业文件目标编号",
+         "cName" : "robotJobSelect ",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 51,
+         "cExplain" : "单个机器人：确认更改作业文件",
+         "cName" : "robotJobConfirm",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 41,
+         "cExplain" : "单个机器人：当前选中作业文件编号",
+         "cName" : "robotJobNum",
+         "cSize" : 4,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 45,
+         "cExplain" : "单个机器人：直接更改作业文件编号",
+         "cName" : "robotJobSet ",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 61,
+         "cExplain" : "单个机器人：设置程序目标运行次数",
+         "cName" : "robotIndexSelect",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 71,
+         "cExplain" : "单个机器人：确认设置的运行次数",
+         "cName" : "robotIndexConfirm",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 61,
+         "cExplain" : "单个机器人：获取程序目标运行次数",
+         "cName" : "robotIndexState",
+         "cSize" : 4,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 71,
+         "cExplain" : "单个机器人：获取程序当前已运行次数",
+         "cName" : "robotCountState",
+         "cSize" : 4,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 85,
+         "cExplain" : "单个机器人：设置运行速度",
+         "cName" : "runSpeedSetSingle",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 81,
+         "cExplain" : "单个机器人：增加运行速度",
+         "cName" : "runSpeedAddSingle",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 91,
+         "cExplain" : "单个机器人：减小运行速度",
+         "cName" : "runSpeedSubSingle",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 81,
+         "cExplain" : "单个机器人：获取当前运行速度",
+         "cName" : "runSpeedRealSingle",
+         "cSize" : 4,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 100,
+         "cExplain" : "全部机器人：触发复位，回到复位点",
+         "cName" : "robotResetPosAll",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 101,
+         "cExplain" : "单个机器人：触发复位，回到复位点",
+         "cName" : "robotResetPosSingle",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 101,
+         "cExplain" : "单个机器人：查看机器人当前是否在复位点",
+         "cName" : "robotAtResetPos",
+         "cSize" : 4,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 51,
+         "cExplain" : "单个机器人：程序运行状态",
+         "cName" : "progRunStateSingle",
+         "cSize" : 4,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 59,
+         "cExplain" : "当前机器人：程序运行状态",
+         "cName" : "progRunStateCurrent",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 49,
+         "cExplain" : "当前机器人：选择更改作业文件目标编号",
+         "cName" : "robotJobSelectCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 59,
+         "cExplain" : "当前机器人：确认更改作业文件",
+         "cName" : "robotJobConfirmCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 49,
+         "cExplain" : "当前机器人：当前选中作业文件编号",
+         "cName" : "robotJobNumCurrent",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 40,
+         "cExplain" : "当前机器人：直接更改作业文件编号",
+         "cName" : "robotJobSetCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 80,
+         "cExplain" : "当前机器人：设置示教速度",
+         "cName" : "teachSpeedSetCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 89,
+         "cExplain" : "当前机器人：增加示教速度",
+         "cName" : "teachSpeedAddCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 99,
+         "cExplain" : "当前机器人：减小示教速度",
+         "cName" : "teachSpeedSubCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 89,
+         "cExplain" : "当前机器人：获取当前示教速度",
+         "cName" : "teachSpeedRealCurrent",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 110,
+         "cExplain" : "切换当前坐标系",
+         "cName" : "switchCoordCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 111,
+         "cExplain" : "设置当前坐标系",
+         "cName" : "setCoordCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 120,
+         "cExplain" : "控制当前机器人上使能",
+         "cName" : "powerEnableControl",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 120,
+         "cExplain" : "获取当前机器人是否在使能状态",
+         "cName" : "powerEnableState",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 121,
+         "cExplain" : "触发一次作业文件单步运行",
+         "cName" : "triggerStepRun",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 125,
+         "cExplain" : "点动机器人",
+         "cName" : "jogAxisControl",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 135,
+         "cExplain" : "选择及获取工具手",
+         "cName" : "toolCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 235,
+         "cExplain" : "表示当前指令能否被修改",
+         "cName" : "instrCanModify",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 240,
+         "cExplain" : "显示当前指令内容",
+         "cName" : "curInstrContent",
+         "cSize" : 60,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 301,
+         "cExplain" : "作业文件当前点位切换至下一点",
+         "cName" : "jobCurrentPosNext",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 302,
+         "cExplain" : "作业文件当前点位切换至上一点",
+         "cName" : "jobCurrentPosPrev",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 303,
+         "cExplain" : "运动至作业文件当前点位",
+         "cName" : "runToJobCurrentPos",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 305,
+         "cExplain" : "将当前位置写入作业文件当前点位",
+         "cName" : "realPosWriteToJobCurPos",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 310,
+         "cExplain" : "删除当前指令",
+         "cName" : "deleteCurrentInstr",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 315,
+         "cExplain" : "作业文件插入一条MOV指令",
+         "cName" : "insertMoveInstr",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 316,
+         "cExplain" : "插入的MOV指令的插补类型",
+         "cName" : "moveInstrType",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 317,
+         "cExplain" : "插入的MOV指令的速度",
+         "cName" : "moveInstrSpeed",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 318,
+         "cExplain" : "插入的MOV指令的平滑等级",
+         "cName" : "moveInstrPL",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 320,
+         "cExplain" : "作业文件修改指令中的IO、Time参数",
+         "cName" : "modifyInstrSetIOandTimer",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 321,
+         "cExplain" : "作业文件插入一条TIMER指令",
+         "cName" : "insertTimerInstr",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 322,
+         "cExplain" : "作业文件插入一条DOUT指令",
+         "cName" : "insertDoutInstr",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 323,
+         "cExplain" : "作业文件插入一条WAIT指令",
+         "cName" : "insertWaitInstr",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 324,
+         "cExplain" : "插入或修改的指令的Time参数值",
+         "cName" : "insertTimerData",
+         "cSize" : 2,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 326,
+         "cExplain" : "插入或修改的指令的IO参数的端口值",
+         "cName" : "insertIOPort",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 327,
+         "cExplain" : "插入或修改的指令的IO参数的电平值",
+         "cName" : "insertIOValue",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 300,
+         "cExplain" : "作业文件当前点位的坐标系",
+         "cName" : "jobCurPosCoord",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 302,
+         "cExplain" : "作业文件当前点位的各轴坐标值",
+         "cName" : "jobCurPosAxisData",
+         "cSize" : 18,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 320,
+         "cExplain" : "作业文件当前点位的点位名称",
+         "cName" : "jobCurPosName",
+         "cSize" : 10,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 1001,
+         "cExplain" : "外部点位：全部点位发送标志",
+         "cName" : "commPosWholeFlag",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 1002,
+         "cExplain" : "外部点位：发送一次的发送标志",
+         "cName" : "commPosPartFlag",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 1003,
+         "cExplain" : "外部点位：发送一次的点位数量",
+         "cName" : "commPosPartNum",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 1004,
+         "cExplain" : "外部点位：每帧数据的帧编号",
+         "cName" : "commPosPackNum",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 1005,
+         "cExplain" : "外部点位：清空控制器点位队列标志",
+         "cName" : "commPosClearQue",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 1010,
+         "cExplain" : "外部点位：存放点位数据",
+         "cName" : "commPosBuf",
+         "cSize" : 699,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 220,
+         "cExplain" : "外部点位：movcomm运动点数",
+         "cName" : "commPosRunNum",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 331,
+         "cExplain" : "作业文件当前局部位置变量切换至下一个",
+         "cName" : "jobCurrentLocalPosNext",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 332,
+         "cExplain" : "作业文件当前局部位置变量切换至上一个",
+         "cName" : "jobCurrentLocalPosPrev",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 333,
+         "cExplain" : "运动至作业文件当前局部位置变量",
+         "cName" : "runToJobCurrentLocalPos",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 335,
+         "cExplain" : "将当前位置写入作业文件当前局部位置变量",
+         "cName" : "realPosWriteToJobCurLocalPos",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 330,
+         "cExplain" : "作业文件当前局部位置变量的坐标系",
+         "cName" : "jobCurLocalPosCoord",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 332,
+         "cExplain" : "作业文件当前局部位置变量的各轴坐标值",
+         "cName" : "jobCurLocalPosAxisData",
+         "cSize" : 18,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 350,
+         "cExplain" : "作业文件当前局部位置变量的点位名称",
+         "cName" : "jobCurLocalPosName",
+         "cSize" : 10,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 141,
+         "cExplain" : "字符编码格式",
+         "cName" : "characterEncodingFormat",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 334,
+         "cExplain" : "作业文件选择当前局部位置变量",
+         "cName" : "jobCurrentLocalPosSelect",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 301,
+         "cExplain" : "作业文件当前点位的左右手",
+         "cName" : "jobCurPosConfiguration",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 331,
+         "cExplain" : "作业文件当前局部位置变量的左右手",
+         "cName" : "jobCurLocalPosConfiguration",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 360,
+         "cExplain" : "作业文件局部位置变量总数",
+         "cName" : "jobLocalPosSum",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 339,
+         "cExplain" : "将示教点位修改值写入当前点位",
+         "cName" : "teachModifyPosWriteToCurPos",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 340,
+         "cExplain" : "示教点位修改的坐标系修改值",
+         "cName" : "teachModifyPosCoord",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 341,
+         "cExplain" : "示教点位修改的左右手修改值",
+         "cName" : "teachModifyPosConfiguration",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 342,
+         "cExplain" : "示教点位修改的各轴坐标值修改值",
+         "cName" : "teachModifyPosAxisData",
+         "cSize" : 18,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 161,
+         "cExplain" : "单个机器人：当前行运行设置",
+         "cName" : "currentLineSetSingle",
+         "cSize" : 4,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 169,
+         "cExplain" : "当前机器人：当前行运行设置",
+         "cName" : "currentLineSetCurrent",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 131,
+         "cExplain" : "单个机器人：主程序首行状态",
+         "cName" : "mainProgramFirstLine",
+         "cSize" : 4,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 141,
+         "cExplain" : "单个机器人：可继续执行状态",
+         "cName" : "continuable",
+         "cSize" : 4,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 319,
+         "cExplain" : "作业文件修改MOV指令中的速度、平滑参数",
+         "cName" : "modify_instr_set_move_speed_PL",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 170,
+         "cExplain" : "确认许可证序列号",
+         "cName" : "confirmLicenseSerial",
+         "cSize" : 1,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 171,
+         "cExplain" : "许可证序列号缓存",
+         "cName" : "licenseSerialBuff",
+         "cSize" : 16,
+         "cType" : "4x"
+      },
+      {
+         "addr" : 170,
+         "cExplain" : "许可证序列号结果",
+         "cName" : "licenseSerialResult",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 171,
+         "cExplain" : "控制器ID",
+         "cName" : "controllerID",
+         "cSize" : 16,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 187,
+         "cExplain" : "控制器时间_年",
+         "cName" : "controllerTimeYear",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 188,
+         "cExplain" : "控制器时间_月",
+         "cName" : "controllerTimeMonth",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 189,
+         "cExplain" : "控制器时间_日",
+         "cName" : "controllerTimeDay",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 190,
+         "cExplain" : "控制器时间_时",
+         "cName" : "controllerTimeHour",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 191,
+         "cExplain" : "控制器时间_分",
+         "cName" : "controllerTimeMinute",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 192,
+         "cExplain" : "控制器时间_秒",
+         "cName" : "controllerTimeSecond",
+         "cSize" : 1,
+         "cType" : "3x"
+      },
+      {
+         "addr" : 193,
+         "cExplain" : "剩余使用天数",
+         "cName" : "restUseDays",
+         "cSize" : 1,
+         "cType" : "3x"
+      }
+   ],
+   "version" : "1.0.7"
+}

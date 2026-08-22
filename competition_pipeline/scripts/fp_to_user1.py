@@ -44,6 +44,16 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# 姿态换算只有一份权威实现。这个脚本以前自带一份副本，而那份副本的逆解写错了
+# （用了 Rz·Ry·Rx 的公式去逆 Rx·Ry·Rz），随机姿态往返最坏偏差 179.97°，
+# 现场那条位姿偏 4.47°。--self-test 用的是单位旋转，所以一直测不出来。
+# 教训：不要给同一个数学约定留第二份实现。
+from competition_pipeline.geometry import (  # noqa: E402
+    inexbot_abc_from_transform,
+    transform_from_inexbot_abc,
+)
+
 # 手眼矩阵（competition.yaml hand_eye.tcp_from_color_camera；缓存值）
 HAND_EYE_TCP_FROM_CAM = np.array([
     [0.000634, 0.9953, -0.096835, -0.102625],
@@ -118,29 +128,29 @@ def parse_pose(data, units_mm=False, label="pose"):
 
 
 def rotation_from_inexbot_abc(abc_rad):
-    """控制器原生 A/B/C（动系 X'Y'Z' ≡ 定系 ZYX）：R = Rx(A)Ry(B)Rz(C)。"""
-    a, b, c = [float(v) for v in abc_rad]
+    """控制器原生 A/B/C（内旋 X'Y'Z'）：R = Rx(A)Ry(B)Rz(C)。
 
-    def rx(t):
-        return np.array([[1, 0, 0], [0, np.cos(t), -np.sin(t)], [0, np.sin(t), np.cos(t)]])
-
-    def ry(t):
-        return np.array([[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]])
-
-    def rz(t):
-        return np.array([[np.cos(t), -np.sin(t), 0], [np.sin(t), np.cos(t), 0], [0, 0, 1]])
-
-    return rx(a) @ ry(b) @ rz(c)
+    薄封装，实现来自 ``competition_pipeline.geometry``（唯一权威）。
+    """
+    return transform_from_inexbot_abc(
+        np.zeros(3), np.asarray(abc_rad, dtype=float)
+    )[:3, :3]
 
 
 def inexbot_abc_from_rotation(R):
-    """R -> (A, B, C) 弧度（控制器约定；B∈[-π/2, π/2] 主值）。"""
-    R = np.asarray(R, dtype=float)
-    # R = Rx(A)Ry(B)Rz(C) => R[2,0] = -sin(B)
-    b = np.arcsin(np.clip(-R[2, 0], -1.0, 1.0))
-    a = np.arctan2(R[2, 1], R[2, 2])
-    c = np.arctan2(R[1, 0], R[0, 0])
-    return np.array([a, b, c])
+    """R -> (A, B, C) 弧度，是 :func:`rotation_from_inexbot_abc` 的**真正**逆。
+
+    薄封装，实现来自 ``competition_pipeline.geometry``（唯一权威）。
+
+    历史：这里曾有一份自己写的逆解 ``b = asin(-R[2,0]); a = atan2(R[2,1], R[2,2]);
+    c = atan2(R[1,0], R[0,0])``，那是 Rz·Ry·Rx（外旋 ZYX/RPY）的公式，
+    用来逆 Rx·Ry·Rz 是错的。随机姿态往返最坏偏差 179.97°；对现场那条位姿偏 4.47°。
+    它的输出会经 --save-json 流到 move_user1 再发 0x4502 ——
+    与 2026-08-22 摔臂完全同一条"XYZ 对、姿态被整体改写"的路径。
+    """
+    transform = np.eye(4)
+    transform[:3, :3] = np.asarray(R, dtype=float)
+    return inexbot_abc_from_transform(transform)[1]
 
 
 def convert(T_cam_obj, T_user1_tcp, T_tcp_cam=HAND_EYE_TCP_FROM_CAM):
@@ -197,8 +207,27 @@ def main(argv=None):
         rot_err = float(np.abs(out[:3, :3] - np.eye(3)).max())
         print("自检：期望 (0, 0, 60)mm；得到 ({:.3f}, {:.3f}, {:.3f})mm；"
               "平移最大误差 {:.6f}mm，旋转最大误差 {:.6f}".format(*xyz, err, rot_err))
-        if err < 1e-6 and rot_err < 1e-9:
+        # 姿态往返自检：以前这里只有单位旋转，所以逆解写错了 179.97° 也测不出来。
+        # 现在覆盖现场真实位姿 + 一批随机姿态。
+        probes = [
+            np.array([3.104412961019, 0.240200009301, -3.141491526695]),  # 现场拍摄点
+            np.array([3.045, -0.078, -3.044]),                            # 用户1原点姿态
+            np.array([0.0, 0.0, 0.0]),
+            np.array([0.3, 0.4, 0.5]),
+            np.array([-2.9, 1.2, 2.7]),
+            np.array([1.0, -1.5, -2.0]),
+        ]
+        worst_abc = 0.0
+        for abc in probes:
+            R = rotation_from_inexbot_abc(abc)
+            R_back = rotation_from_inexbot_abc(inexbot_abc_from_rotation(R))
+            cosine = np.clip((np.trace(R.T @ R_back) - 1.0) * 0.5, -1.0, 1.0)
+            worst_abc = max(worst_abc, float(np.degrees(np.arccos(cosine))))
+        print("姿态往返自检（{} 个姿态，含现场实测两点）：最坏误差 {:.9f}°".format(
+            len(probes), worst_abc))
+        if err < 1e-6 and rot_err < 1e-9 and worst_abc < 1e-6:
             print("✅ 转换链路自检通过（T_user1_obj = T_user1_tcp · T_tcp_cam · T_cam_obj）")
+            print("✅ A/B/C 正逆解互为逆运算")
             return 0
         print("❌ 自检失败")
         return 1
@@ -242,8 +271,19 @@ def main(argv=None):
                "abc_rad": [round(float(v), 6) for v in abc_out_rad]}
         Path(args.save_json).write_text(json.dumps(out, indent=2), encoding="utf-8")
         print("已保存 {}".format(args.save_json))
-        print("传送到机器人：python -m competition_pipeline.scripts.move_user1 "
-              "--json-pose '{}' --go".format(json.dumps(out)))
+        # move_user1 的 --json-pose 只认 x/y/z/a/b/c 六个键（parse_pose），
+        # 直接把上面的 {xyz_mm, abc_rad} 贴过去会 KeyError。这里输出它真正吃的格式。
+        move_pose = {
+            "x": round(float(xyz_out_mm[0]), 3),
+            "y": round(float(xyz_out_mm[1]), 3),
+            "z": round(float(xyz_out_mm[2]), 3),
+            "a": round(float(abc_out_rad[0]), 6),
+            "b": round(float(abc_out_rad[1]), 6),
+            "c": round(float(abc_out_rad[2]), 6),
+        }
+        print("传送到机器人（a/b/c 为弧度）：")
+        print("  python -m competition_pipeline.scripts.move_user1 "
+              "--json-pose '{}' --go".format(json.dumps(move_pose)))
     return 0
 
 

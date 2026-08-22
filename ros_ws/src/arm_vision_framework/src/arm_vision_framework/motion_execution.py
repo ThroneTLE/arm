@@ -260,7 +260,18 @@ class PickPlaceExecutor:
             self._move_j("movej_retreat", plan.movej_retreat)
             self._event("complete")
             return PickPlaceResult(True, "complete", "pick and place completed", tuple(self._events))
+        except SafetyInterlockError as error:
+            # 联锁在**任何运动下发之前**就拒绝了这次调用，机器人从头到尾没有动过，
+            # 所以这里不发 stop()。在这台 C1102 上 robot.stop() 发的是 0x2314，
+            # 实测映射到 Deadan_End -> PowerOff，即**直接下电**而不是受控停止；
+            # 对伸展着的手臂下电会让它失力坠落（2026-08-22 摔臂正是 PowerOff 造成的）。
+            # 「dry-run 模式下调一次执行器就把伺服打掉」是纯粹的自伤。
+            # 返回值契约保持不变，仍然是 PickPlaceResult(False, ...)。
+            state = self._events[-1].state if self._events else "not_started"
+            return PickPlaceResult(False, state, str(error), tuple(self._events))
         except Exception as error:
+            # 到这里说明运动已经开始，停机是必要的。仍需注意 stop() 是下电语义，
+            # 真正的安全急停要靠示教器上的物理急停按钮。
             try:
                 self.robot.stop()
             except Exception:

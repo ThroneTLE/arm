@@ -2,19 +2,38 @@
 
 挂接（复用 UI 的共享持久连接，6001/7000 单客户端端口不新增连接）：
     from competition_pipeline.teleport_panel import TeleportPanel
-    panel = TeleportPanel(jog_provider=lambda: self._get_robot_jog())
+    panel = TeleportPanel(
+        jog_provider=lambda: self._get_robot_jog(),
+        motion_authorized=lambda: self.robot_ctrl_enable.isChecked(),
+    )
     layout.addWidget(panel)
 
 面板内容：
   - X/Y/Z （QDoubleSpinBox，mm，±2000）
-  - A/B/C （QDoubleSpinBox，默认角度制；勾选"弧度"切换）
-  - 【传送】把输入点经 User1Mover 发到控制器并回读核对（工作线程，不卡 UI）
+  - A/B/C （QDoubleSpinBox，**固定角度制**，见下方"单位"）
+  - 【传送】把输入点发到控制器并回读核对（工作线程，不卡 UI）
   - 【回读当前】填当前用户1系位姿
   - 【急停】0x2314 直发（不受"传送忙"限制）
-  - 状态栏：距离/到达偏差（±0.01mm 级实测）/错误
+  - 状态栏：位移/姿态变化预览、到达偏差、错误
 
-链路（全部现场实测）：0x2311 上电 → 0x4501/0x4502(+acc=dec=10) coord=3 →
-位姿变化判停 → 0x2A02 回读核对。
+链路（全部现场实测）：0x2311 上电 → 0x4502(+acc=dec=10) coord=3 →
+0x3D03 status=2 确认真的动了 → 回读核对位置与姿态。
+
+单位：为什么没有"用弧度"复选框
+------------------------------
+曾经有过。``_on_readback()`` 永远把 ``np.degrees(abc_rad)`` 填进 A/B/C 框，
+而 ``_pending()`` 在该复选框被勾选时**直接把框里的数当弧度用**。于是
+"回读 → 只改 XYZ → 传送"这个完全正常的操作会把角度值当弧度发出去。
+
+2026-08-22 现场实际后果（控制器日志 16:58:19，见
+``docs/现场备份-20260822/根因证据-控制器日志摘录.txt`` 证据 C-1/C-2）：
+回读得到 A/B/C = (177.8697, 13.7625, -179.9943) 度，被当成弧度发出，
+折叠后成为 (111.19, 68.53, 127.09) 度 —— 与真实姿态相差 **119.6°**，
+而 XYZ 只走 30mm 直线。6 秒后六个伺服同时报 0F15 故障，控制器 PowerOff，
+**机械臂失电坠落**。
+
+结论：这个复选框被永久删除。面板只用角度制，转换只在 ``_pending()`` 里
+发生一次（``np.radians``），没有第二条路径。不要再把它加回来。
 """
 
 import threading
@@ -22,10 +41,13 @@ import threading
 import numpy as np
 from PyQt5.QtCore import QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QLabel, QPushButton,
+    QDoubleSpinBox, QGridLayout, QGroupBox, QLabel, QPushButton,
 )
 
-from competition_pipeline.geometry import inexbot_abc_from_transform
+from competition_pipeline.geometry import (
+    rotation_angle_deg, transform_from_inexbot_abc,
+)
+from competition_pipeline.nexbot_jog import MAX_ROTATION_STEP_DEG
 
 
 class TeleportWorker(QThread):
@@ -80,12 +102,16 @@ class ReadbackWorker(QThread):
 class TeleportPanel(QGroupBox):
     """目标点传送（用户坐标系1）：输入 XYZ(mm) + ABC → 传送 → 到达偏差。"""
 
-    def __init__(self, jog_provider, parent=None):
-        super().__init__("目标点传送（用户坐标系1）· 输入点直接发到控制器并核对到位", parent)
+    def __init__(self, jog_provider, motion_authorized=None, parent=None):
+        super().__init__("目标点传送（用户坐标系1）· A/B/C 固定角度制 · 下发前校验位移与姿态", parent)
         self.jog_provider = jog_provider
+        # 与主界面"已确认急停可用"复选框联动。缺省放行只是为了让面板能被
+        # 单独实例化做离线测试；UI 挂接时必须把真实的授权回调传进来。
+        self.motion_authorized = motion_authorized or (lambda: True)
         self._workers = []          # 强引用防 QThread 被 GC（QThread 崩溃教训）
         self._busy = False
         self._requires_readback = True   # 未确认过当前位姿前禁止传送
+        self._readback_pose = None       # (xyz_mm, abc_deg) 最近一次回读，用于预览
         self._watchdog = QTimer(self)
         self._watchdog.setSingleShot(True)
         self._watchdog.setInterval(35000)
@@ -108,11 +134,15 @@ class TeleportPanel(QGroupBox):
             spin.setRange(*rng)
             spin.setSuffix(unit)
             spin.setValue(0.0)
+            spin.valueChanged.connect(self._refresh_preview)
             grid.addWidget(QLabel(name), i, 0)
             grid.addWidget(spin, i, 1)
             self._spins[name] = spin
-        self.rad_unit = QCheckBox("A/B/C 用弧度")
-        grid.addWidget(self.rad_unit, 6, 0, 1, 2)
+        # NOTE: 这里**故意**没有"A/B/C 用弧度"复选框。它曾经存在，并且直接
+        # 导致了 2026-08-22 的机械臂坠落 —— 详见模块 docstring。不要加回来。
+        self.preview = QLabel("位移/姿态变化：待回读")
+        self.preview.setWordWrap(True)
+        grid.addWidget(self.preview, 6, 0, 1, 3)
 
         self.btn_teleport = QPushButton("传送")
         self.btn_read = QPushButton("回读当前")
@@ -132,13 +162,42 @@ class TeleportPanel(QGroupBox):
 
     # -- helpers ------------------------------------------------------------
     def _pending(self):
+        """(xyz_mm, abc_rad, abc_deg) —— 输入框恒为角度制，这里唯一一次转换。"""
         xyz = [self._spins[k].value() for k in ("X", "Y", "Z")]
         abc_deg = [self._spins[k].value() for k in ("A", "B", "C")]
-        if self.rad_unit.isChecked():
-            abc = abc_deg
-        else:
-            abc = np.radians(abc_deg)
-        return xyz, list(np.asarray(abc, dtype=float)), abc_deg
+        abc_rad = list(np.radians(np.asarray(abc_deg, dtype=float)))
+        return xyz, abc_rad, abc_deg
+
+    def _refresh_preview(self):
+        """把"这一下会走多远、会转多少度"实时显示出来，下发前就能看见。"""
+        if self._readback_pose is None:
+            self.preview.setText("位移/姿态变化：待回读")
+            return
+        start_xyz, start_deg = self._readback_pose
+        xyz, abc_rad, abc_deg = self._pending()
+        distance = float(np.linalg.norm(
+            np.asarray(xyz, dtype=float) - np.asarray(start_xyz, dtype=float)))
+        start_pose = transform_from_inexbot_abc(
+            np.asarray(start_xyz, dtype=float) / 1000.0,
+            np.radians(np.asarray(start_deg, dtype=float)),
+        )
+        target_pose = transform_from_inexbot_abc(
+            np.asarray(xyz, dtype=float) / 1000.0,
+            np.asarray(abc_rad, dtype=float),
+        )
+        rotation = rotation_angle_deg(start_pose, target_pose)
+        blocked = rotation > MAX_ROTATION_STEP_DEG
+        self.preview.setText(
+            "{}相对回读位姿：位移 {:.1f} mm · 姿态变化 {:.1f}°{}".format(
+                "⛔ " if blocked else "",
+                distance, rotation,
+                "（超过 {:.0f}° 上限，传送会被拒绝）".format(MAX_ROTATION_STEP_DEG)
+                if blocked else "",
+            )
+        )
+        self.preview.setStyleSheet(
+            "color:#c0392b; font-weight:bold;" if blocked else ""
+        )
 
     def _keep(self, worker):
         self._workers.append(worker)
@@ -153,6 +212,9 @@ class TeleportPanel(QGroupBox):
     def _on_teleport(self):
         if self._busy:
             self.status.setText("⏳ 传送中，请稍候……")
+            return
+        if not bool(self.motion_authorized()):
+            self.status.setText("⛔ 请先在现场确认急停有效并勾选主面板的运动授权")
             return
         if self._requires_readback:
             self.status.setText("⚠️ 请先点【回读当前】确认起点（面板启动时会自动填充）")
@@ -191,10 +253,16 @@ class TeleportPanel(QGroupBox):
                 self.btn_teleport.setEnabled(True)
                 xyz, abc_rad = payload
                 deg = np.degrees(abc_rad)
+                # 输入框恒为角度制 —— 这里填度数，_pending() 再转回弧度。
+                # 只有这一条转换路径，不存在"填的单位和读的单位不一致"的可能。
                 for k, v in zip(("X", "Y", "Z"), xyz):
                     self._spins[k].setValue(float(v))
                 for k, v in zip(("A", "B", "C"), deg):
                     self._spins[k].setValue(float(v))
+                self._readback_pose = (
+                    [float(v) for v in xyz], [float(v) for v in deg]
+                )
+                self._refresh_preview()
                 self.status.setText(
                     "✅ 当前：X={:.2f} Y={:.2f} Z={:.2f} mm · A={:.2f} B={:.2f} C={:.2f}°".format(
                         *xyz, *deg

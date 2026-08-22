@@ -21,17 +21,29 @@ if str(PACKAGE_ROOT.parent) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT.parent))
 
 from competition_pipeline.geometry import transform_from_inexbot_abc
-from competition_pipeline.nexbot_jog import NexBotTcpJog
+from competition_pipeline.nexbot_jog import (
+    MAX_ABC_RAD,
+    MAX_ROTATION_STEP_DEG,
+    NexBotTcpJog,
+    check_abc_is_radians,
+)
 from competition_pipeline.nexbot_tcp import (
     NexBotTcpEndpoint,
     build_frame,
     CMD_DOUT_SET,
     CMD_DOUT_QUERY,
     CMD_DOUT_QUERY_REPLY,
+    CMD_GO_HOME,
+    CMD_GO_RESET_POSITION,
+    CMD_MOVJ,
     CMD_MOVL,
+    CMD_PROGRAM_STATUS,
     CMD_SERVO_RESPOND,
     ControllerConnectionError,
 )
+
+#: 真控制器接受运动指令后会推 ``0x3D03 status=2``；假控制器必须照做。
+MOTION_STARTED = build_frame(CMD_PROGRAM_STATUS, {"robot": 1, "status": 2})
 
 
 def read_frame(conn, max_bytes, timeout=5.0):
@@ -145,6 +157,8 @@ class NexBotJogTest(unittest.TestCase):
                 {"status": [0] * 14 + [1, 0], "robot": 1},
             )
         ]
+        for command in (CMD_MOVJ, CMD_MOVL, CMD_GO_HOME, CMD_GO_RESET_POSITION):
+            self.server.replies[command] = [MOTION_STARTED]
 
     def tearDown(self):
         self.server.close()
@@ -368,6 +382,292 @@ class NexBotJogTest(unittest.TestCase):
             self.assertGreaterEqual(len(instances), 2)
             self.assertFalse(jog._keepalive_stop.is_set())
             jog.close()
+
+
+class RecordingController:
+    """A stand-in controller that logs the order of protocol-level calls."""
+
+    def __init__(self, _endpoint=None, pose=None, servo_sequence=None):
+        self.calls = []
+        self.targets = []
+        self.servo_sequence = list(servo_sequence or [3])
+        matrix = np.eye(4)
+        if pose is not None:
+            matrix = np.asarray(pose, dtype=np.float64)
+        self.pose = matrix
+        self.motion = SimpleNamespace(close=lambda: None)
+
+    def servo_status(self):
+        self.calls.append("servo_status")
+        value = self.servo_sequence[0]
+        if len(self.servo_sequence) > 1:
+            self.servo_sequence.pop(0)
+        return value
+
+    def enable_servo(self):
+        self.calls.append("enable_servo")
+        self.servo_sequence = [3]
+        return 3
+
+    def read_state(self):
+        self.calls.append("read_state")
+        return SimpleNamespace(base_from_gripper=self.pose.copy())
+
+    def move_to(self, target, speed_scale=0.1):
+        self.calls.append("move_to")
+        self.targets.append(np.asarray(target, dtype=np.float64).copy())
+        self.pose = np.asarray(target, dtype=np.float64).copy()
+
+    def go_reset_position(self):
+        self.calls.append("go_reset_position")
+
+    def go_home(self):
+        self.calls.append("go_home")
+
+    def close(self):
+        pass
+
+
+def _pose_at(xyz_mm, abc_rad):
+    return transform_from_inexbot_abc(
+        np.asarray(xyz_mm, dtype=float) / 1000.0,
+        np.asarray(abc_rad, dtype=float),
+    )
+
+
+class AbcUnitGuardTest(unittest.TestCase):
+    """度数当弧度 —— 2026-08-22 摔臂的直接成因。"""
+
+    def test_radian_values_pass(self):
+        for abc in ([0.0, 0.0, 0.0], [3.1044, 0.2402, -3.1415], [-3.14, 1.5, 3.14]):
+            check_abc_is_radians(abc)
+
+    def test_the_exact_field_readback_that_crashed_the_arm_is_rejected(self):
+        # 控制器日志 16:56:16 那条 MOVL 的姿态, 换成度数就是下面三个数。
+        with self.assertRaises(ValueError) as ctx:
+            check_abc_is_radians([177.8698, 13.7624, -179.9942])
+        self.assertIn("角度制", str(ctx.exception))
+
+    def test_only_one_axis_out_of_range_is_enough(self):
+        with self.assertRaises(ValueError):
+            check_abc_is_radians([0.1, 13.76, 0.2])
+
+    def test_non_finite_and_wrong_length_are_rejected(self):
+        with self.assertRaises(ValueError):
+            check_abc_is_radians([0.0, 0.0, float("nan")])
+        with self.assertRaises(ValueError):
+            check_abc_is_radians([0.0, 0.0])
+
+    def test_boundary_is_max_abc_rad(self):
+        check_abc_is_radians([MAX_ABC_RAD, 0.0, 0.0])
+        with self.assertRaises(ValueError):
+            check_abc_is_radians([MAX_ABC_RAD + 1e-6, 0.0, 0.0])
+
+
+class MoveToUcsGuardTest(unittest.TestCase):
+    """move_to_ucs 的三道闸门 + 使能前置。"""
+
+    def _jog(self, controller):
+        # 连接是惰性建立的：patch 必须在整个测试期间保持生效, 不能只包住构造。
+        patcher = patch(
+            "competition_pipeline.nexbot_jog.NexBotTcpRobotController",
+            lambda _endpoint: controller,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        jog = NexBotTcpJog(object())
+        jog.RETRY_WAIT_S = 0.0
+        self.addCleanup(jog.close)
+        return jog
+
+    def test_degree_valued_abc_never_reaches_the_controller(self):
+        controller = RecordingController()
+        jog = self._jog(controller)
+        with self.assertRaises(ValueError):
+            jog.move_to_ucs([0.0, 0.0, 60.0], [177.8698, 13.7624, -179.9942])
+        jog.close()
+        # 闸门在读位姿之前就拦下了，一次通信都没发生。
+        self.assertEqual(controller.calls, [])
+        self.assertEqual(controller.targets, [])
+
+    def test_large_orientation_step_is_rejected(self):
+        """摔臂那条指令的形状：XYZ 只走 30mm，姿态却要转 119.6°。"""
+        start = _pose_at([5.0, 0.0, 60.0], [3.104412961019, 0.240200009301, -3.141491526695])
+        controller = RecordingController(pose=start)
+        jog = self._jog(controller)
+        with self.assertRaises(RuntimeError) as ctx:
+            jog.move_to_ucs(
+                [35.0, 0.0, 60.0],
+                [1.9405550572349954, 1.196135558646883, 2.2180637457374814],
+            )
+        jog.close()
+        message = str(ctx.exception)
+        self.assertIn("119", message)          # 实际夹角
+        self.assertNotIn("move_to", controller.calls)
+
+    def test_long_translation_is_rejected(self):
+        start = _pose_at([0.0, 0.0, 60.0], [0.0, 0.0, 0.0])
+        controller = RecordingController(pose=start)
+        jog = self._jog(controller)
+        with self.assertRaises(RuntimeError) as ctx:
+            jog.move_to_ucs([900.0, 0.0, 60.0], [0.0, 0.0, 0.0])
+        jog.close()
+        self.assertIn("400mm", str(ctx.exception))
+        self.assertNotIn("move_to", controller.calls)
+
+    def test_servo_is_enabled_before_the_motion_is_sent(self):
+        start = _pose_at([0.0, 0.0, 60.0], [0.0, 0.0, 0.0])
+        controller = RecordingController(pose=start, servo_sequence=[1, 3])
+        jog = self._jog(controller)
+        jog.move_to_ucs([0.0, 0.0, 70.0], [0.0, 0.0, 0.0], tolerance_mm=1.0)
+        jog.close()
+        self.assertIn("enable_servo", controller.calls)
+        self.assertLess(
+            controller.calls.index("enable_servo"),
+            controller.calls.index("move_to"),
+            "0x2311 必须在运动指令之前",
+        )
+
+    def test_servo_that_refuses_to_run_aborts_before_moving(self):
+        start = _pose_at([0.0, 0.0, 60.0], [0.0, 0.0, 0.0])
+        controller = RecordingController(pose=start, servo_sequence=[1])
+        controller.enable_servo = lambda: controller.calls.append("enable_servo")
+        jog = self._jog(controller)
+        with self.assertRaises(RuntimeError) as ctx:
+            jog.move_to_ucs([0.0, 0.0, 70.0], [0.0, 0.0, 0.0])
+        jog.close()
+        self.assertIn("伺服未能进入运行态", str(ctx.exception))
+        self.assertNotIn("move_to", controller.calls)
+
+    def test_arrival_check_also_covers_orientation(self):
+        """位置到了但姿态没到, 不能报成功。"""
+        start = _pose_at([0.0, 0.0, 60.0], [0.0, 0.0, 0.0])
+        controller = RecordingController(pose=start)
+
+        def _lands_with_wrong_orientation(target, speed_scale=0.1):
+            controller.calls.append("move_to")
+            landed = np.asarray(target, dtype=np.float64).copy()
+            landed[:3, :3] = _pose_at([0, 0, 0], [0.0, 0.0, 0.35])[:3, :3]
+            controller.pose = landed
+
+        controller.move_to = _lands_with_wrong_orientation
+        jog = self._jog(controller)
+        with self.assertRaises(RuntimeError) as ctx:
+            jog.move_to_ucs([0.0, 0.0, 65.0], [0.0, 0.0, 0.0],
+                            tolerance_mm=1.0, rotation_tolerance_deg=3.0)
+        jog.close()
+        self.assertIn("姿态偏差", str(ctx.exception))
+
+    def test_a_dropped_connection_does_not_silently_resend_the_motion(self):
+        """断链是模糊状态：控制器可能已经开始动了，重发会让臂再动一次。"""
+        start = _pose_at([0.0, 0.0, 60.0], [0.0, 0.0, 0.0])
+        controller = RecordingController(pose=start)
+        sent = []
+
+        def _always_drops(target, speed_scale=0.1):
+            sent.append(np.asarray(target).copy())
+            raise ControllerConnectionError("6001 dropped mid-MOVL")
+
+        controller.move_to = _always_drops
+        jog = self._jog(controller)
+        with self.assertRaises(ControllerConnectionError) as ctx:
+            jog.move_to_ucs([0.0, 0.0, 65.0], [0.0, 0.0, 0.0])
+        jog.close()
+        self.assertEqual(len(sent), 1, "传送不允许断链自动重发")
+        self.assertIn("回读当前", str(ctx.exception))
+
+
+class ResetAndHomeGuardTest(unittest.TestCase):
+    def _jog(self, controller):
+        # 连接是惰性建立的：patch 必须在整个测试期间保持生效, 不能只包住构造。
+        patcher = patch(
+            "competition_pipeline.nexbot_jog.NexBotTcpRobotController",
+            lambda _endpoint: controller,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        jog = NexBotTcpJog(object())
+        jog.RETRY_WAIT_S = 0.0
+        self.addCleanup(jog.close)
+        return jog
+
+    def test_go_reset_position_enables_the_servo_first(self):
+        controller = RecordingController(servo_sequence=[1, 3])
+        jog = self._jog(controller)
+        jog.go_reset_position()
+        jog.close()
+        self.assertEqual(
+            controller.calls,
+            ["servo_status", "enable_servo", "servo_status", "go_reset_position"],
+        )
+
+    def test_go_home_enables_the_servo_first(self):
+        controller = RecordingController(servo_sequence=[1, 3])
+        jog = self._jog(controller)
+        jog.go_home()
+        jog.close()
+        self.assertLess(
+            controller.calls.index("enable_servo"),
+            controller.calls.index("go_home"),
+        )
+
+    def test_already_running_servo_is_not_re_enabled(self):
+        controller = RecordingController(servo_sequence=[3])
+        jog = self._jog(controller)
+        jog.go_reset_position()
+        jog.close()
+        self.assertNotIn("enable_servo", controller.calls)
+
+
+class PoseUnitApiTest(unittest.TestCase):
+    def test_current_pose_is_degrees_and_current_pose_rad_is_radians(self):
+        abc = [3.104412961019, 0.240200009301, -3.141491526695]
+        controller = RecordingController(pose=_pose_at([5.0, 0.0, 60.0], abc))
+        with patch("competition_pipeline.nexbot_jog.NexBotTcpRobotController",
+                   lambda _endpoint: controller):
+            jog = NexBotTcpJog(object())
+            xyz_deg, abc_deg = jog.current_pose()
+            xyz_rad, abc_rad = jog.current_pose_rad()
+            jog.close()
+        self.assertTrue(np.allclose(xyz_deg, xyz_rad))
+        self.assertTrue(np.allclose(np.radians(abc_deg), abc_rad, atol=1e-9))
+        self.assertTrue(np.allclose(abc_rad, abc, atol=1e-9))
+        # 角度制的返回值直接喂给 move_to_ucs 必须被拦住。
+        with self.assertRaises(ValueError):
+            check_abc_is_radians(abc_deg)
+
+
+class KeepaliveHealthTest(unittest.TestCase):
+    def test_keepalive_records_a_servo_that_dropped_out_of_run_state(self):
+        controller = RecordingController(servo_sequence=[1])
+        with patch("competition_pipeline.nexbot_jog.NexBotTcpRobotController",
+                   lambda _endpoint: controller):
+            jog = NexBotTcpJog(object(), keepalive_s=0.01)
+            deadline = time.monotonic() + 1.0
+            while jog.servo_dropped_count == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            status, error, dropped = jog.health()
+            jog.close()
+        self.assertEqual(status, 1)
+        self.assertIsNone(error)
+        self.assertGreater(dropped, 0)
+
+    def test_keepalive_records_a_connection_error(self):
+        class Failing(RecordingController):
+            def servo_status(self):
+                raise ControllerConnectionError("6001 gone")
+
+        controller = Failing()
+        with patch("competition_pipeline.nexbot_jog.NexBotTcpRobotController",
+                   lambda _endpoint: controller):
+            jog = NexBotTcpJog(object(), keepalive_s=0.01)
+            deadline = time.monotonic() + 1.0
+            while jog.last_keepalive_error is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            status, error, _dropped = jog.health()
+            jog.close()
+        self.assertIsNone(status)
+        self.assertIn("6001 gone", error or "")
 
 
 if __name__ == "__main__":

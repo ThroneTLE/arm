@@ -80,13 +80,38 @@ class FakeController:
 
 class PoseEndpointTest(unittest.TestCase):
     def test_defaults_from_config(self):
+        """配置缺项时的默认值必须与现场实测一致。
+
+        port_motion 曾默认 6000 —— 那个端口在这台 C1102 上根本不开（实测 6001 才是
+        实时指令口），而同仓的 ``nexbot_tcp_client_from_config`` 已经写的是 6001，
+        两处默认值不一致。pose_frame/motion_coord 同理：整条流水线以用户坐标系1
+        为准，默认却是 PCS(工具系)/1(直角系)。
+        """
         endpoint = pose_endpoint_from_config({
             "nexbot_tcp": {"host": "192.168.1.20"},
         })
         self.assertEqual(endpoint.host, "192.168.1.20")
-        self.assertEqual(endpoint.port_motion, 6000)
+        self.assertEqual(endpoint.port_motion, 6001)
         self.assertEqual(endpoint.port_state, 7000)
         self.assertEqual(endpoint.robot, 1)
+        self.assertEqual(endpoint.pose_frame, "UCS")
+        self.assertEqual(endpoint.motion_coord, 3)
+        self.assertEqual(endpoint.heartbeat_s, 0.0)
+        self.assertGreater(endpoint.motion_ack_timeout_s, 0.0)
+
+    def test_config_defaults_match_the_ros_side_factory(self):
+        """两个工厂函数对同一份配置必须给出同样的关键字段。"""
+        from competition_pipeline.nexbot_tcp import nexbot_tcp_client_from_config
+
+        settings = {"controller": {"nexbot_tcp": {"host": "192.168.1.20"}}}
+        ros_side = nexbot_tcp_client_from_config(settings)
+        ui_side = pose_endpoint_from_config(settings["controller"])
+        for field in ("host", "port_motion", "port_state", "robot", "channel",
+                      "heartbeat_s", "motion_ack_timeout_s"):
+            self.assertEqual(
+                getattr(ros_side, field), getattr(ui_side, field),
+                "字段 {} 两侧默认值不一致".format(field),
+            )
 
     def test_missing_section_is_rejected_without_host(self):
         # A missing section leaves host empty; the endpoint refuses it so the

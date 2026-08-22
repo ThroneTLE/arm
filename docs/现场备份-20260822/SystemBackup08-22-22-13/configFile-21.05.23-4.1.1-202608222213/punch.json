@@ -1,0 +1,58 @@
+{
+   "controllerID" : "2D3343358AD9831A",
+   "punch" : [
+      {
+         "2ndPunchTimeout" : 0.0,
+         "IO" : {
+            "gripperOut" : 1,
+            "lowerLimitIn" : 3,
+            "pickSuccessIn" : 1,
+            "punchOut" : 2,
+            "upperLimitIn" : 2
+         },
+         "PLGrade" : 0,
+         "defaultName" : "",
+         "escapeMaxVelPer" : 99,
+         "escapeMode" : 0,
+         "firstSpeed" : 10,
+         "layTimeout" : 0.0,
+         "nextController" : 0,
+         "nextIP" : "192.168.1.14",
+         "nextRobotNum" : 1,
+         "pickTimeout" : 0.0,
+         "punchKeepTime" : 0.0,
+         "punchPeriod" : 0.0,
+         "punchTimeout" : 0.0,
+         "robotMode" : 1,
+         "robotType" : 1,
+         "useLowerLimit" : false
+      },
+      {
+         "2ndPunchTimeout" : 0,
+         "IO" : {
+            "gripperOut" : 3,
+            "lowerLimitIn" : 6,
+            "pickSuccessIn" : 4,
+            "punchOut" : 4,
+            "upperLimitIn" : 5
+         },
+         "PLGrade" : 0,
+         "defaultName" : "",
+         "escapeMaxVelPer" : 99,
+         "escapeMode" : 0,
+         "firstSpeed" : 15,
+         "layTimeout" : 0,
+         "nextController" : 0,
+         "nextIP" : "192.168.1.14",
+         "nextRobotNum" : 1,
+         "pickTimeout" : 0,
+         "punchKeepTime" : 0,
+         "punchPeriod" : 0,
+         "punchTimeout" : 0,
+         "robotMode" : 0,
+         "robotType" : 1,
+         "useLowerLimit" : false
+      }
+   ],
+   "version" : "1.0.1"
+}

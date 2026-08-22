@@ -15,7 +15,11 @@ from competition_pipeline.geometry import transform_from_xyz_rpy_mm
 from competition_pipeline.nexbot_move import NexBotTcpMoveController
 from competition_pipeline.nexbot_tcp import (
     CMD_EMERGENCY_STOP,
+    CMD_GO_HOME,
+    CMD_GO_RESET_POSITION,
+    CMD_MOVJ,
     CMD_MOVL,
+    CMD_PROGRAM_STATUS,
     CMD_QUERY,
     CMD_QUERY_REPLY,
     ControllerProtocolError,
@@ -24,6 +28,11 @@ from competition_pipeline.nexbot_tcp import (
     build_frame,
     read_frame,
 )
+
+#: 真控制器收到运动指令后会在 6001 推 ``0x3D03 status=2``(开始运动)。
+#: 假控制器必须照做, 否则测的是一个现实中不存在的、"发了就算成功"的控制器。
+MOTION_STARTED = build_frame(CMD_PROGRAM_STATUS, {"robot": 1, "status": 2})
+MOTION_COMMANDS = (CMD_MOVJ, CMD_MOVL, CMD_GO_HOME, CMD_GO_RESET_POSITION)
 
 
 class FakeController:
@@ -37,6 +46,8 @@ class FakeController:
         self.port = self.server.getsockname()[1]
         self.received = []
         self.replies = {}
+        for command in MOTION_COMMANDS:
+            self.replies[command] = [MOTION_STARTED]
         self._stop = False
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()

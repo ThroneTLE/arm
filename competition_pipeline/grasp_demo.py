@@ -53,10 +53,14 @@ class GraspDemoWorker(QThread):
     def run(self):
         jog = self.jog_provider()
         try:
-            # The controller's reset-point "safe enable" requires every new
-            # run to start inside the configured joint tolerance.  Recover
-            # first so a previous/manual pose cannot make the next run fail
-            # with "robot 1 is not at the safe position".
+            # 回复位点 (0x3007) 走控制器的 startRobotJobTask(safepos=1) 入口。
+            # 在远程模式下它必然被复位点安全闸门拒绝，而**每次拒绝都会把伺服下电**
+            # （出厂配置 RemoteIO[0].posReset.deviation=null 但 safeEnable=true）。
+            # 2026-08-22 现场，这一句就是"抓取一开始机械臂就不动了、但夹爪照常开合"
+            # 的起点：使能被打掉后，后续 MOVL 全部无效，而夹爪 0x3601 走另一条码路。
+            #
+            # 现在 jog.go_reset_position() 会先确保使能，适配器再用 0x3D03 status=2
+            # 校验运动真的开始，被拒会立刻抛异常而不是静默继续走完整个序列。
             jog.go_reset_position()
             if self.abort.is_set():
                 self.done.emit(False, "已急停中止（跳过抓取）")
@@ -85,16 +89,21 @@ class GraspDemoWorker(QThread):
                     jog.gripper(False) if "合" in name else jog.gripper(True)
                     time.sleep(0.5)                  # 气阀动作时间
                     continue
-                jog.move_to_ucs(xyz, abc, vel_mm_s=self.vel,
-                                tolerance_mm=self.tolerance)
-                actual_xyz, actual_abc_deg = jog.current_pose()
+                jog.move_to_ucs(
+                    xyz, abc, vel_mm_s=self.vel,
+                    tolerance_mm=self.tolerance,
+                    rotation_tolerance_deg=self.rotation_tolerance_deg,
+                )
+                # current_pose_rad() 而不是 current_pose()：后者返回角度制，
+                # 在这个边界上做单位转换正是 2026-08-22 摔臂的成因，能不转就不转。
+                actual_xyz, actual_abc_rad = jog.current_pose_rad()
                 expected_pose = transform_from_inexbot_abc(
                     np.asarray(xyz, dtype=np.float64) / 1000.0,
                     np.asarray(abc, dtype=np.float64),
                 )
                 actual_pose = transform_from_inexbot_abc(
                     np.asarray(actual_xyz, dtype=np.float64) / 1000.0,
-                    np.radians(np.asarray(actual_abc_deg, dtype=np.float64)),
+                    np.asarray(actual_abc_rad, dtype=np.float64),
                 )
                 rotation_error = rotation_angle_deg(expected_pose, actual_pose)
                 if rotation_error > self.rotation_tolerance_deg:
@@ -151,8 +160,9 @@ class VisualPlanWorker(QThread):
                     raise RuntimeError("机器人复位后 3s 内没有新 RGB-D 帧")
             if self.cancel.is_set():
                 raise RuntimeError("视觉计算已取消")
-            xyz_mm, abc_deg = jog.current_pose()
-            abc_rad = np.radians(np.asarray(abc_deg, dtype=np.float64))
+            # 弧度直取，不经过角度制中转（见 nexbot_jog 的单位约定）。
+            xyz_mm, abc_rad = jog.current_pose_rad()
+            abc_rad = np.asarray(abc_rad, dtype=np.float64)
 
             with tempfile.TemporaryDirectory(prefix="lemon-visual-plan-") as directory:
                 root = Path(directory)

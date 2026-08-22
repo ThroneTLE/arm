@@ -122,6 +122,26 @@ class CompetitionExecutionTest(unittest.TestCase):
         self.assertIn("shape changed", result.reason)
         self.assertTrue(robot.stopped)
 
+    def test_dry_run_refusal_does_not_de_energise_the_arm(self):
+        """联锁在运动前拒绝时不能发 stop()。
+
+        在这台 C1102 上 robot.stop() 是 0x2314 -> Deadan_End -> PowerOff，
+        即**直接下电**。机器人根本没动过就把伺服打掉，是纯粹的自伤；
+        对伸展着的手臂更是坠落风险（2026-08-22 摔臂就是 PowerOff 造成的）。
+        """
+        for dry_run, allow_motion in ((True, True), (False, False)):
+            robot, gripper = FakeRobot(), FakeGripper()
+            executor = PickPlaceExecutor(
+                robot, gripper, dry_run=dry_run, allow_motion=allow_motion,
+            )
+            result = executor.execute(_plan())
+            self.assertFalse(result.success)
+            self.assertFalse(
+                robot.stopped,
+                "dry_run={} allow_motion={} 时不应下电".format(dry_run, allow_motion),
+            )
+            self.assertEqual(robot.commands, [], "不应下发任何运动")
+
     def test_static_oak_profile_matches_manual_constraints(self):
         profile = OakDProProfile()
         self.assertEqual(profile.image_size, (1920, 1080))

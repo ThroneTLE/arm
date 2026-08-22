@@ -28,7 +28,12 @@ def pose_endpoint_from_config(controller_settings):
     config = dict(controller_settings or {}).get("nexbot_tcp", {}) or {}
     return NexBotTcpEndpoint(
         host=str(config.get("host", "")),
-        port_motion=int(config.get("port_motion", 6000)),
+        # 6001, NOT 6000.  Field-verified on the MOKA MR07S-930 / Inexbot C1102:
+        # 6000 never opens, 6001 is the real-time command port.  This default
+        # used to be 6000 while ``nexbot_tcp_client_from_config`` already said
+        # 6001 -- a config that omitted ``port_motion`` silently talked to a
+        # dead port here and to the right one there.
+        port_motion=int(config.get("port_motion", 6001)),
         port_state=int(config.get("port_state", 7000)),
         robot=int(config.get("robot", 1)),
         channel=int(config.get("channel", 1)),
@@ -40,11 +45,17 @@ def pose_endpoint_from_config(controller_settings):
         wait_for_finish=bool(config.get("wait_for_finish", True)),
         motion_finish_timeout_s=float(config.get("motion_finish_timeout_s", 60.0)),
         velocity_eps_rad_s=float(config.get("velocity_eps_rad_s", 0.02)),
+        # heartbeat_s 必须保持 0：0x7266 心跳线程会在 MOVL 事务中间插帧,
+        # 现场实测会让示教器同时报 0x4502 和 0x7266 错误。
         heartbeat_s=float(config.get("heartbeat_s", 0.0)),
-        pose_frame=str(config.get("pose_frame", "PCS")),
-        motion_coord=int(config.get("motion_coord", 1)),
+        # 整条流水线以用户坐标系1 为基准：pose_frame=UCS、motion_coord=3(用户)。
+        # 旧默认 PCS/1(直角) 与 competition.yaml 里写死的值不一致，配置缺项时
+        # 会读到工具系位姿却按直角系发运动。
+        pose_frame=str(config.get("pose_frame", "UCS")),
+        motion_coord=int(config.get("motion_coord", 3)),
         tool_id=int(config.get("tool_id", 1)),
         user_id=int(config.get("user_id", 1)),
+        motion_ack_timeout_s=float(config.get("motion_ack_timeout_s", 3.0)),
     )
 
 

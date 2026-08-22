@@ -1,4 +1,19 @@
-"""Rigid-transform helpers. Runtime lengths are meters and angles are degrees."""
+"""Rigid-transform helpers.
+
+单位约定（这里出过事，看清楚再调用）：
+
+- 长度：函数名带 ``_mm`` 的收/返**毫米**，其余一律**米**。
+- 角度：``transform_from_xyz_rpy`` / ``xyz_rpy_from_transform`` 用**度**；
+  但控制器原生的 ``transform_from_inexbot_abc`` / ``inexbot_abc_from_transform``
+  用**弧度**（``transform_from_inexbot_abc_mm`` 是它的 mm+度 包装）。
+
+旋转约定：控制器 A/B/C 是内旋 X'Y'Z'，即 ``R = Rx(A)·Ry(B)·Rz(C)``；
+``transform_from_xyz_rpy`` 是固定系 ``Rz(yaw)·Ry(pitch)·Rx(roll)``。
+**两者合成顺序相反，不能互相替代** —— 用错曾把手眼标定打崩约 190 mm，
+也曾让 UI 的手眼采样系统性偏 4°~15°。
+
+详见 ``docs/纳博特C1102-现场真相-必读.md``。
+"""
 
 import math
 

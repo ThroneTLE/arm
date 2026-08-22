@@ -1,0 +1,1401 @@
+{
+   "controllerID" : "5967DE19DD7A2ECE",
+   "pallet" : {
+      "1" : {
+         "columnLay" : false,
+         "craftNum" : 1,
+         "enterPos" : [ 9999, 9999, 9999, 9999, 9999, 9999, 9999 ],
+         "fixedLayHeight" : false,
+         "floorAutoJustified" : true,
+         "floorNum" : 1,
+         "floorSum" : 1,
+         "graphic" : [
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            }
+         ],
+         "graphicNum" : [ 1 ],
+         "gripper" : [ 1, 1, 1, 1 ],
+         "gripperNum" : 1,
+         "heightRevise" : [ 0 ],
+         "layHeightOffset" : 0,
+         "overlapType" : 0,
+         "poseAutorotation" : false,
+         "realPos" : [ 9999, 9999, 9999, 9999, 9999, 9999, 9999 ],
+         "shiftPos" : [ 9999, 9999, 9999, 9999, 9999, 9999, 9999 ],
+         "simple" : {
+            "O" : [ 9999, 9999, 9999, 9999, 9999, 9999, 9999 ],
+            "X" : [ 9999, 9999, 9999, 9999, 9999, 9999, 9999 ],
+            "Y" : [ 9999, 9999, 9999, 9999, 9999, 9999, 9999 ],
+            "Z" : [ 9999, 9999, 9999, 9999, 9999, 9999, 9999 ],
+            "enter" : [ 9999, 9999, 9999, 9999, 9999, 9999, 9999 ],
+            "gripper" : [ 1, 1, 1, 1 ],
+            "gripperNum" : 1,
+            "numX" : 1,
+            "numY" : 1,
+            "numZ" : 1,
+            "real" : [ 9999, 9999, 9999, 9999, 9999, 9999, 9999 ],
+            "shift" : [ 9999, 9999, 9999, 9999, 9999, 9999, 9999 ]
+         },
+         "usePalletPointDebug" : false,
+         "usePalletType" : 2,
+         "userNum" : 1,
+         "workpieceApproEnable" : false,
+         "workpieceApproLenX" : 0,
+         "workpieceApproLenY" : 0,
+         "workpieceApproLenZ" : 0,
+         "workpieceApproMode" : 0,
+         "workpieceGapX" : 0,
+         "workpieceGapY" : 0,
+         "workpieceHeight" : 1,
+         "workpieceLength" : 1,
+         "workpieceWidth" : 1
+      },
+      "2" : {
+         "columnLay" : false,
+         "craftNum" : 2,
+         "enterPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "fixedLayHeight" : false,
+         "floorAutoJustified" : true,
+         "floorNum" : 1,
+         "floorSum" : 1,
+         "graphic" : [
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            }
+         ],
+         "graphicNum" : [ 1 ],
+         "gripper" : [ 1, 1, 1, 1 ],
+         "gripperNum" : 1,
+         "heightRevise" : [ 0 ],
+         "layHeightOffset" : 0,
+         "overlapType" : 0,
+         "poseAutorotation" : false,
+         "realPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "shiftPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "simple" : {
+            "O" : [ 0, 0, 0, 0, 0, 0 ],
+            "X" : [ 0, 0, 0, 0, 0, 0 ],
+            "Y" : [ 0, 0, 0, 0, 0, 0 ],
+            "Z" : [ 0, 0, 0, 0, 0, 0 ],
+            "enter" : [ 0, 0, 0, 0, 0, 0 ],
+            "gripper" : [ 1, 1, 1, 1 ],
+            "gripperNum" : 1,
+            "numX" : 1,
+            "numY" : 1,
+            "numZ" : 1,
+            "real" : [ 0, 0, 0, 0, 0, 0 ],
+            "shift" : [ 0, 0, 0, 0, 0, 0 ]
+         },
+         "usePalletPointDebug" : false,
+         "usePalletType" : 2,
+         "userNum" : 1,
+         "workpieceApproEnable" : false,
+         "workpieceApproLenX" : 0,
+         "workpieceApproLenY" : 0,
+         "workpieceApproLenZ" : 0,
+         "workpieceApproMode" : 0,
+         "workpieceGapX" : 0,
+         "workpieceGapY" : 0,
+         "workpieceHeight" : 1,
+         "workpieceLength" : 1,
+         "workpieceWidth" : 1
+      },
+      "3" : {
+         "columnLay" : false,
+         "craftNum" : 3,
+         "enterPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "fixedLayHeight" : false,
+         "floorAutoJustified" : true,
+         "floorNum" : 1,
+         "floorSum" : 1,
+         "graphic" : [
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            }
+         ],
+         "graphicNum" : [ 1 ],
+         "gripper" : [ 1, 1, 1, 1 ],
+         "gripperNum" : 1,
+         "heightRevise" : [ 0 ],
+         "layHeightOffset" : 0,
+         "overlapType" : 0,
+         "poseAutorotation" : false,
+         "realPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "shiftPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "simple" : {
+            "O" : [ 0, 0, 0, 0, 0, 0 ],
+            "X" : [ 0, 0, 0, 0, 0, 0 ],
+            "Y" : [ 0, 0, 0, 0, 0, 0 ],
+            "Z" : [ 0, 0, 0, 0, 0, 0 ],
+            "enter" : [ 0, 0, 0, 0, 0, 0 ],
+            "gripper" : [ 1, 1, 1, 1 ],
+            "gripperNum" : 1,
+            "numX" : 1,
+            "numY" : 1,
+            "numZ" : 1,
+            "real" : [ 0, 0, 0, 0, 0, 0 ],
+            "shift" : [ 0, 0, 0, 0, 0, 0 ]
+         },
+         "usePalletPointDebug" : false,
+         "usePalletType" : 2,
+         "userNum" : 1,
+         "workpieceApproEnable" : false,
+         "workpieceApproLenX" : 0,
+         "workpieceApproLenY" : 0,
+         "workpieceApproLenZ" : 0,
+         "workpieceApproMode" : 0,
+         "workpieceGapX" : 0,
+         "workpieceGapY" : 0,
+         "workpieceHeight" : 1,
+         "workpieceLength" : 1,
+         "workpieceWidth" : 1
+      },
+      "4" : {
+         "columnLay" : false,
+         "craftNum" : 4,
+         "enterPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "fixedLayHeight" : false,
+         "floorAutoJustified" : true,
+         "floorNum" : 1,
+         "floorSum" : 1,
+         "graphic" : [
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            }
+         ],
+         "graphicNum" : [ 1 ],
+         "gripper" : [ 1, 1, 1, 1 ],
+         "gripperNum" : 1,
+         "heightRevise" : [ 0 ],
+         "layHeightOffset" : 0,
+         "overlapType" : 0,
+         "poseAutorotation" : false,
+         "realPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "shiftPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "simple" : {
+            "O" : [ 0, 0, 0, 0, 0, 0 ],
+            "X" : [ 0, 0, 0, 0, 0, 0 ],
+            "Y" : [ 0, 0, 0, 0, 0, 0 ],
+            "Z" : [ 0, 0, 0, 0, 0, 0 ],
+            "enter" : [ 0, 0, 0, 0, 0, 0 ],
+            "gripper" : [ 1, 1, 1, 1 ],
+            "gripperNum" : 1,
+            "numX" : 1,
+            "numY" : 1,
+            "numZ" : 1,
+            "real" : [ 0, 0, 0, 0, 0, 0 ],
+            "shift" : [ 0, 0, 0, 0, 0, 0 ]
+         },
+         "usePalletPointDebug" : false,
+         "usePalletType" : 2,
+         "userNum" : 1,
+         "workpieceApproEnable" : false,
+         "workpieceApproLenX" : 0,
+         "workpieceApproLenY" : 0,
+         "workpieceApproLenZ" : 0,
+         "workpieceApproMode" : 0,
+         "workpieceGapX" : 0,
+         "workpieceGapY" : 0,
+         "workpieceHeight" : 1,
+         "workpieceLength" : 1,
+         "workpieceWidth" : 1
+      },
+      "5" : {
+         "columnLay" : false,
+         "craftNum" : 5,
+         "enterPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "fixedLayHeight" : false,
+         "floorAutoJustified" : true,
+         "floorNum" : 1,
+         "floorSum" : 1,
+         "graphic" : [
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            }
+         ],
+         "graphicNum" : [ 1 ],
+         "gripper" : [ 1, 1, 1, 1 ],
+         "gripperNum" : 1,
+         "heightRevise" : [ 0 ],
+         "layHeightOffset" : 0,
+         "overlapType" : 0,
+         "poseAutorotation" : false,
+         "realPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "shiftPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "simple" : {
+            "O" : [ 0, 0, 0, 0, 0, 0 ],
+            "X" : [ 0, 0, 0, 0, 0, 0 ],
+            "Y" : [ 0, 0, 0, 0, 0, 0 ],
+            "Z" : [ 0, 0, 0, 0, 0, 0 ],
+            "enter" : [ 0, 0, 0, 0, 0, 0 ],
+            "gripper" : [ 1, 1, 1, 1 ],
+            "gripperNum" : 1,
+            "numX" : 1,
+            "numY" : 1,
+            "numZ" : 1,
+            "real" : [ 0, 0, 0, 0, 0, 0 ],
+            "shift" : [ 0, 0, 0, 0, 0, 0 ]
+         },
+         "usePalletPointDebug" : false,
+         "usePalletType" : 2,
+         "userNum" : 1,
+         "workpieceApproEnable" : false,
+         "workpieceApproLenX" : 0,
+         "workpieceApproLenY" : 0,
+         "workpieceApproLenZ" : 0,
+         "workpieceApproMode" : 0,
+         "workpieceGapX" : 0,
+         "workpieceGapY" : 0,
+         "workpieceHeight" : 1,
+         "workpieceLength" : 1,
+         "workpieceWidth" : 1
+      },
+      "6" : {
+         "columnLay" : false,
+         "craftNum" : 6,
+         "enterPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "fixedLayHeight" : false,
+         "floorAutoJustified" : true,
+         "floorNum" : 1,
+         "floorSum" : 1,
+         "graphic" : [
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            }
+         ],
+         "graphicNum" : [ 1 ],
+         "gripper" : [ 1, 1, 1, 1 ],
+         "gripperNum" : 1,
+         "heightRevise" : [ 0 ],
+         "layHeightOffset" : 0,
+         "overlapType" : 0,
+         "poseAutorotation" : false,
+         "realPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "shiftPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "simple" : {
+            "O" : [ 0, 0, 0, 0, 0, 0 ],
+            "X" : [ 0, 0, 0, 0, 0, 0 ],
+            "Y" : [ 0, 0, 0, 0, 0, 0 ],
+            "Z" : [ 0, 0, 0, 0, 0, 0 ],
+            "enter" : [ 0, 0, 0, 0, 0, 0 ],
+            "gripper" : [ 1, 1, 1, 1 ],
+            "gripperNum" : 1,
+            "numX" : 1,
+            "numY" : 1,
+            "numZ" : 1,
+            "real" : [ 0, 0, 0, 0, 0, 0 ],
+            "shift" : [ 0, 0, 0, 0, 0, 0 ]
+         },
+         "usePalletPointDebug" : false,
+         "usePalletType" : 2,
+         "userNum" : 1,
+         "workpieceApproEnable" : false,
+         "workpieceApproLenX" : 0,
+         "workpieceApproLenY" : 0,
+         "workpieceApproLenZ" : 0,
+         "workpieceApproMode" : 0,
+         "workpieceGapX" : 0,
+         "workpieceGapY" : 0,
+         "workpieceHeight" : 1,
+         "workpieceLength" : 1,
+         "workpieceWidth" : 1
+      },
+      "7" : {
+         "columnLay" : false,
+         "craftNum" : 7,
+         "enterPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "fixedLayHeight" : false,
+         "floorAutoJustified" : true,
+         "floorNum" : 1,
+         "floorSum" : 1,
+         "graphic" : [
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            }
+         ],
+         "graphicNum" : [ 1 ],
+         "gripper" : [ 1, 1, 1, 1 ],
+         "gripperNum" : 1,
+         "heightRevise" : [ 0 ],
+         "layHeightOffset" : 0,
+         "overlapType" : 0,
+         "poseAutorotation" : false,
+         "realPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "shiftPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "simple" : {
+            "O" : [ 0, 0, 0, 0, 0, 0 ],
+            "X" : [ 0, 0, 0, 0, 0, 0 ],
+            "Y" : [ 0, 0, 0, 0, 0, 0 ],
+            "Z" : [ 0, 0, 0, 0, 0, 0 ],
+            "enter" : [ 0, 0, 0, 0, 0, 0 ],
+            "gripper" : [ 1, 1, 1, 1 ],
+            "gripperNum" : 1,
+            "numX" : 1,
+            "numY" : 1,
+            "numZ" : 1,
+            "real" : [ 0, 0, 0, 0, 0, 0 ],
+            "shift" : [ 0, 0, 0, 0, 0, 0 ]
+         },
+         "usePalletPointDebug" : false,
+         "usePalletType" : 2,
+         "userNum" : 1,
+         "workpieceApproEnable" : false,
+         "workpieceApproLenX" : 0,
+         "workpieceApproLenY" : 0,
+         "workpieceApproLenZ" : 0,
+         "workpieceApproMode" : 0,
+         "workpieceGapX" : 0,
+         "workpieceGapY" : 0,
+         "workpieceHeight" : 1,
+         "workpieceLength" : 1,
+         "workpieceWidth" : 1
+      },
+      "8" : {
+         "columnLay" : false,
+         "craftNum" : 8,
+         "enterPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "fixedLayHeight" : false,
+         "floorAutoJustified" : true,
+         "floorNum" : 1,
+         "floorSum" : 1,
+         "graphic" : [
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            }
+         ],
+         "graphicNum" : [ 1 ],
+         "gripper" : [ 1, 1, 1, 1 ],
+         "gripperNum" : 1,
+         "heightRevise" : [ 0 ],
+         "layHeightOffset" : 0,
+         "overlapType" : 0,
+         "poseAutorotation" : false,
+         "realPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "shiftPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "simple" : {
+            "O" : [ 0, 0, 0, 0, 0, 0 ],
+            "X" : [ 0, 0, 0, 0, 0, 0 ],
+            "Y" : [ 0, 0, 0, 0, 0, 0 ],
+            "Z" : [ 0, 0, 0, 0, 0, 0 ],
+            "enter" : [ 0, 0, 0, 0, 0, 0 ],
+            "gripper" : [ 1, 1, 1, 1 ],
+            "gripperNum" : 1,
+            "numX" : 1,
+            "numY" : 1,
+            "numZ" : 1,
+            "real" : [ 0, 0, 0, 0, 0, 0 ],
+            "shift" : [ 0, 0, 0, 0, 0, 0 ]
+         },
+         "usePalletPointDebug" : false,
+         "usePalletType" : 2,
+         "userNum" : 1,
+         "workpieceApproEnable" : false,
+         "workpieceApproLenX" : 0,
+         "workpieceApproLenY" : 0,
+         "workpieceApproLenZ" : 0,
+         "workpieceApproMode" : 0,
+         "workpieceGapX" : 0,
+         "workpieceGapY" : 0,
+         "workpieceHeight" : 1,
+         "workpieceLength" : 1,
+         "workpieceWidth" : 1
+      },
+      "9" : {
+         "columnLay" : false,
+         "craftNum" : 9,
+         "enterPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "fixedLayHeight" : false,
+         "floorAutoJustified" : true,
+         "floorNum" : 1,
+         "floorSum" : 1,
+         "graphic" : [
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            },
+            {
+               "graphicType" : 0,
+               "ranks" : {
+                  "autoCalculate" : false,
+                  "numX" : 1,
+                  "numY" : 1,
+                  "rotationAngleSingle" : 0,
+                  "rotationAngleWhole" : 0
+               },
+               "transLenX" : 0,
+               "transLenY" : 0
+            }
+         ],
+         "graphicNum" : [ 1 ],
+         "gripper" : [ 1, 1, 1, 1 ],
+         "gripperNum" : 1,
+         "heightRevise" : [ 0 ],
+         "layHeightOffset" : 0,
+         "overlapType" : 0,
+         "poseAutorotation" : false,
+         "realPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "shiftPos" : [ 0, 0, 0, 0, 0, 0 ],
+         "simple" : {
+            "O" : [ 0, 0, 0, 0, 0, 0 ],
+            "X" : [ 0, 0, 0, 0, 0, 0 ],
+            "Y" : [ 0, 0, 0, 0, 0, 0 ],
+            "Z" : [ 0, 0, 0, 0, 0, 0 ],
+            "enter" : [ 0, 0, 0, 0, 0, 0 ],
+            "gripper" : [ 1, 1, 1, 1 ],
+            "gripperNum" : 1,
+            "numX" : 1,
+            "numY" : 1,
+            "numZ" : 1,
+            "real" : [ 0, 0, 0, 0, 0, 0 ],
+            "shift" : [ 0, 0, 0, 0, 0, 0 ]
+         },
+         "usePalletPointDebug" : false,
+         "usePalletType" : 2,
+         "userNum" : 1,
+         "workpieceApproEnable" : false,
+         "workpieceApproLenX" : 0,
+         "workpieceApproLenY" : 0,
+         "workpieceApproLenZ" : 0,
+         "workpieceApproMode" : 0,
+         "workpieceGapX" : 0,
+         "workpieceGapY" : 0,
+         "workpieceHeight" : 1,
+         "workpieceLength" : 1,
+         "workpieceWidth" : 1
+      }
+   },
+   "version" : "1.0.9"
+}

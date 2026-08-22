@@ -64,6 +64,14 @@ CMD_QUERY_REPLY = 0x9513
 CMD_DOUT_SET = 0x3601
 CMD_DOUT_QUERY = 0x3602
 CMD_DOUT_QUERY_REPLY = 0x3603
+CMD_GO_HOME = 0x3002
+CMD_GO_RESET_POSITION = 0x3007
+#: 控制器报警推送帧.  现场实测(controlLogs08-22-22-16)真实内容在 ``data`` 键:
+#: ``{"code":25530,"data":"指令[0x4502]参数错误","kind":2,"param":[...],"robot":0}``
+CMD_ALARM = 0x2B03
+#: 作业运行状态推送帧: ``{"robot":1,"status":n}``, 0=停止 / 2=运行中.
+#: **这是"运动真的开始了"的唯一权威信号** —— 见 ``_await_motion_ack``.
+CMD_PROGRAM_STATUS = 0x3D03
 CMD_ERRORS = frozenset({0x6010, 0x6020, 0x6030, 0x6040})
 CMD_WARNINGS = frozenset({0x6110, 0x6210})
 
@@ -139,6 +147,40 @@ def read_frame(sock: socket.socket, max_frame_bytes: int) -> Tuple[int, Any]:
     return command, parsed
 
 
+#: 掉使能的头号现场原因, 附在异常里让调用方一眼看懂该去示教器改什么.
+#: 证据: ``docs/现场备份-20260822/根因证据-控制器日志摘录.txt`` 证据 A-1 / A-2.
+SAFETY_GATE_HINT = (
+    "现场实测主因: 控制器出厂配置 global.json 的 RemoteIO[0].posReset 里 "
+    "safeEnable=true 但逐轴容差 deviation=null, 于是在**远程模式**下"
+    "复位点安全闸门对每条运动指令必然判定“机器人1不在安全位置附近”"
+    "(实测机器人精确停在复位点、逐轴只差 1e-5° 也照样被拒), "
+    "拒绝后控制器会执行 stop -> JobClear -> 脉冲使能=0 -> Deadan_End -> PowerOff, "
+    "即每拒绝一次就把伺服下电一次。"
+    "对策: (1) 示教器切回**示教模式**(实测示教模式下 40+ 条 MOVL 全部成功); "
+    "或 (2) 示教器【复位点设置】把逐轴偏差 deviation 填成 1.0°; 或 (3) 关闭安全使能。"
+)
+
+
+def _frame_message(data: Any) -> str:
+    """Extract the human-readable text out of an alarm/error frame.
+
+    IMPORTANT: the real controller puts the text in ``data``, not ``message``.
+    The previous implementation was ``str(d.get("message")) or str(d.get("error"))``
+    which is doubly broken: it never looked at ``data``, and ``str(None)`` is the
+    non-empty string ``"None"`` -- always truthy -- so the fallback branches were
+    dead and every alarm surfaced as the literal text ``None``.
+    """
+    if isinstance(data, dict):
+        for key in ("data", "message", "error", "msg", "desc"):
+            value = data.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return json.dumps(data, ensure_ascii=False)
+    if data in (None, ""):
+        return "controller error"
+    return str(data)
+
+
 @dataclass(frozen=True)
 class NexBotTcpEndpoint:
     """Controller endpoint facts for the 6001 (motion) and 7000 (state) ports.
@@ -173,6 +215,10 @@ class NexBotTcpEndpoint:
     user_id: int = 1
     velocity_eps_rad_s: float = 0.02
     heartbeat_s: float = 0.0
+    #: 发出运动指令后, 等待控制器推送 ``0x3D03 status=2``(真的开始动了) 的秒数.
+    #: 设为 0 关闭该确认 —— **不要在实机上关掉**: 关掉就回到"指令被拒也报成功"
+    #: 的旧行为(见 ``_await_motion_ack`` 的 docstring)。
+    motion_ack_timeout_s: float = 3.0
 
     def __post_init__(self):
         host = str(self.host).strip()
@@ -209,6 +255,10 @@ class NexBotTcpEndpoint:
         if heartbeat < 0.0:
             raise ValueError("heartbeat_s cannot be negative")
         object.__setattr__(self, "heartbeat_s", heartbeat)
+        motion_ack = float(self.motion_ack_timeout_s)
+        if motion_ack < 0.0:
+            raise ValueError("motion_ack_timeout_s cannot be negative")
+        object.__setattr__(self, "motion_ack_timeout_s", motion_ack)
 
 
 class NexBotTcpTransport:
@@ -356,26 +406,108 @@ class NexBotTcpRobotController(RobotController):
         if self._closed:
             raise ControllerConnectionError("NexBot controller is closed")
 
-    def _check_errors(self):
-        """Surface any pending controller error/warning frame without blocking."""
+    def _check_errors(self, first_timeout_s: float = 0.3):
+        """Surface any pending controller error/warning/alarm frame.
+
+        Field note (2026-08-22): the previous 50 ms budget was too short -- the
+        C1102 needs ~100-250 ms to emit ``0x2B03`` after rejecting a command, so
+        the real reason routinely arrived *after* this call had already returned
+        and the caller reported success.  The first read now waits 300 ms.
+        """
         self._ensure_open()
-        for _ in range(4):
+        timeout = min(self.endpoint.io_timeout_s, float(first_timeout_s))
+        for _ in range(8):
             try:
-                command, data = self.motion.read_frame(
-                    timeout=min(self.endpoint.io_timeout_s, 0.05)
-                )
+                command, data = self.motion.read_frame(timeout=timeout)
             except (ControllerTimeout, ControllerConnectionError):
                 return
-            if command in CMD_ERRORS or command in CMD_WARNINGS:
-                message = "controller error"
-                if isinstance(data, dict):
-                    message = (
-                        str(data.get("message"))
-                        or str(data.get("error"))
-                        or json.dumps(data, ensure_ascii=False)
-                    )
+            timeout = min(self.endpoint.io_timeout_s, 0.05)
+            if command in CMD_ERRORS or command in CMD_WARNINGS or command == CMD_ALARM:
                 raise ControllerProtocolError(
-                    "controller frame 0x{:04X}: {}".format(command, message)
+                    "controller frame 0x{:04X}: {}".format(
+                        command, _frame_message(data)
+                    )
+                )
+
+    def _drain_pushed_frames(self, budget_s: float = 0.3):
+        """Discard queued unsolicited pushes, raising on alarms.
+
+        6001 pushes ``0x2003``/``0x3D03`` without being asked.  A stale push
+        sitting in the socket buffer is the classic way a query reads somebody
+        else's answer -- e.g. ``0x2311`` pushes ``status:3``, the safety gate
+        immediately knocks it back down and pushes ``status:0`` then ``1``, and
+        a naive ``servo_status()`` reads the *first* frame and happily reports
+        "enabled" for a servo that is already off.  Always drain before asking.
+        """
+        self._ensure_open()
+        deadline = time.monotonic() + max(0.0, float(budget_s))
+        while time.monotonic() < deadline:
+            try:
+                command, data = self.motion.read_frame(timeout=0.05)
+            except (ControllerTimeout, ControllerConnectionError):
+                return
+            if command in CMD_ERRORS or command in CMD_WARNINGS or command == CMD_ALARM:
+                raise ControllerProtocolError(
+                    "controller frame 0x{:04X}: {}".format(
+                        command, _frame_message(data)
+                    )
+                )
+
+    def _await_motion_ack(self):
+        """Block until the controller confirms the motion actually STARTED.
+
+        This exists because "the robot did not move but the program said it
+        did" was the single most expensive failure of the 2026-08-22 field
+        session.  Three rejection signatures were captured on the wire
+        (``docs/现场备份-20260822/根因证据-控制器日志摘录.txt``):
+
+        1. malformed payload  -> ``0x2B03 {"data":"指令[0x4502]参数错误"}``
+        2. safety-gate refusal -> 6001 receives ``0x2003 status:0`` then
+           ``status:1`` (the controller powered the servo off), and the robot
+           never moves.  ``0x3D03`` is never sent.
+        3. silently ignored   -> nothing at all comes back.
+
+        In all three cases the pose stays put, which is exactly what the old
+        "wait until the pose stops changing" logic interprets as *finished*.
+        The only positive evidence that a motion began is ``0x3D03 status=2``,
+        so that is what we wait for.
+        """
+        timeout = float(self.endpoint.motion_ack_timeout_s)
+        if timeout <= 0.0:
+            return
+        self._ensure_open()
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                raise ControllerTimeout(
+                    "控制器未在 {:.1f}s 内确认运动开始(没收到 0x3D03 status=2)。"
+                    "{}".format(timeout, SAFETY_GATE_HINT)
+                )
+            try:
+                command, data = self.motion.read_frame(
+                    timeout=min(remaining, 0.2)
+                )
+            except ControllerTimeout:
+                continue
+            if command == CMD_PROGRAM_STATUS:
+                if int((data or {}).get("status", 0)) == 2:
+                    return
+                continue
+            if command == CMD_SERVO_RESPOND:
+                status = int((data or {}).get("status", 0))
+                if status != 3:
+                    raise ControllerProtocolError(
+                        "运动指令被控制器拒绝并已下电(伺服 status={} != 3)。{}".format(
+                            status, SAFETY_GATE_HINT
+                        )
+                    )
+                continue
+            if command in CMD_ERRORS or command in CMD_WARNINGS or command == CMD_ALARM:
+                raise ControllerProtocolError(
+                    "运动指令被控制器拒绝 0x{:04X}: {}".format(
+                        command, _frame_message(data)
+                    )
                 )
 
     def _send_motion(self, command: int, point: InexbotPoint, velocity: int):
@@ -415,16 +547,11 @@ class NexBotTcpRobotController(RobotController):
             command, data = self.state.read_frame()
             if command == CMD_QUERY_REPLY:
                 return data if isinstance(data, dict) else {}
-            if command in CMD_ERRORS or command in CMD_WARNINGS:
-                message = "controller error"
-                if isinstance(data, dict):
-                    message = (
-                        str(data.get("message"))
-                        or str(data.get("error"))
-                        or json.dumps(data, ensure_ascii=False)
-                    )
+            if command in CMD_ERRORS or command in CMD_WARNINGS or command == CMD_ALARM:
                 raise ControllerProtocolError(
-                    "controller frame 0x{:04X}: {}".format(command, message)
+                    "controller frame 0x{:04X}: {}".format(
+                        command, _frame_message(data)
+                    )
                 )
         raise ControllerTimeout("state query timed out after {:.1f}s".format(deadline))
 
@@ -442,6 +569,11 @@ class NexBotTcpRobotController(RobotController):
         现场实测：axisVel 在本固件存在单位歧义（疑似 ×57.3 度/秒），
         21.05.23 上按 rad/s 阈值判断会永远"未停止"→ 卡死 60s/次。
         改为连续两个 0.5s 窗口的完整位姿无变化才视为静止。
+
+        ⚠️ 这个函数**不能**单独用来判断"运动成功"：指令被拒时位姿本来就不变，
+        它会立刻满足"静止"条件并返回，产出假成功。真正的成功判据是
+        ``_await_motion_ack()`` 收到 ``0x3D03 status=2``；本函数只负责
+        "已经确认动起来之后，等它停下来"。调用顺序必须是 ack 在前、本函数在后。
         """
         deadline = time.monotonic() + self.endpoint.motion_finish_timeout_s
         last_pose = None
@@ -552,7 +684,9 @@ class NexBotTcpRobotController(RobotController):
         velocity = _clamp(round(float(speed_scale) * 100.0), 1, 100)
         for point in points:
             self._send_motion(CMD_MOVJ, point, velocity)
-            self._check_errors()
+            # Positive confirmation that the motion started -- never trust the
+            # "pose stopped changing" heuristic on its own (see _await_motion_ack).
+            self._await_motion_ack()
             if self.endpoint.wait_for_finish:
                 self._wait_motion_finish()
 
@@ -563,7 +697,7 @@ class NexBotTcpRobotController(RobotController):
         velocity = _clamp(round(float(speed_mm_s)), 1, 1000)
         for point in points:
             self._send_motion(CMD_MOVL, point, velocity)
-            self._check_errors()
+            self._await_motion_ack()
             if self.endpoint.wait_for_finish:
                 self._wait_motion_finish()
 
@@ -586,42 +720,64 @@ class NexBotTcpRobotController(RobotController):
         while time.monotonic() < deadline:
             command, data = self.motion.read_frame()
             if command == CMD_SERVO_RESPOND:
-                return int(data.get("status", 0))
-            if command in CMD_ERRORS or command in CMD_WARNINGS:
+                return int((data or {}).get("status", 0))
+            if command in CMD_ERRORS or command in CMD_WARNINGS or command == CMD_ALARM:
                 raise ControllerProtocolError(
                     "controller frame 0x{:04X}: {}".format(
-                        command,
-                        data.get("data") or json.dumps(data, ensure_ascii=False),
+                        command, _frame_message(data)
                     )
                 )
         raise ControllerTimeout("servo status query timed out")
 
-    def enable_servo(self) -> int:
-        """上位机使能 (0x2311) 并返回伺服状态；状态 != 3 抛异常。"""
+    def enable_servo(self, settle_s: float = 0.8) -> int:
+        """上位机使能 (0x2311) 并返回伺服状态；状态 != 3 抛异常。
+
+        The queued push from ``0x2311`` is drained before re-querying: the
+        controller answers the enable with ``0x2003 status:3`` immediately, and
+        if the safety gate then knocks the servo back down it pushes ``0`` and
+        ``1`` right behind it.  Reading only the first frame reports "enabled"
+        for a servo that is already off -- that is the "刚才打开了运动伺服但是
+        瞬间关闭了" symptom from the field session.
+        """
         self._ensure_open()
         self.motion.send_frame(CMD_ENABLE, {"robot": self.endpoint.robot})
-        time.sleep(0.8)
+        time.sleep(max(0.0, float(settle_s)))
+        self._drain_pushed_frames()
         status = self.servo_status()
         if status != 3:
             raise ControllerProtocolError(
-                "servo enable refused (status={}); ensure the teach pendant "
-                "is in 伺服运行/示教模式 and 无报警".format(status)
+                "0x2311 上使能后伺服仍为 status={} (需要 3=运行)。{}".format(
+                    status, SAFETY_GATE_HINT
+                )
             )
         return status
 
     def go_home(self):
-        """回零 (0x3002 GO_HOME, robot 0=机器人在回零/1=外部轴)."""
+        """回零 (0x3002 GO_HOME, robot 0=机器人在回零/1=外部轴).
+
+        WARNING: goes through the controller's ``startRobotJobTask(safepos=1)``
+        entry point, i.e. it is subject to the reset-point safety gate.  In
+        remote mode a refusal here powers the servo off -- see SAFETY_GATE_HINT.
+        """
         self._ensure_open()
-        self.motion.send_frame(0x3002, {"robot": self.endpoint.robot, "type": 0})
-        self._check_errors()
+        self.motion.send_frame(CMD_GO_HOME, {"robot": self.endpoint.robot, "type": 0})
+        self._await_motion_ack()
         if self.endpoint.wait_for_finish:
             self._wait_motion_finish()
 
     def go_reset_position(self):
-        """回复位点 (0x3007 GO_RESET_POSITION); 现场约定复位点=拍摄点."""
+        """回复位点 (0x3007 GO_RESET_POSITION); 现场约定复位点=拍摄点.
+
+        WARNING: same ``startRobotJobTask(safepos=1)`` entry point as
+        ``go_home``/MOVL.  This is the call that silently de-energised the arm
+        at the start of every grasp attempt on 2026-08-22: the gate refused it,
+        the controller powered off, and the following MOVLs went nowhere while
+        the gripper (0x3601, a different code path) kept working.
+        ``_await_motion_ack`` now turns that into a loud exception.
+        """
         self._ensure_open()
-        self.motion.send_frame(0x3007, {"robot": self.endpoint.robot})
-        self._check_errors()
+        self.motion.send_frame(CMD_GO_RESET_POSITION, {"robot": self.endpoint.robot})
+        self._await_motion_ack()
         if self.endpoint.wait_for_finish:
             self._wait_motion_finish()
 
@@ -648,10 +804,10 @@ class NexBotTcpRobotController(RobotController):
                         json.dumps(data, ensure_ascii=False)[:200]
                     )
                 )
-            if command in CMD_ERRORS or command in CMD_WARNINGS:
+            if command in CMD_ERRORS or command in CMD_WARNINGS or command == CMD_ALARM:
                 raise ControllerProtocolError(
                     "controller frame 0x{:04X}: {}".format(
-                        command, json.dumps(data, ensure_ascii=False)[:200]
+                        command, _frame_message(data)
                     )
                 )
         raise ControllerTimeout(
@@ -685,14 +841,19 @@ def nexbot_tcp_client_from_config(settings):
         motion_finish_timeout_s=float(config.get("motion_finish_timeout_s", 60.0)),
         velocity_eps_rad_s=float(config.get("velocity_eps_rad_s", 0.02)),
         heartbeat_s=float(config.get("heartbeat_s", 0.0)),
+        motion_ack_timeout_s=float(config.get("motion_ack_timeout_s", 3.0)),
     )
 
 
 __all__ = [
+    "CMD_ALARM",
     "CMD_EMERGENCY_STOP",
+    "CMD_GO_HOME",
+    "CMD_GO_RESET_POSITION",
     "CMD_MOVJ",
     "CMD_MOVL",
     "CMD_ENABLE",
+    "CMD_PROGRAM_STATUS",
     "CMD_SERVO_INQUIRE",
     "CMD_SERVO_RESPOND",
     "CMD_QUERY",
@@ -700,6 +861,7 @@ __all__ = [
     "CMD_DOUT_SET",
     "CMD_DOUT_QUERY",
     "CMD_DOUT_QUERY_REPLY",
+    "SAFETY_GATE_HINT",
     "ControllerConnectionError",
     "ControllerProtocolError",
     "ControllerTimeout",

@@ -24,17 +24,31 @@ from arm_vision_framework.adapters.inexbot_modbus import (
     InexbotPoint,
 )
 from arm_vision_framework.adapters.nexbot_tcp import (
+    CMD_ALARM,
     CMD_EMERGENCY_STOP,
+    CMD_ENABLE,
+    CMD_GO_HOME,
+    CMD_GO_RESET_POSITION,
     CMD_MOVJ,
     CMD_MOVL,
+    CMD_PROGRAM_STATUS,
     CMD_QUERY,
     CMD_QUERY_REPLY,
+    CMD_SERVO_INQUIRE,
+    CMD_SERVO_RESPOND,
     NexBotTcpEndpoint,
     NexBotTcpRobotController,
+    _frame_message,
     build_frame,
     read_frame,
 )
 from arm_vision_framework.transforms import transform_from_inexbot_abc
+
+
+#: 真控制器接受一条运动指令后, 会在 6001 上推 ``0x3D03 status=2``(开始运动).
+#: 假控制器必须照做, 否则测试跑的是一个现实中不存在的控制器。
+MOTION_STARTED = build_frame(CMD_PROGRAM_STATUS, {"robot": 1, "status": 2})
+MOTION_COMMANDS = (CMD_MOVJ, CMD_MOVL, CMD_GO_HOME, CMD_GO_RESET_POSITION)
 
 
 class FakeController:
@@ -49,6 +63,8 @@ class FakeController:
         self.received = []
         # command -> list of already-encoded frames to send on receipt
         self.replies = {}
+        for command in MOTION_COMMANDS:
+            self.replies[command] = [MOTION_STARTED]
         self._stop = False
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
@@ -259,6 +275,141 @@ class NexBotControllerTest(unittest.TestCase):
             NexBotTcpEndpoint(host="127.0.0.1", external_axes=3)
         with self.assertRaises(ValueError):
             NexBotTcpEndpoint(host="127.0.0.1", robot=9)
+        with self.assertRaises(ValueError):
+            NexBotTcpEndpoint(host="127.0.0.1", motion_ack_timeout_s=-1.0)
+
+
+class MotionAckTest(unittest.TestCase):
+    """指令被拒时必须报错, 绝不能报成功。
+
+    2026-08-22 现场三种被拒签名全部覆盖 —— 旧代码对三种都返回"运动完成"。
+    """
+
+    def setUp(self):
+        self.server = FakeController()
+
+    def tearDown(self):
+        self.server.close()
+
+    def _controller(self, **overrides):
+        return NexBotTcpRobotController(endpoint(self.server, **overrides))
+
+    @staticmethod
+    def _point():
+        return InexbotPoint(
+            name="P0001", coordinate_system=3, angle_unit=1, shape=1,
+            tool_id=1, user_id=1, axes=(1.0, 2.0, 3.0, 0.1, 0.2, 0.3, 0.0),
+        )
+
+    def test_silently_ignored_command_raises_instead_of_reporting_success(self):
+        """签名 3：控制器什么都不回。旧代码判"位姿没变 -> 运动完成"。"""
+        self.server.replies[CMD_MOVL] = []
+        controller = self._controller(motion_ack_timeout_s=0.4)
+        with self.assertRaises(ControllerTimeout) as ctx:
+            controller.move_l([self._point()], speed_mm_s=30.0)
+        controller.close()
+        self.assertIn("0x3D03", str(ctx.exception))
+
+    def test_parameter_error_alarm_surfaces_the_real_message(self):
+        """签名 1：0x2B03，真实文本在 ``data`` 键而不是 ``message``。"""
+        self.server.replies[CMD_MOVL] = [
+            build_frame(CMD_ALARM, {
+                "code": 25530, "data": "指令[0x4502]参数错误",
+                "kind": 2, "param": [17666, 17666, 2], "robot": 0,
+            })
+        ]
+        controller = self._controller(motion_ack_timeout_s=1.0)
+        with self.assertRaises(ControllerProtocolError) as ctx:
+            controller.move_l([self._point()], speed_mm_s=30.0)
+        controller.close()
+        self.assertIn("指令[0x4502]参数错误", str(ctx.exception))
+
+    def test_safety_gate_refusal_is_reported_with_the_field_hint(self):
+        """签名 2：复位点安全闸门拒绝后把伺服下电, 6001 收到 0x2003 status 1。"""
+        self.server.replies[CMD_GO_RESET_POSITION] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 0}),
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 1}),
+        ]
+        controller = self._controller(motion_ack_timeout_s=1.0)
+        with self.assertRaises(ControllerProtocolError) as ctx:
+            controller.go_reset_position()
+        controller.close()
+        message = str(ctx.exception)
+        self.assertIn("拒绝", message)
+        self.assertIn("deviation=null", message)
+
+    def test_servo_status_3_push_does_not_count_as_motion_started(self):
+        """伺服还在使能 != 运动开始了。只有 0x3D03 status=2 才算。"""
+        self.server.replies[CMD_MOVJ] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 3}),
+        ]
+        controller = self._controller(motion_ack_timeout_s=0.4)
+        with self.assertRaises(ControllerTimeout):
+            controller.move_j([self._point()], speed_scale=0.1)
+        controller.close()
+
+    def test_program_status_0_does_not_count_as_motion_started(self):
+        self.server.replies[CMD_MOVL] = [
+            build_frame(CMD_PROGRAM_STATUS, {"robot": 1, "status": 0}),
+        ]
+        controller = self._controller(motion_ack_timeout_s=0.4)
+        with self.assertRaises(ControllerTimeout):
+            controller.move_l([self._point()], speed_mm_s=30.0)
+        controller.close()
+
+    def test_enable_servo_sees_the_final_state_not_the_first_push(self):
+        """0x2311 先推 3, 安全闸门随后把它打回 1。必须读到 1 并报错。
+
+        这就是现场"刚才打开了运动伺服但是瞬间关闭了"的机器可读版本。
+        """
+        self.server.replies[CMD_ENABLE] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 3}),
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 0}),
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 1}),
+        ]
+        self.server.replies[CMD_SERVO_INQUIRE] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 1}),
+        ]
+        controller = self._controller()
+        with self.assertRaises(ControllerProtocolError) as ctx:
+            controller.enable_servo(settle_s=0.05)
+        controller.close()
+        self.assertIn("status=1", str(ctx.exception))
+
+    def test_enable_servo_accepts_a_servo_that_stays_running(self):
+        self.server.replies[CMD_ENABLE] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 3}),
+        ]
+        self.server.replies[CMD_SERVO_INQUIRE] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 3}),
+        ]
+        controller = self._controller()
+        self.assertEqual(controller.enable_servo(settle_s=0.05), 3)
+        controller.close()
+
+
+class FrameMessageTest(unittest.TestCase):
+    """``str(None)`` == ``"None"`` is truthy -- the old extractor was dead code."""
+
+    def test_data_key_wins_because_that_is_what_the_controller_sends(self):
+        self.assertEqual(
+            _frame_message({"code": 25530, "data": "指令[0x4502]参数错误"}),
+            "指令[0x4502]参数错误",
+        )
+
+    def test_message_and_error_keys_still_work(self):
+        self.assertEqual(_frame_message({"message": "joint limit"}), "joint limit")
+        self.assertEqual(_frame_message({"error": "singularity"}), "singularity")
+
+    def test_missing_text_falls_back_to_json_not_the_string_none(self):
+        message = _frame_message({"code": 7, "robot": 1})
+        self.assertNotEqual(message, "None")
+        self.assertIn("code", message)
+
+    def test_non_dict_payloads(self):
+        self.assertEqual(_frame_message(None), "controller error")
+        self.assertEqual(_frame_message(""), "controller error")
+        self.assertEqual(_frame_message("boom"), "boom")
 
 
 if __name__ == "__main__":

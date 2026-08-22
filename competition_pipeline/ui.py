@@ -42,7 +42,11 @@ from .controller_tcp import InexbotPoint, modbus_client_from_config
 from .shape_latch import ShapeLatch
 from .tcp_pose import NexBotTcpPoseSource, pose_endpoint_from_config
 from .nexbot_jog import NexBotTcpJog
-from .geometry import transform_from_xyz_rpy_mm, xyz_rpy_from_transform
+from .geometry import (
+    transform_from_inexbot_abc_mm,
+    transform_from_xyz_rpy_mm,
+    xyz_rpy_from_transform,
+)
 from .hand_eye import APRILTAG_MAP_TARGET, HandEyeCalibrator
 from .localization import (
     HybridLocalizer, SOURCE_TAG_VISUAL, SOURCE_TAG_VISUAL_HELD,
@@ -335,10 +339,12 @@ class NexBotPoseWorker(QThread):
                     if pose is None:
                         self.msleep(int(self.interval_s * 1000.0))
                         continue
-                    xyz_mm, rpy_deg = pose
+                    # NexBotTcpPoseSource.read() 返回 (xyz_mm, abc_deg)，
+                    # abc 是控制器原生 A/B/C（内旋 X'Y'Z'），不是 RPY。
+                    xyz_mm, abc_deg = pose
                     if self.stopping:
                         break
-                    self.pose_ready.emit(True, (tuple(xyz_mm), tuple(rpy_deg)))
+                    self.pose_ready.emit(True, (tuple(xyz_mm), tuple(abc_deg)))
                 except Exception as error:
                     if self.stopping:
                         break
@@ -1529,6 +1535,12 @@ class CompetitionCalibrationWindow(QMainWindow):
         return page
 
     def _pose_box(self, title):
+        """T_base_tcp 输入框。角度三格是控制器原生 **A/B/C**（内旋 X'Y'Z'），不是 RPY。
+
+        标签以前写的是 R/P/Y，而 ``_receive_nexbot_pose`` 灌进来的一直是控制器
+        A/B/C —— 名字骗了 ``_pose_from_spins``，让它按 Rz·Ry·Rx 重建，手眼样本
+        系统性偏 4~15°。标签与实际约定必须一致。
+        """
         box = QGroupBox(title)
         grid = QGridLayout(box)
         spins = []
@@ -1537,11 +1549,16 @@ class CompetitionCalibrationWindow(QMainWindow):
             spins.append(spin)
             grid.addWidget(QLabel(text), 0, column)
             grid.addWidget(spin, 1, column)
-        for column, text in enumerate(("R", "P", "Y")):
-            spin = self._spin(-180, 180, 0, " deg")
+        for column, text in enumerate(("A", "B", "C")):
+            # A/B/C 取值域是 ±180°，但 A 与 C 在 ±180 附近会翻边，留 ±360 余量。
+            spin = self._spin(-360, 360, 0, " deg")
             spins.append(spin)
             grid.addWidget(QLabel(text), 2, column)
             grid.addWidget(spin, 3, column)
+        grid.addWidget(
+            QLabel("A/B/C = 控制器原生姿态（内旋 X'Y'Z'，R=Rx(A)Ry(B)Rz(C)），非 RPY"),
+            4, 0, 1, 3,
+        )
         return box, spins
 
     def _build_hand_eye_page(self):
@@ -2770,11 +2787,16 @@ state_codec:
         }
         for name, value in values.items():
             self.controller_state_labels[name].setText(self._controller_value(value))
+        # 旧 Modbus 状态通道。config 里 controller.state_pose_convention 明写
+        # "unverified"、state_registers 为空，现场从未用它取过位姿；姿态三格现在
+        # 按控制器 A/B/C 解释，而这条路径的角度约定未经验证，所以不再自动回填，
+        # 只在状态栏显示，避免把一个约定不明的姿态灌进手眼样本。
         if state.tcp_xyz_mm is not None and state.tcp_rpy_deg is not None:
-            values = tuple(state.tcp_xyz_mm) + tuple(state.tcp_rpy_deg)
-            for spins in (self.verify_pose_spins, self.hand_pose_spins):
-                for spin, value in zip(spins, values):
-                    spin.setValue(float(value))
+            self.controller_state_labels["tcp_rpy_deg"].setText(
+                "{} （约定未验证，不自动回填位姿框；请用 7000 端口的 NexBot 回读）".format(
+                    self._controller_value(state.tcp_rpy_deg)
+                )
+            )
         if state.error:
             self.controller_result.setText("读取失败：{}".format(state.error))
         elif not state.raw_registers:
@@ -3535,8 +3557,19 @@ state_codec:
 
     @staticmethod
     def _pose_from_spins(spins):
+        """位姿输入框 -> T_base_tcp。角度框里装的是控制器原生 A/B/C（内旋 X'Y'Z'）。
+
+        必须用 ``transform_from_inexbot_abc_mm``，不能用 ``transform_from_xyz_rpy_mm``
+        —— 后者是固定系 Rz·Ry·Rx，与 A/B/C 的 Rx·Ry·Rz 合成顺序相反。
+
+        这里曾经用错。commit 027d41c 把 geometry/tcp_pose/hand_eye/adapter 四处都改成了
+        A/B/C 约定，唯独漏了 ui.py 这个消费端：``_receive_nexbot_pose`` 灌进来的是
+        控制器 A/B/C，这里却按 RPY 重建，于是每个手眼样本的姿态都系统性偏
+        4°(拍摄点位姿) ~ 15°(用户1原点位姿)，解出的 tcp_from_color_camera 整体偏斜，
+        误差再经 tag 定位传到抓取目标点。
+        """
         values = [spin.value() for spin in spins]
-        return transform_from_xyz_rpy_mm(values[:3], values[3:])
+        return transform_from_inexbot_abc_mm(values[:3], values[3:])
 
     def _build_tcp_pose_box(self):
         """NexBot TCP verification panel: read T_base_tcp before sampling."""
@@ -3628,9 +3661,11 @@ state_codec:
         grid.addWidget(self.robot_ctrl_status, 6, 0, 1, 3)
 
         # 目标点传送面板（复用共享持久 jog 连接；用户坐标系1）
+        # motion_authorized 必须传：否则传送面板会绕过"已确认急停可用"这道人工闸门。
         from competition_pipeline.teleport_panel import TeleportPanel
         self.teleport_panel = TeleportPanel(
-            jog_provider=lambda: self._get_robot_jog()
+            jog_provider=lambda: self._get_robot_jog(),
+            motion_authorized=lambda: self.robot_ctrl_enable.isChecked(),
         )
         grid.addWidget(self.teleport_panel, 7, 0, 1, 3)
 
@@ -3827,13 +3862,15 @@ state_codec:
 
     def _receive_nexbot_pose(self, ok, payload):
         if ok:
-            xyz_mm, rpy_deg = payload
+            # 控制器原生 A/B/C（度），不是 RPY —— 变量名以前叫 rpy_deg，
+            # 直接误导了下游的 _pose_from_spins。
+            xyz_mm, abc_deg = payload
             self.nexbot_status.setText(
-                "已连接 · TCP X/Y/Z {:.1f} {:.1f} {:.1f} mm · R/P/Y {:.2f} {:.2f} {:.2f}°"
-                .format(*xyz_mm, *rpy_deg)
+                "已连接 · TCP X/Y/Z {:.1f} {:.1f} {:.1f} mm · A/B/C {:.2f} {:.2f} {:.2f}°"
+                .format(*xyz_mm, *abc_deg)
             )
             if self.nexbot_autofill.isChecked():
-                values = tuple(xyz_mm) + tuple(rpy_deg)
+                values = tuple(xyz_mm) + tuple(abc_deg)
                 for spins in (self.hand_pose_spins, self.verify_pose_spins):
                     for spin, value in zip(spins, values):
                         spin.setValue(float(value))
