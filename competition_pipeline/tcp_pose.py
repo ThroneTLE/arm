@@ -49,11 +49,17 @@ def pose_endpoint_from_config(controller_settings):
 
 
 class NexBotTcpPoseSource:
-    """One-shot state reads as ``(xyz_mm, rpy_deg)`` tuples for the UI."""
+    """One-shot state reads as ``(xyz_mm, rpy_deg)`` tuples for the UI.
 
-    def __init__(self, endpoint: NexBotTcpEndpoint):
+    ``controller`` may be shared (one persistent 7000 connection owned by the
+    robot panel) so the pose poller and the jog actions never fight over the
+    single-client 7000/6001 ports; the adapter transports are lock-protected.
+    """
+
+    def __init__(self, endpoint: NexBotTcpEndpoint, controller: object = None):
         self.endpoint = endpoint
-        self._controller = None
+        self._controller = controller
+        self._owns_controller = controller is None
 
     @property
     def controller(self):
@@ -77,7 +83,7 @@ class NexBotTcpPoseSource:
         return tuple(xyz_m * 1000.0), tuple(np.degrees(abc_rad))
 
     def close(self):
-        if self._controller is not None:
+        if self._owns_controller and self._controller is not None:
             self._controller.close()
             self._controller = None
 

@@ -309,21 +309,31 @@ class NexBotPoseWorker(QThread):
     pose_ready = pyqtSignal(bool, object)
     failed = pyqtSignal(str)
 
-    def __init__(self, endpoint, interval_s=0.2):
+    def __init__(self, endpoint, interval_s=0.2, jog=None):
         super().__init__()
         self.endpoint = endpoint
         self.interval_s = max(float(interval_s), 0.1)
         self.stopping = False
         self.source = None
+        #: 共享持久 jog（同一 7000/6001 连接，避免单客户端端口互相踢线）
+        self.jog = jog
 
     def stop(self):
         self.stopping = True
         if self.source is not None:
-            self.source.close()
+            self.source.close()  # 共享连接时 close() 不关闭底层（_owns_controller=False）
 
     def run(self):
         try:
-            self.source = NexBotTcpPoseSource(self.endpoint)
+            shared_controller = None
+            if self.jog is not None:
+                try:
+                    shared_controller = self.jog.controller
+                except Exception:
+                    shared_controller = None
+            self.source = NexBotTcpPoseSource(
+                self.endpoint, controller=shared_controller
+            )
             while not self.stopping:
                 try:
                     xyz_mm, rpy_deg = self.source.read()
@@ -3627,6 +3637,20 @@ state_codec:
             return False
         return True
 
+    def _get_robot_jog(self):
+        """共享持久 NexBotTcpJog（6001/7000 单客户端端口全程占用 + 保活）。"""
+        jog = getattr(self, "_robot_jog", None)
+        if jog is None:
+            endpoint = pose_endpoint_from_config(self.config.data.get("controller", {}))
+            jog = self._robot_jog = NexBotTcpJog(endpoint, keepalive_s=2.0)
+        return jog
+
+    def _close_robot_jog(self):
+        jog = getattr(self, "_robot_jog", None)
+        if jog is not None:
+            jog.close()
+            self._robot_jog = None
+
     def _new_jog_worker(self, action, args=()):
         """Start a jog worker keeping a strong reference until it finishes.
 
@@ -3634,11 +3658,7 @@ state_codec:
         if the QThread object is garbage-collected while running; always
         keep workers in ``self._jog_workers`` while they are alive.
         """
-        endpoint = pose_endpoint_from_config(self.config.data.get("controller", {}))
-        jog = getattr(self, "_robot_jog", None)
-        if jog is None:
-            # 持久连接：6001 单客户端，全程占用并保活，避免动作间重复建连
-            jog = self._robot_jog = NexBotTcpJog(endpoint, keepalive_s=2.0)
+        jog = self._get_robot_jog()
         worker = NexBotJogWorker(jog, action, args)
         worker.done.connect(self._jog_done)
         workers = getattr(self, "_jog_workers", None)
@@ -3693,7 +3713,7 @@ state_codec:
         except Exception as error:
             self._show_error("TCP 连接参数无效", error)
             return
-        worker = NexBotPoseWorker(endpoint)
+        worker = NexBotPoseWorker(endpoint, jog=self._get_robot_jog())
         worker.pose_ready.connect(self._receive_nexbot_pose)
         worker.failed.connect(self._nexbot_pose_failed)
         worker.finished.connect(self._nexbot_pose_finished)
@@ -4056,6 +4076,7 @@ state_codec:
         """)
 
     def closeEvent(self, event):
+        self._close_robot_jog()
         self.stop_rviz_visualization(stop_master=False)
         self._stop_live_processing_workers()
         if self.controller_worker is not None:
