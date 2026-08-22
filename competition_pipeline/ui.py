@@ -345,20 +345,24 @@ class NexBotPoseWorker(QThread):
 
 
 class NexBotJogWorker(QThread):
-    """One-shot NexBot jog/gripper/home/reset action in a worker thread."""
+    """One-shot NexBot jog/gripper/home/reset action in a worker thread.
+
+    Uses the shared persistent ``NexBotTcpJog`` (6001 single-client slot is
+    held continuously; keepalive keeps it alive, ``_run`` reconnects after
+    drops).  The jog is never closed by a worker.
+    """
 
     done = pyqtSignal(bool, str)
 
-    def __init__(self, endpoint, action, args=()):
+    def __init__(self, jog, action, args=()):
         super().__init__()
-        self.endpoint = endpoint
+        self.jog = jog
         self.action = action
         self.args = tuple(args)
 
     def run(self):
-        jog = None
+        jog = self.jog
         try:
-            jog = NexBotTcpJog(self.endpoint)
             if self.action == "step":
                 axis, step_mm = self.args
                 name = ("X", "Y", "Z")[int(axis)]
@@ -401,8 +405,8 @@ class NexBotJogWorker(QThread):
         except Exception as error:
             self.done.emit(False, "动作失败：{}".format(error))
         finally:
-            if jog is not None:
-                jog.close()
+            # 共享持久连接：worker 不负责关闭（由 UI 关闭时统一 close）
+            pass
 
 
 class TagLocalizationWorker(QThread):
@@ -3631,7 +3635,11 @@ state_codec:
         keep workers in ``self._jog_workers`` while they are alive.
         """
         endpoint = pose_endpoint_from_config(self.config.data.get("controller", {}))
-        worker = NexBotJogWorker(endpoint, action, args)
+        jog = getattr(self, "_robot_jog", None)
+        if jog is None:
+            # 持久连接：6001 单客户端，全程占用并保活，避免动作间重复建连
+            jog = self._robot_jog = NexBotTcpJog(endpoint, keepalive_s=2.0)
+        worker = NexBotJogWorker(jog, action, args)
         worker.done.connect(self._jog_done)
         workers = getattr(self, "_jog_workers", None)
         if workers is None:
