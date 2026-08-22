@@ -50,6 +50,10 @@ from arm_vision_framework.transforms import transform_from_inexbot_abc
 MOTION_STARTED = build_frame(CMD_PROGRAM_STATUS, {"robot": 1, "status": 2})
 MOTION_COMMANDS = (CMD_MOVJ, CMD_MOVL, CMD_GO_HOME, CMD_GO_RESET_POSITION)
 
+#: 伺服"运行"(status=3). 每条运动指令前适配器都会先问一次 0x2002, 所以假控制器
+#: 必须答得上来, 否则跑的又是一个现实中不存在的控制器。
+SERVO_RUNNING = build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 3})
+
 
 class FakeController:
     """One TCP listener; every accepted connection gets a handler thread."""
@@ -65,6 +69,7 @@ class FakeController:
         self.replies = {}
         for command in MOTION_COMMANDS:
             self.replies[command] = [MOTION_STARTED]
+        self.replies[CMD_SERVO_INQUIRE] = [SERVO_RUNNING]
         self._stop = False
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
@@ -145,6 +150,22 @@ class NexBotControllerTest(unittest.TestCase):
     def _controller(self, **overrides):
         return NexBotTcpRobotController(endpoint(self.server, **overrides))
 
+    def _first(self, command):
+        """First received frame with ``command``.
+
+        Not ``received[0]``: every motion is now preceded by a 0x2002 伺服状态
+        查询 (``_ensure_servo_enabled``), so the motion frame is no longer the
+        first thing on the wire.
+        """
+        for item in self.server.received:
+            if item[0] == command:
+                return item
+        raise AssertionError(
+            "0x{:04X} 从未发出; 实际收到 {}".format(
+                command, [hex(item[0]) for item in self.server.received]
+            )
+        )
+
     def test_move_j_sends_0x4501(self):
         controller = self._controller()
         point = InexbotPoint(
@@ -153,7 +174,7 @@ class NexBotControllerTest(unittest.TestCase):
         )
         controller.move_j([point], speed_scale=0.5)
         controller.close()
-        command, data = self.server.received[0]
+        command, data = self._first(CMD_MOVJ)
         self.assertEqual(command, CMD_MOVJ)
         self.assertEqual(data["robot"], 1)
         self.assertEqual(data["vel"], 50)
@@ -171,7 +192,7 @@ class NexBotControllerTest(unittest.TestCase):
         )
         controller.move_l([point], speed_mm_s=30.0)
         controller.close()
-        command, data = self.server.received[0]
+        command, data = self._first(CMD_MOVL)
         self.assertEqual(command, CMD_MOVL)
         self.assertEqual(data["vel"], 30)
         self.assertEqual(data["acc"], 10)
@@ -197,7 +218,7 @@ class NexBotControllerTest(unittest.TestCase):
         )
         controller.move_j([point], speed_scale=0.1)
         controller.close()
-        self.assertEqual(self.server.received[0][0], CMD_MOVJ)
+        self.assertEqual(self._first(CMD_MOVJ)[0], CMD_MOVJ)
         queries = [item for item in self.server.received if item[0] == CMD_QUERY]
         self.assertGreaterEqual(len(queries), 2)
 
@@ -386,6 +407,102 @@ class MotionAckTest(unittest.TestCase):
         controller = self._controller()
         self.assertEqual(controller.enable_servo(settle_s=0.05), 3)
         controller.close()
+
+
+class ServoPreconditionTest(unittest.TestCase):
+    """每条运动指令下发前必须自证伺服在运行态。
+
+    2026-08-22 的现场症状"要先卡 bug 点一次点动, 之后传送/抓取才偶尔能动"就是
+    这个前置条件缺失: 只有 ``NexBotTcpJog.step`` 发过 0x2311, 其它入口全都在蹭
+    上一次点动残留的使能。前置条件放在适配器里, 新调用方无法再把它漏掉。
+    """
+
+    def setUp(self):
+        self.server = FakeController()
+
+    def tearDown(self):
+        self.server.close()
+
+    def _controller(self, **overrides):
+        return NexBotTcpRobotController(endpoint(self.server, **overrides))
+
+    @staticmethod
+    def _point():
+        return InexbotPoint(
+            name="P0001", coordinate_system=3, angle_unit=1, shape=1,
+            tool_id=1, user_id=1, axes=(1.0, 2.0, 3.0, 0.1, 0.2, 0.3, 0.0),
+        )
+
+    def _sent(self):
+        return [item[0] for item in self.server.received]
+
+    def test_move_l_asks_for_servo_status_before_sending_the_motion(self):
+        controller = self._controller()
+        controller.move_l([self._point()], speed_mm_s=30.0)
+        controller.close()
+        sent = self._sent()
+        self.assertIn(CMD_SERVO_INQUIRE, sent)
+        self.assertLess(
+            sent.index(CMD_SERVO_INQUIRE), sent.index(CMD_MOVL),
+            "伺服状态必须在 MOVL **之前**查询, 否则确认的是运动之后的状态",
+        )
+
+    def test_move_j_enables_when_the_servo_is_not_running(self):
+        """status=1(就绪) -> 必须发 0x2311, 而不是直接把运动丢出去。"""
+        self.server.replies[CMD_SERVO_INQUIRE] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 1}),
+        ]
+        self.server.replies[CMD_ENABLE] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 3}),
+        ]
+        controller = self._controller()
+        # enable_servo re-queries; make the second answer the enabled one.
+        original = controller.servo_status
+        answers = iter([1, 3])
+        controller.servo_status = lambda: next(answers, 3)
+        controller.move_j([self._point()], speed_scale=0.1)
+        controller.servo_status = original
+        controller.close()
+        self.assertIn(CMD_ENABLE, self._sent())
+
+    def test_a_de_energised_servo_aborts_before_the_motion_reaches_the_wire(self):
+        """伺服起不来时**一条运动都不许发** —— 发了也是空放, 还会掩盖真因。"""
+        self.server.replies[CMD_SERVO_INQUIRE] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 1}),
+        ]
+        self.server.replies[CMD_ENABLE] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 1}),
+        ]
+        controller = self._controller()
+        with self.assertRaises(ControllerProtocolError) as ctx:
+            controller.move_l([self._point()], speed_mm_s=30.0)
+        controller.close()
+        self.assertIn("deviation=null", str(ctx.exception))
+        self.assertNotIn(CMD_MOVL, self._sent())
+
+    def test_go_reset_position_is_gated_too(self):
+        """抓取序列的第一句。它以前是把使能打掉的那个入口。"""
+        controller = self._controller()
+        controller.go_reset_position()
+        controller.close()
+        sent = self._sent()
+        self.assertLess(sent.index(CMD_SERVO_INQUIRE),
+                        sent.index(CMD_GO_RESET_POSITION))
+
+    def test_servo_query_runs_once_per_call_not_once_per_point(self):
+        """多点 MOVL 里若逐点查询, 会把上一点的 0x3D03 ack 吃掉。"""
+        controller = self._controller()
+        controller.move_l([self._point()] * 3, speed_mm_s=30.0)
+        controller.close()
+        sent = self._sent()
+        self.assertEqual(sent.count(CMD_SERVO_INQUIRE), 1)
+        self.assertEqual(sent.count(CMD_MOVL), 3)
+
+    def test_the_precondition_can_be_switched_off_for_protocol_tests(self):
+        controller = self._controller(ensure_servo_before_motion=False)
+        controller.move_l([self._point()], speed_mm_s=30.0)
+        controller.close()
+        self.assertNotIn(CMD_SERVO_INQUIRE, self._sent())
 
 
 class FrameMessageTest(unittest.TestCase):

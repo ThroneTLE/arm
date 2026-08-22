@@ -215,6 +215,10 @@ class PickPlaceExecutor:
             )
         return tuple(replace(point, shape=self.shape_latch.value) for point in points)
 
+    # 伺服使能前置条件不在这里, 在适配器的 ``_ensure_servo_enabled``: 它跟着
+    # move_j/move_l 一起走, 所以每个调用方(包括这里)自动继承, 且不会因为某个
+    # 调用方忘了而复发。**不要**在这里再加一遍 —— 重复使能只是多一次往返,
+    # 真正的风险是有人以为"这里做了"而把适配器里那道去掉。
     def _move_j(self, state, points):
         self._check()
         points = self._latched_points(points)

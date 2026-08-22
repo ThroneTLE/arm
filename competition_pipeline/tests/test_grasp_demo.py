@@ -22,15 +22,18 @@ from competition_pipeline.grasp_demo import GraspDemoPanel, GraspDemoWorker
 class FakeJog:
     """Mirror of the NexBotTcpJog surface the grasp worker actually uses."""
 
-    def __init__(self, servo_running=True):
+    def __init__(self, servo_running=True, gripper_detail=""):
         self.commands = []
         self.xyz = [0.0, 0.0, 0.0]
         self.abc = [0.0, 0.0, 0.0]
         self.servo_running = bool(servo_running)
+        #: 非空时模拟"DOUT 回读失败"，真实实现会返回 (True, "未回读: …")
+        self.gripper_detail = str(gripper_detail)
 
     # -- motion ---------------------------------------------------------
-    def gripper(self, open_):
+    def gripper(self, open_, verify=True):
         self.commands.append(("gripper", bool(open_)))
+        return (True, self.gripper_detail)
 
     def move_to_ucs(self, xyz, abc, vel_mm_s=50.0, tolerance_mm=1.0,
                     rotation_tolerance_deg=3.0, **kwargs):
@@ -108,6 +111,37 @@ class GraspDemoWorkerTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("伺服", message)
         self.assertEqual(jog.commands, [], "被拒后不应再发任何后续动作")
+
+    def test_an_unverified_gripper_is_not_reported_as_a_clean_success(self):
+        """夹爪 DOUT 读不到时，结论里必须留下"未确认"，不能只剩 ✅。
+
+        运动有 0x3D03 + 到位校验背书，夹爪没有；把两者混成同一个 ✅ 正是
+        2026-08-22 "夹爪在开合、位置没动却报完成" 的那类假象。
+        """
+        jog = FakeJog(gripper_detail="未回读: DOUT 查询超时")
+        ok, message = _run_worker(self._worker(jog))
+        self.assertTrue(ok, message)
+        self.assertIn("未能回读确认", message)
+        self.assertIn("DOUT 查询超时", message)
+
+    def test_a_verified_gripper_reports_a_clean_success(self):
+        jog = FakeJog()
+        ok, message = _run_worker(self._worker(jog))
+        self.assertTrue(ok, message)
+        self.assertNotIn("未能回读确认", message)
+        self.assertTrue(message.startswith("✅"))
+
+    def test_a_contradicted_gripper_readback_fails_the_sequence(self):
+        """回读到与指令相反的 DOUT -> jog.gripper 抛错 -> 整个序列判失败。"""
+        jog = FakeJog()
+
+        def _refuse(open_, verify=True):
+            raise RuntimeError("夹爪合指令已下发但 DOUT 回读不符")
+
+        jog.gripper = _refuse
+        ok, message = _run_worker(self._worker(jog))
+        self.assertFalse(ok)
+        self.assertIn("DOUT 回读不符", message)
 
     def test_abort_between_steps_stops_the_sequence(self):
         jog = FakeJog()

@@ -112,6 +112,54 @@ class ControllerContractTest(unittest.TestCase):
         self.assertTrue(manager.reason_is_singularity("逆运动学奇异点"))
         self.assertTrue(manager.reason_is_singularity("controller alarm 1234"))
 
+    def test_recovery_re_enables_the_servo_between_stop_and_movej(self):
+        """stop() 是 0x2314 = 下电; 不重新使能, 恢复动作只是空放。
+
+        旧代码 stop -> move_j 中间什么都不做, 却把 recovered 置 True。
+        """
+        class RobotWithEnable(Robot):
+            def enable_servo(self):
+                self.calls.append("enable_servo")
+                return 3
+
+        robot = RobotWithEnable()
+        state = ControllerState(
+            connected=True, emergency_stop=False,
+            tcp_xyz_mm=(1, 2, 3), joint_deg=(0, 0, 0, 0, 0, 0),
+        )
+        manager = SafeRecoveryManager(
+            robot, auto_recover=True, state_provider=lambda: state,
+        )
+        manager.save([point_from_joint_degrees("P9000", [0] * 6)])
+        self.assertTrue(manager.recover())
+        self.assertEqual(robot.calls[0], "stop")
+        self.assertEqual(robot.calls[1], "enable_servo")
+        self.assertEqual(robot.calls[2][0], "move_j")
+
+    def test_recovery_reports_failure_when_the_servo_will_not_re_enable(self):
+        """安全闸门不放行时, 必须返回 False 而不是"已恢复"。"""
+        class RefusingRobot(Robot):
+            def enable_servo(self):
+                self.calls.append("enable_servo")
+                raise RuntimeError("伺服仍为 status=1")
+
+        robot = RefusingRobot()
+        state = ControllerState(
+            connected=True, emergency_stop=False,
+            tcp_xyz_mm=(1, 2, 3), joint_deg=(0, 0, 0, 0, 0, 0),
+        )
+        manager = SafeRecoveryManager(
+            robot, auto_recover=True, state_provider=lambda: state,
+        )
+        manager.save([point_from_joint_degrees("P9000", [0] * 6)])
+        self.assertFalse(manager.recover())
+        self.assertFalse(manager.state.recovered)
+        self.assertIn("status=1", manager.state.last_reason)
+        self.assertNotIn(
+            "move_j", [call[0] if isinstance(call, tuple) else call
+                       for call in robot.calls],
+        )
+
     def test_recovery_locks_on_unknown_tcp_state(self):
         robot = Robot()
         manager = SafeRecoveryManager(

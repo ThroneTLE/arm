@@ -1,4 +1,13 @@
-"""Fail-closed safety gate around a vendor robot controller."""
+"""Fail-closed safety gate around a vendor robot controller.
+
+``speed_scale`` 是**无量纲比例**，这条路径最终变成 MOVL 的 mm/s：
+
+    speed_scale ×1000 = mm/s        (NexBotTcpRobotController.move_to)
+
+所以 ``safety.maximum_speed_scale=0.2`` 的实际含义是 **200 mm/s 上限**。
+不要拿 ``move_j`` 的 ``speed_scale``（那是 ×100 的百分比）来类比 —— 同名
+不同义，混用会把 50 mm/s 的意图变成 500 mm/s。详见 ``nexbot_move`` 模块头。
+"""
 
 import time
 
@@ -17,6 +26,7 @@ class SafeRobotController:
         self.adapter = adapter
 
     def move_tcp(self, base_from_tcp, speed_scale):
+        """``speed_scale`` 无量纲，×1000 = mm/s（见模块 docstring）。"""
         safety = self.config.data.get("safety", {})
         if bool(safety.get("dry_run", True)):
             raise MotionSafetyError("dry_run is enabled")
@@ -65,4 +75,8 @@ class SafeRobotController:
 
     def stop(self):
         # Emergency stop must remain callable even when normal motion is disabled.
+        # ⚠️ 在 C1102 上这条是 0x2314 -> Deadan_End -> PowerOff，即**下电**：
+        # 伸展着的手臂会失力下坠，且之后必须重新 0x2311 使能才能再动。
+        # 真正的安全急停是示教器上的物理按钮，不是这里。
+        # 运动尚未下发时不要"保险起见"调它 —— 那是纯粹的自伤。
         return self.adapter.stop()

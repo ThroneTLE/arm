@@ -99,6 +99,22 @@ class SafeRecoveryManager:
         return True
 
     def recover(self, *, explicit=False, speed_scale=0.05):
+        """Halt, re-energise, then MOVJ back to a validated joint point.
+
+        ⚠️ ``robot.stop()`` 在 Inexbot C1102 上是 ``0x2314``, 实测映射到
+        ``Deadan_End -> PowerOff`` —— **直接下电, 不是受控停止**。所以:
+
+        1. 伸展着的手臂在这一步会失力下坠一段。调用方必须先确认下方无人无物;
+           这也是 ``auto_recover`` 默认为 False、需要现场操作者显式点按的原因。
+        2. 下电之后伺服**不再使能**, 紧跟着的 ``move_j`` 必然落空。旧代码就是
+           stop -> move_j 中间什么都不做, 于是恢复动作从来没真正执行过, 却把
+           ``_recovered`` 置成了 True —— 又一例"程序说成功了但机器人没动"。
+           现在显式重新使能 (0x2311), 失败就如实返回 False。
+
+        底层适配器的 ``_ensure_servo_enabled`` 也会在 MOVJ 前兜一次底; 这里
+        仍然显式调用, 是为了让"下电后必须重新使能"这条因果关系留在可读代码里,
+        并且对不带该兜底的 robot 实现同样成立。
+        """
         self._last_reason = ""
         self._recovered = False
         if not self._safe_points:
@@ -115,6 +131,10 @@ class SafeRecoveryManager:
             if stopped is False:
                 self._last_reason = "controller rejected stop before recovery"
                 return False
+            # stop() 下电了 -> 不重新使能的话下面这条 MOVJ 只是空放。
+            enable = getattr(self.robot, "enable_servo", None)
+            if callable(enable):
+                enable()
             self.robot.move_j(self._safe_points, speed_scale=float(speed_scale))
             self._recovered = True
             return True

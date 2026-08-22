@@ -219,6 +219,11 @@ class NexBotTcpEndpoint:
     #: 设为 0 关闭该确认 —— **不要在实机上关掉**: 关掉就回到"指令被拒也报成功"
     #: 的旧行为(见 ``_await_motion_ack`` 的 docstring)。
     motion_ack_timeout_s: float = 3.0
+    #: 每条运动指令下发前先确认伺服 status==3, 不满足就发 ``0x2311`` 上使能.
+    #: 见 :meth:`NexBotTcpRobotController._ensure_servo_enabled` —— 这条默认开启,
+    #: 因为在这台控制器上"上一条指令成功过"根本推不出"现在还使能着".
+    #: 设为 False 只应出现在协议级单元测试里。
+    ensure_servo_before_motion: bool = True
 
     def __post_init__(self):
         host = str(self.host).strip()
@@ -259,6 +264,9 @@ class NexBotTcpEndpoint:
         if motion_ack < 0.0:
             raise ValueError("motion_ack_timeout_s cannot be negative")
         object.__setattr__(self, "motion_ack_timeout_s", motion_ack)
+        object.__setattr__(
+            self, "ensure_servo_before_motion", bool(self.ensure_servo_before_motion)
+        )
 
 
 class NexBotTcpTransport:
@@ -510,6 +518,42 @@ class NexBotTcpRobotController(RobotController):
                     )
                 )
 
+    def _ensure_servo_enabled(self, what: str = "运动"):
+        """Guarantee 伺服 status==3 in the same breath as sending a motion.
+
+        Why this lives in the adapter and not in each caller
+        ----------------------------------------------------
+        On this controller the servo does **not** stay enabled by itself.  The
+        reset-point safety gate powers it off on every refusal (see
+        ``SAFETY_GATE_HINT``), so "the previous command worked" says nothing
+        about whether the next one will.  Before 2026-08-22 only
+        ``NexBotTcpJog.step`` re-enabled, and every other entry point --
+        ``NexBotTcpMoveController.move_tcp``, ``PickPlaceExecutor._move_j`` /
+        ``_move_l``, ``SafeRecoveryManager.recover`` -- silently rode on the
+        enable that a jog happened to leave behind.  That is the whole of the
+        field symptom "得先卡个 bug 点一次点动, 之后传送/抓取才偶尔能动".
+
+        Putting the check here means every present and future caller inherits
+        it; a caller that forgets cannot reintroduce the bug.
+
+        The queued-push drain matters: ``0x2311`` answers ``0x2003 status:3``
+        immediately, and the gate then pushes ``0`` and ``1`` behind it.  Any
+        stale frame left in the 6001 buffer would otherwise be read as the
+        answer to *this* query.  It is deliberately called once per
+        ``move_j``/``move_l`` **before** the point loop, never between points,
+        so it can never swallow the ``0x3D03`` ack of a preceding point.
+        """
+        if not bool(self.endpoint.ensure_servo_before_motion):
+            return None
+        self._ensure_open()
+        self._drain_pushed_frames(budget_s=0.1)
+        status = self.servo_status()
+        if int(status) == 3:
+            return 3
+        # enable_servo re-queries after settling and raises with the field hint
+        # when the gate knocks the servo straight back down.
+        return self.enable_servo()
+
     def _send_motion(self, command: int, point: InexbotPoint, velocity: int):
         self._ensure_open()
         if not isinstance(point, InexbotPoint):
@@ -682,6 +726,9 @@ class NexBotTcpRobotController(RobotController):
         if not points:
             raise ValueError("move_j requires at least one point")
         velocity = _clamp(round(float(speed_scale) * 100.0), 1, 100)
+        # Once per call, before the loop -- see _ensure_servo_enabled for why it
+        # must not run between points.
+        self._ensure_servo_enabled("MOVJ")
         for point in points:
             self._send_motion(CMD_MOVJ, point, velocity)
             # Positive confirmation that the motion started -- never trust the
@@ -695,6 +742,7 @@ class NexBotTcpRobotController(RobotController):
         if not points:
             raise ValueError("move_l requires at least one point")
         velocity = _clamp(round(float(speed_mm_s)), 1, 1000)
+        self._ensure_servo_enabled("MOVL")
         for point in points:
             self._send_motion(CMD_MOVL, point, velocity)
             self._await_motion_ack()
@@ -702,6 +750,20 @@ class NexBotTcpRobotController(RobotController):
                 self._wait_motion_finish()
 
     def stop(self):
+        """发 ``0x2314``。⚠️ 这**不是**受控急停, 是直接下电。
+
+        实测 (2026-08-22 控制器日志, 5/5 次): ``0x2314`` 在这台 C1102 上映射到
+        ``Deadan_End -> 设置脉冲使能为 0 -> PowerOff``。伺服失力, 伸展着的手臂会
+        **靠自重坠落** —— 当天摔臂的最后一步正是控制器自己触发的 PowerOff。
+
+        因此:
+
+        - 真正的安全急停只能是示教器上的**物理急停按钮**;
+        - 调用方在"运动还没开始"时不要为了保险发这条 (见
+          ``PickPlaceExecutor.execute`` 的 SafetyInterlockError 分支);
+        - 发过之后伺服是断电的, 下一条运动必须重新 ``0x2311`` 使能
+          (``_ensure_servo_enabled`` 已自动处理)。
+        """
         self._ensure_open()
         self.motion.send_frame(CMD_EMERGENCY_STOP, {"robot": self.endpoint.robot})
         self._check_errors()
@@ -760,6 +822,7 @@ class NexBotTcpRobotController(RobotController):
         remote mode a refusal here powers the servo off -- see SAFETY_GATE_HINT.
         """
         self._ensure_open()
+        self._ensure_servo_enabled("回零")
         self.motion.send_frame(CMD_GO_HOME, {"robot": self.endpoint.robot, "type": 0})
         self._await_motion_ack()
         if self.endpoint.wait_for_finish:
@@ -776,6 +839,7 @@ class NexBotTcpRobotController(RobotController):
         ``_await_motion_ack`` now turns that into a loud exception.
         """
         self._ensure_open()
+        self._ensure_servo_enabled("回复位点")
         self.motion.send_frame(CMD_GO_RESET_POSITION, {"robot": self.endpoint.robot})
         self._await_motion_ack()
         if self.endpoint.wait_for_finish:
@@ -842,6 +906,9 @@ def nexbot_tcp_client_from_config(settings):
         velocity_eps_rad_s=float(config.get("velocity_eps_rad_s", 0.02)),
         heartbeat_s=float(config.get("heartbeat_s", 0.0)),
         motion_ack_timeout_s=float(config.get("motion_ack_timeout_s", 3.0)),
+        ensure_servo_before_motion=bool(
+            config.get("ensure_servo_before_motion", True)
+        ),
     )
 
 

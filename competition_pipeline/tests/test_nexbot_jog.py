@@ -82,6 +82,17 @@ class FakeController:
         self._thread.start()
         self.replies = {}
         self.current_ucs = [700.0, 100.0, 400.0, 0.1, 0.2, 0.3]
+        #: DOUT 线圈实况(1-based 端口 -> 值)。初始 (15,16)=(1,0) = 夹爪闭合。
+        #: 写 0x3601 会改这里, 查 0x3602 从这里答 —— 假控制器必须像真的一样
+        #: "写什么读到什么", 否则 gripper() 的回读校验测的是一个静态桩。
+        self.dout = [0] * 14 + [1, 0]
+        #: 置 True 模拟"线圈没动作/接线相反": 写入被忽略, 回读保持原样。
+        self.dout_ignores_writes = False
+
+    def _apply_dout(self, data):
+        port = int(data.get("port", 0))
+        if 1 <= port <= len(self.dout) and not self.dout_ignores_writes:
+            self.dout[port - 1] = int(data.get("status", 0))
 
     def _serve(self):
         while not self._stop:
@@ -102,6 +113,14 @@ class FakeController:
                     pass
                 return
             self.received.append((command, data))
+            if command == CMD_DOUT_SET:
+                self._apply_dout(data)
+            if command == CMD_DOUT_QUERY and CMD_DOUT_QUERY not in self.replies:
+                conn.sendall(build_frame(
+                    CMD_DOUT_QUERY_REPLY,
+                    {"status": list(self.dout), "robot": 1},
+                ))
+                continue
             for reply in self.replies.get(command, []):
                 conn.sendall(reply)
 
@@ -151,12 +170,7 @@ class NexBotJogTest(unittest.TestCase):
             build_frame(CMD_SERVO_RESPOND,
                         {"mode": 0, "robot": 1, "status": 3}),
         ]
-        self.server.replies[0x3602] = [
-            build_frame(
-                CMD_DOUT_QUERY_REPLY,
-                {"status": [0] * 14 + [1, 0], "robot": 1},
-            )
-        ]
+        # 0x3602 由 FakeController 按 self.dout 实况作答(见 _apply_dout)。
         for command in (CMD_MOVJ, CMD_MOVL, CMD_GO_HOME, CMD_GO_RESET_POSITION):
             self.server.replies[command] = [MOTION_STARTED]
 
@@ -617,6 +631,122 @@ class ResetAndHomeGuardTest(unittest.TestCase):
         jog.go_reset_position()
         jog.close()
         self.assertNotIn("enable_servo", controller.calls)
+
+
+class GripperReadbackTest(unittest.TestCase):
+    """夹爪走 0x3601 DOUT，拿不到 0x3D03 那种"真的动了"的确认。
+
+    2026-08-22 现场"夹爪照常开合、机械臂纹丝不动"正是因为这条码路一直是通的，
+    界面于是报"✅ 完成"。DOUT 回读是这条路径上唯一的客观证据。
+    """
+
+    def setUp(self):
+        self.server = FakeController()
+        self.server.replies[0x2002] = [
+            build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 3}),
+        ]
+
+    def tearDown(self):
+        self.server.close()
+
+    def _jog(self):
+        jog = NexBotTcpJog(endpoint(self.server))
+        self.addCleanup(jog.close)
+        return jog
+
+    def test_a_matching_readback_reports_verified(self):
+        jog = self._jog()
+        self.assertEqual(jog.gripper(True), (True, ""))
+        self.assertEqual(tuple(self.server.dout[14:16]), (0, 1))
+        self.assertEqual(jog.gripper(False), (True, ""))
+        self.assertEqual(tuple(self.server.dout[14:16]), (1, 0))
+
+    def test_a_coil_that_never_moves_is_reported_not_silently_accepted(self):
+        """线圈没动作 -> 抛错。绝不能让"没夹住"被当成"夹住了"。"""
+        self.server.dout_ignores_writes = True
+        jog = self._jog()
+        with self.assertRaises(RuntimeError) as ctx:
+            jog.gripper(True)
+        message = str(ctx.exception)
+        self.assertIn("回读不符", message)
+        self.assertIn("(0,1)", message)
+
+    def test_an_unreadable_dout_is_reported_as_unverified_not_as_failure(self):
+        """0x3603 在本固件未经现场验证：读不到就标注"未回读"，不判死。
+
+        用一个没验证过的查询去否决一个验证过的动作，才是真正的自伤。
+        """
+        self.server.replies[CMD_DOUT_QUERY] = []      # 查询永不作答
+        jog = self._jog()
+        ok, detail = jog.gripper(True)
+        self.assertTrue(ok)
+        self.assertIn("未回读", detail)
+        self.assertEqual(jog.last_gripper_verify, (ok, detail))
+        # 动作本身照发不误
+        dout = [item for item in self.server.received if item[0] == CMD_DOUT_SET]
+        self.assertEqual([item[1] for item in dout],
+                         [{"port": 15, "status": 0}, {"port": 16, "status": 1}])
+
+    def test_verification_can_be_skipped_explicitly(self):
+        self.server.dout_ignores_writes = True
+        jog = self._jog()
+        self.assertEqual(jog.gripper(True, verify=False), (True, ""))
+
+
+class EmergencyStopPreemptionTest(unittest.TestCase):
+    """6001 是单客户端端口，整个 jog 共用一条 socket。
+
+    旧实现绕过 ``_lock`` 直发 0x2314，与正在收发帧的工作线程并发写同一个
+    socket：两个 sendall 交错 -> 急停帧插进另一帧中间 -> 控制器按长度/CRC
+    解析后**两帧都丢弃**。最需要它工作的时候它悄无声息地失效。
+    """
+
+    def _jog(self, controller):
+        patcher = patch(
+            "competition_pipeline.nexbot_jog.NexBotTcpRobotController",
+            lambda _endpoint: controller,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        jog = NexBotTcpJog(object())
+        jog.RETRY_WAIT_S = 0.0
+        jog.ESTOP_PREEMPT_WAIT_S = 0.05
+        self.addCleanup(jog.close)
+        return jog
+
+    def test_estop_preempts_a_worker_that_is_holding_the_transaction_lock(self):
+        controller = RecordingController()
+        controller.stop = lambda: controller.calls.append("stop")
+        jog = self._jog(controller)
+        jog._lock.acquire()                       # 模拟工作线程正持锁收发
+        try:
+            jog.emergency_stop()                  # 必须抢占，不能干等
+        finally:
+            jog._lock.release()
+        self.assertIn("stop", controller.calls)
+
+    def test_estop_does_not_wait_forever_and_clears_its_flag(self):
+        controller = RecordingController()
+        controller.stop = lambda: controller.calls.append("stop")
+        jog = self._jog(controller)
+        jog.emergency_stop()
+        self.assertIn("stop", controller.calls)
+        self.assertFalse(jog._estop_pending.is_set(),
+                         "急停结束后必须清标志，否则后续动作全部无法重连")
+
+    def test_a_worker_stops_retrying_once_an_estop_is_in_flight(self):
+        """急停已发出时，工作线程不能回头抢 6001 的单客户端槽位。"""
+        controller = RecordingController()
+        jog = self._jog(controller)
+        jog._estop_pending.set()
+        self.addCleanup(jog._estop_pending.clear)
+
+        def _boom(_controller):
+            raise ControllerConnectionError("connection closed mid-frame")
+
+        with self.assertRaises(ControllerConnectionError) as ctx:
+            jog._run(_boom)
+        self.assertIn("急停", str(ctx.exception))
 
 
 class PoseUnitApiTest(unittest.TestCase):

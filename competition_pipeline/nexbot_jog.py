@@ -127,6 +127,9 @@ class NexBotTcpJog:
         self._controller_lock = threading.RLock()
         self._lock = threading.Lock()
         self._estop_lock = threading.Lock()
+        #: 急停正在抢占 6001 时置位；``_run_locked`` 见到它就放弃重连重试，
+        #: 免得工作线程和急停线程互抢单客户端槽位（见 :meth:`emergency_stop`）。
+        self._estop_pending = threading.Event()
         self._closed = False
         self._keepalive_s = keepalive_s
         self._keepalive_stop = threading.Event()
@@ -135,6 +138,8 @@ class NexBotTcpJog:
         self.last_servo_status = None
         self.last_keepalive_error = None
         self.servo_dropped_count = 0
+        #: 最近一次 :meth:`gripper` 的回读结论 ``(ok, detail)``
+        self.last_gripper_verify = None
         if keepalive_s is not None:
             self._keepalive_thread = threading.Thread(
                 target=self._keepalive_loop, daemon=True,
@@ -221,6 +226,12 @@ class NexBotTcpJog:
             except ControllerConnectionError as error:
                 last_error = error
                 self._drop_controller()
+                if self._estop_pending.is_set():
+                    # 急停刚刚把这条连接掐了。重连重试会和急停线程抢 6001 的
+                    # 单客户端槽位，最坏情况是把急停帧挤掉。放弃，向上报错。
+                    raise ControllerConnectionError(
+                        "已发出急停，放弃本次动作的重连重试：{}".format(error)
+                    ) from error
                 if attempt < attempts:
                     time.sleep(self.RETRY_WAIT_S * attempt)
         if not retry_on_disconnect:
@@ -452,16 +463,62 @@ class NexBotTcpJog:
             )
         return deviation
 
-    def gripper(self, open_: bool):
-        """开/关夹爪：开=(15,16)=(0,1) 关=(15,16)=(1,0)。"""
+    def gripper(self, open_: bool, verify=True):
+        """开/关夹爪：开=(15,16)=(0,1) 关=(15,16)=(1,0)，并回读确认。
+
+        返回 ``(ok, detail)``：
+
+        - ``(True,  "")``          回读结果与指令一致，确实切换了；
+        - ``(True,  "未回读: …")`` 回读本身失败（超时/协议错），动作已下发但
+          **无法确认**；
+        - 不一致则抛 ``RuntimeError``。
+
+        为什么必须回读
+        --------------
+        夹爪走 0x3601 DOUT，**不经过** ``startRobotJobTask``，因此不受复位点
+        安全闸门管辖，也拿不到 ``0x3D03`` 那种"真的动了"的确认。2026-08-22 的
+        现场表象正是"夹爪照常开合、机械臂纹丝不动"：夹爪那条码路一直是通的，
+        于是界面报"✅ 一键抓取完成"，实际什么都没抓到。这里回读 DOUT 是这条
+        路径上唯一能拿到的客观证据。
+
+        为什么"回读失败"不算失败
+        ------------------------
+        ``digital_output_states()``(0x3603) 在本固件上**未经现场验证**。若它
+        本身答不上来就把整个抓取判死，等于用一个没验证过的查询去否决一个验证
+        过的动作 —— 那才是真正的自伤。所以只在"读到了、而且和指令相反"时才
+        报错；读不到就如实标注"未确认"，由调用方写进结论。
+        """
+        close_value, open_value = (0, 1) if open_ else (1, 0)
+
         def _do_gripper(controller):
-            if open_:
-                controller.set_digital_output(GRIPPER_PORT_CLOSE, 0)
-                controller.set_digital_output(GRIPPER_PORT_OPEN, 1)
-            else:
-                controller.set_digital_output(GRIPPER_PORT_CLOSE, 1)
-                controller.set_digital_output(GRIPPER_PORT_OPEN, 0)
-        self._run(_do_gripper)
+            controller.set_digital_output(GRIPPER_PORT_CLOSE, close_value)
+            controller.set_digital_output(GRIPPER_PORT_OPEN, open_value)
+            if not verify:
+                return (True, "")
+            try:
+                states = controller.digital_output_states()
+            except Exception as error:                # 含超时/协议/连接错误
+                return (True, "未回读: {}".format(error))
+            if len(states) < GRIPPER_PORT_OPEN:
+                return (True, "未回读: DOUT 状态只有 {} 路".format(len(states)))
+            actual = (
+                int(states[GRIPPER_PORT_CLOSE - 1]),
+                int(states[GRIPPER_PORT_OPEN - 1]),
+            )
+            if actual != (close_value, open_value):
+                raise RuntimeError(
+                    "夹爪{}指令已下发但 DOUT 回读不符：期望 (15,16)=({},{})，"
+                    "实读 ({},{})。气阀线圈可能未动作或接线与约定相反，"
+                    "**不要**据此认为已经夹住/松开。".format(
+                        "开" if open_ else "合",
+                        close_value, open_value, *actual,
+                    )
+                )
+            return (True, "")
+
+        result = self._run(_do_gripper)
+        self.last_gripper_verify = result
+        return result
 
     def gripper_state(self):
         """返回 (DOUT15, DOUT16) 当前状态。"""
@@ -496,25 +553,58 @@ class NexBotTcpJog:
             self._ensure_servo_running_locked("回复位前")
             self._run_locked(lambda controller: controller.go_reset_position())
 
+    #: 急停等待正常事务让出 6001 的最长时间；超过就抢占。
+    ESTOP_PREEMPT_WAIT_S = 0.5
+
     def emergency_stop(self):
-        """Send 0x2314 without waiting behind an active normal operation."""
+        """下发 0x2314，必要时**抢占**正在进行的正常事务。
+
+        ⚠️ 语义提醒：0x2314 在这台 C1102 上映射到 ``Deadan_End -> PowerOff``，
+        是**下电**而不是受控停止，伸展着的手臂会失力下坠。真正的安全急停是
+        示教器上的物理按钮；本方法只是"尽快让控制器停下"的软件补充。
+
+        为什么不能简单地绕过 ``_lock`` 直发
+        ------------------------------------
+        6001 是单客户端端口，整个 :class:`NexBotTcpJog` 共用一条 socket。
+        旧实现直接 ``self.controller.stop()``，与正在 ``_run`` 里收发帧的工作
+        线程**并发写同一个 socket**：两个 ``sendall`` 交错，急停帧的字节就会
+        插进另一帧中间，控制器按帧头/长度/CRC 解析，结果是**两帧都被丢弃** ——
+        最需要它工作的时候，急停悄无声息地失效。
+
+        现在的顺序：
+
+        1. 先礼后兵：等 ``_lock`` 最多 ``ESTOP_PREEMPT_WAIT_S``。拿到就走干净
+           路径，不必打断任何东西。
+        2. 拿不到就抢占：置 ``_estop_pending`` 并 ``_drop_controller()`` 关掉
+           socket。持锁的工作线程立刻在读写上拿到 ``ControllerConnectionError``，
+           而 ``_run_locked`` 看到 ``_estop_pending`` 会直接放弃重连重试，
+           不会回头和我们抢槽位。
+        3. 独占地重连并发 0x2314。
+
+        任何时刻只有一个线程在 6001 上发帧，帧不再交错。
+        """
         with self._estop_lock:
-            last_error = None
-            for attempt in range(1, self.MAX_RETRIES + 1):
-                try:
-                    self.controller.stop()
-                    return
-                except ControllerConnectionError as error:
-                    last_error = error
-                    # Leave the shared state port intact for the active motion
-                    # worker; reopen only the failed 6001 transport.
+            acquired = self._lock.acquire(timeout=self.ESTOP_PREEMPT_WAIT_S)
+            self._estop_pending.set()
+            try:
+                if not acquired:
+                    # 抢占：掐断工作线程正在用的连接，独占 6001。
+                    self._drop_controller()
+                last_error = None
+                for attempt in range(1, self.MAX_RETRIES + 1):
                     try:
-                        self.controller.motion.close()
-                    except Exception:
-                        pass
-                    if attempt < self.MAX_RETRIES:
-                        time.sleep(self.RETRY_WAIT_S * attempt)
-            raise last_error
+                        self.controller.stop()
+                        return
+                    except ControllerConnectionError as error:
+                        last_error = error
+                        self._drop_controller()
+                        if attempt < self.MAX_RETRIES:
+                            time.sleep(self.RETRY_WAIT_S * attempt)
+                raise last_error
+            finally:
+                self._estop_pending.clear()
+                if acquired:
+                    self._lock.release()
 
 
 __all__ = [

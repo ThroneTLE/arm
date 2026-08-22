@@ -81,12 +81,19 @@ class GraspDemoWorker(QThread):
                 ("夹爪开(放置)", None, None),
                 ("抬升收尾", p_up, p_abc),
             ]
+            unverified = []
             for name, xyz, abc in steps:
                 if self.abort.is_set():
                     self.done.emit(False, "已急停中止（跳过：{}）".format(name))
                     return
                 if xyz is None:
-                    jog.gripper(False) if "合" in name else jog.gripper(True)
+                    # 夹爪走 0x3601 DOUT，不经过 startRobotJobTask，拿不到
+                    # 0x3D03 那种"真的动了"的确认。jog.gripper() 会回读 DOUT：
+                    # 读到相反值直接抛错；读不到则返回"未回读"，我们把它累积
+                    # 起来写进最终结论 —— 绝不把"没验证"说成"完成"。
+                    _ok, detail = jog.gripper("合" not in name)
+                    if detail:
+                        unverified.append("{}（{}）".format(name, detail))
                     time.sleep(0.5)                  # 气阀动作时间
                     continue
                 jog.move_to_ucs(
@@ -115,9 +122,16 @@ class GraspDemoWorker(QThread):
             # Do not leave the arm at place-above.  With controller reset-point
             # safety enabled, that pose is not a legal start for the next run.
             jog.go_reset_position()
-            self.done.emit(True, "✅ 一键抓取完成：抓取({:.1f},{:.1f},{:.1f}) → "
-                                 "放置({:.1f},{:.1f},{:.1f}) mm → 已回复位点".format(
-                                     *g_xyz, *p_xyz))
+            summary = ("✅ 一键抓取完成：抓取({:.1f},{:.1f},{:.1f}) → "
+                       "放置({:.1f},{:.1f},{:.1f}) mm → 已回复位点").format(
+                           *g_xyz, *p_xyz)
+            if unverified:
+                # 运动全程有 0x3D03 + 到位校验背书，夹爪没有。差别要说出来，
+                # 不能让一个未经确认的开合藏在"✅ 完成"后面。
+                summary = ("⚠️ 序列已走完，但夹爪状态未能回读确认：{}\n"
+                           "请目视确认夹爪确实开合后再判定结果。\n{}").format(
+                               "；".join(unverified), summary)
+            self.done.emit(True, summary)
         except Exception as error:
             self.done.emit(False, "抓取失败：{}".format(error))
 

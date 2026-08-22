@@ -22,6 +22,8 @@ from competition_pipeline.nexbot_tcp import (
     CMD_PROGRAM_STATUS,
     CMD_QUERY,
     CMD_QUERY_REPLY,
+    CMD_SERVO_INQUIRE,
+    CMD_SERVO_RESPOND,
     ControllerProtocolError,
     NexBotTcpEndpoint,
     NexBotTcpRobotController,
@@ -33,6 +35,10 @@ from competition_pipeline.nexbot_tcp import (
 #: 假控制器必须照做, 否则测的是一个现实中不存在的、"发了就算成功"的控制器。
 MOTION_STARTED = build_frame(CMD_PROGRAM_STATUS, {"robot": 1, "status": 2})
 MOTION_COMMANDS = (CMD_MOVJ, CMD_MOVL, CMD_GO_HOME, CMD_GO_RESET_POSITION)
+
+#: 适配器在每条运动前查一次 0x2002 伺服状态(``_ensure_servo_enabled``)。
+#: 假控制器答 3=运行, 否则测的是一个"不问使能就发运动"的旧控制器。
+SERVO_RUNNING = build_frame(CMD_SERVO_RESPOND, {"mode": 0, "robot": 1, "status": 3})
 
 
 class FakeController:
@@ -48,6 +54,7 @@ class FakeController:
         self.replies = {}
         for command in MOTION_COMMANDS:
             self.replies[command] = [MOTION_STARTED]
+        self.replies[CMD_SERVO_INQUIRE] = [SERVO_RUNNING]
         self._stop = False
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
