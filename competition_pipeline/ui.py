@@ -3630,6 +3630,12 @@ state_codec:
             jog_provider=lambda: self._get_robot_jog()
         )
         grid.addWidget(self.teleport_panel, 7, 0, 1, 3)
+
+        from competition_pipeline.grasp_demo import GraspDemoPanel
+        self.grasp_demo_panel = GraspDemoPanel(
+            jog_provider=lambda: self._get_robot_jog()
+        )
+        grid.addWidget(self.grasp_demo_panel, 8, 0, 1, 3)
         return box
 
     def _motion_enabled(self):
