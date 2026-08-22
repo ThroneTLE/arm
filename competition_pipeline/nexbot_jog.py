@@ -13,8 +13,20 @@ All poses are read/written in the active user coordinate frame (用户坐标系1
 so Y/X/Z values match the teach pendant's user-coordinate display.
 """
 
+import logging
 import threading
 import time
+
+_TELEPORT_LOG = logging.getLogger("nexbot.teleport")
+_TELEPORT_LOG.setLevel(logging.DEBUG)
+try:
+    import os
+    _handler = logging.FileHandler(os.path.expanduser("/tmp/nexbot_teleport.log"), encoding="utf-8")
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(threadName)s %(levelname)s %(message)s"))
+    if not _TELEPORT_LOG.handlers:
+        _TELEPORT_LOG.addHandler(_handler)
+except Exception:
+    pass
 
 import numpy as np
 
@@ -173,7 +185,10 @@ class NexBotTcpJog:
         def _read(c):
             return c.read_state()
 
+        _TELEPORT_LOG.debug(
+            "move_to_ucs start target=%s vel=%s", xyz_mm, vel_mm_s)
         start_state = self._run(_read)
+        _TELEPORT_LOG.debug("read start pose ok")
         target = transform_from_inexbot_abc(
             np.asarray(xyz_mm, dtype=float) / 1000.0,
             np.asarray(abc_rad, dtype=float),
@@ -195,6 +210,7 @@ class NexBotTcpJog:
         # 在启动前误判完成。改为"等到达目标"：|当前-目标|<容差 连续 2 次
         # 采样（0.25s 间隔）才算到位，上限 20s。
         self._run(_go)
+        _TELEPORT_LOG.debug("motion sent (move_to returned)")
         deadline = time.monotonic() + 20.0
         reached = 0
         final_state = None
@@ -208,13 +224,17 @@ class NexBotTcpJog:
                 break
             time.sleep(0.25)
         if reached < 2:
+            _TELEPORT_LOG.error(
+                "arrival timeout: final=%s target=%s", final_xyz, xyz_mm)
             raise RuntimeError(
                 "未在 20s 内到达目标（当前 {:.2f},{:.2f},{:.2f}，目标 {:.2f},{:.2f},{:.2f}）".format(
                     *final_xyz, *xyz_mm)
             )
+        _TELEPORT_LOG.debug("arrived, reached=%s", reached)
         final_xyz = final_state.base_from_gripper[:3, 3] * 1000.0
         deviation = float(np.linalg.norm(
             np.asarray(xyz_mm, dtype=float) - final_xyz))
+        _TELEPORT_LOG.debug("deviation=%.3f mm", deviation)
         if deviation > tolerance_mm:
             raise RuntimeError(
                 "到达偏差 {:.2f} mm 超出容差 {:.1f} mm（起点 {:.2f},{:.2f},{:.2f}）".format(
