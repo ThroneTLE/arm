@@ -140,6 +140,8 @@ class NexBotControllerTest(unittest.TestCase):
         self.assertEqual(command, CMD_MOVJ)
         self.assertEqual(data["robot"], 1)
         self.assertEqual(data["vel"], 50)
+        self.assertEqual(data["acc"], 10)
+        self.assertEqual(data["dec"], 10)
         self.assertEqual(data["coord"], 0)
         self.assertEqual(data["pos"], [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 0.0])
 
@@ -155,6 +157,8 @@ class NexBotControllerTest(unittest.TestCase):
         command, data = self.server.received[0]
         self.assertEqual(command, CMD_MOVL)
         self.assertEqual(data["vel"], 30)
+        self.assertEqual(data["acc"], 10)
+        self.assertEqual(data["dec"], 10)
         self.assertEqual(data["coord"], 1)
         self.assertEqual(data["pos"], [100.0, 200.0, 300.0, 0.1, -0.2, 0.3, 0.0])
 

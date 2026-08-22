@@ -1,0 +1,363 @@
+{
+   "3DMouse" : {
+      "ABC" : 4,
+      "Baudrate" : 38400,
+      "DataBit" : 8,
+      "Flow" : 0,
+      "Pairity" : 0,
+      "Port" : 0,
+      "StopBit" : 1,
+      "enable" : false,
+      "mode" : 0,
+      "mouseSen" : [ 128, 128, 128, 128 ],
+      "xTagged" : 0,
+      "yTagged" : 0,
+      "zTagged" : 0,
+      "zeroTagged" : 0
+   },
+   "IO" : {
+      "IOType" : "ethercat",
+      "analog" : {
+         "baudRate" : 115200,
+         "port" : 2,
+         "type" : "SUPER_ANAIO"
+      },
+      "pulse" : {
+         "exist" : false,
+         "type" : "HUATAI_PWM"
+      },
+      "serial" : {
+         "baudrate" : 9600,
+         "dataBit" : 8,
+         "pairity" : "none",
+         "select" : 1,
+         "stopBit" : 1,
+         "type" : "8_port"
+      },
+      "simuIONum" : 0
+   },
+   "TEACHTYPE" : 0,
+   "controlCycle" : 1,
+   "controllerID" : "895A43E63B97F38B",
+   "controllerIP" : "192.168.1.13",
+   "cooperativeRobot" : 0,
+   "deadmanMode" : null,
+   "deadmanPortOne" : 14,
+   "deadmanPortTwo" : 0,
+   "hostComputerService" : {
+      "checkCRC" : true,
+      "socketType" : "TCP"
+   },
+   "modbus" : {
+      "RTU" : {
+         "baudrate" : 115200,
+         "port" : 2,
+         "slaveId" : 1
+      },
+      "TCP" : {
+         "IP" : "192.168.1.14",
+         "port" : 502
+      },
+      "checkheart" : true,
+      "enable" : true,
+      "master-slave" : "slave",
+      "scancycle" : 100,
+      "stoprun" : false,
+      "type" : "TCP"
+   },
+   "number" : {
+      "robotSum" : 1
+   },
+   "robot" : [
+      {
+         "axesSync" : {
+            "drivenShaft" : [
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ],
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ],
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ]
+            ],
+            "masterServoMap" : [
+               [ 0, 0 ],
+               [ 0, 0 ],
+               [ 0, 0 ]
+            ],
+            "syncGroupSum" : 0,
+            "syncSum" : 0,
+            "syncType" : [ 0, 0, 0 ]
+         },
+         "drivenShaft" : [
+            {
+               "map" : [ 0, 0 ],
+               "num" : 0
+            },
+            {
+               "map" : [ 0, 0 ],
+               "num" : 0
+            },
+            {
+               "map" : [ 0, 0 ],
+               "num" : 0
+            },
+            {
+               "map" : [ 0, 0 ],
+               "num" : 0
+            },
+            {
+               "map" : [ 0, 0 ],
+               "num" : 0
+            },
+            {
+               "map" : [ 0, 0 ],
+               "num" : 0
+            }
+         ],
+         "masterServoMap" : [ 1, 2, 3, 4, 5, 6 ],
+         "robotType" : "R_GENERAL_6S"
+      },
+      {
+         "axesSync" : {
+            "drivenShaft" : [
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ],
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ],
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ]
+            ],
+            "masterServoMap" : [
+               [ 0, 0 ],
+               [ 0, 0 ],
+               [ 0, 0 ]
+            ],
+            "syncGroupSum" : 0,
+            "syncSum" : 0,
+            "syncType" : [ 0, 0, 0 ]
+         },
+         "masterServoMap" : [ 0, 0, 0, 0, 0, 0 ],
+         "robotType" : "R_GENERAL_6S"
+      },
+      {
+         "axesSync" : {
+            "drivenShaft" : [
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ],
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ],
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ]
+            ],
+            "masterServoMap" : [
+               [ 0, 0 ],
+               [ 0, 0 ],
+               [ 0, 0 ]
+            ],
+            "syncGroupSum" : 0,
+            "syncSum" : 0,
+            "syncType" : [ 0, 0, 0 ]
+         },
+         "masterServoMap" : [ 0, 0, 0, 0, 0, 0 ],
+         "robotType" : "R_GENERAL_6S"
+      },
+      {
+         "axesSync" : {
+            "drivenShaft" : [
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ],
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ],
+               [
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  },
+                  {
+                     "map" : [ 0, 0 ],
+                     "num" : 0
+                  }
+               ]
+            ],
+            "masterServoMap" : [
+               [ 0, 0 ],
+               [ 0, 0 ],
+               [ 0, 0 ]
+            ],
+            "syncGroupSum" : 0,
+            "syncSum" : 0,
+            "syncType" : [ 0, 0, 0 ]
+         }
+      }
+   ],
+   "slave" : {
+      "num" : 7,
+      "type" : [ "RA1E", "RA1E", "RA1E", "RA1E", "RA1E", "RA1E", "IO_MT_MSR1616A" ]
+   },
+   "teachBoxConnectState" : true,
+   "version" : "2.2.0",
+   "z_comment" : {
+      "0_explain" : "这里是注释",
+      "IOType" : {
+         "ethercat" : "ETHERCAT IO",
+         "none" : "无",
+         "serial" : "串口IO"
+      },
+      "analog" : {
+         "type" : {
+            "DAC_ANAIO" : "DAC模拟IO板",
+            "SUPER_ANAIO" : "格控模拟IO板"
+         }
+      },
+      "ethercatIO" : {
+         "type" : {
+            "INEXBOT_IO_R1" : "纳博特IO",
+            "ITEGVA" : "成石16入16出IO",
+            "MECAT1000" : "盟通16入16出IO",
+            "STEP" : "新时达IO"
+         }
+      },
+      "pulse" : {
+         "type" : {
+            "HUATAI_PWM" : "华太IO脉冲输出",
+            "PLC_PWM" : "PLC脉冲输出",
+            "XYL_PWM" : "XYL脉冲输出"
+         }
+      },
+      "robotType" : {
+         "R_FOURAXIS" : "四轴机器人",
+         "R_FOURAXIS_PALLET" : "四轴码垛机器人",
+         "R_GENERAL_1S" : "一轴机器人",
+         "R_GENERAL_5S" : "五轴机器人",
+         "R_GENERAL_6S" : "串联六轴机器人",
+         "R_GENERAL_6S_1" : "六轴异形机器人一",
+         "R_NULL" : "未选择类型"
+      },
+      "serial" : {
+         "baudrate" : "波特率",
+         "dataBit" : "数据位",
+         "pairity" : {
+            "even" : "偶数校验位",
+            "none" : "无",
+            "odd" : "奇数校验位"
+         },
+         "select" : "串口选择",
+         "stopBit" : "停止位",
+         "type" : {
+            "12_port" : "赛伟12路数字IO板",
+            "8_port" : "赛伟8路数字IO板",
+            "SUPER_DIGIN" : "格控数字IO板"
+         }
+      },
+      "servoConnect" : {
+         "FACT_SERVO" : "真实伺服",
+         "NO_SERVO" : "无伺服",
+         "SIMU_SERVO" : "虚拟伺服"
+      },
+      "servoType" : {
+         "ADTECH_SERVO_QXE" : "众为兴伺服",
+         "DELTA_SERVO_ASDA_A2" : "台达伺服",
+         "DYNATRON_SERVO_A8" : "清能德创伺服A8系列",
+         "DYNATRON_SERVO_R" : "清能德创伺服R系列",
+         "DYNATRON_SERVO_RC" : "清能德创伺服RC系列",
+         "ESTUN_SERVO" : "埃斯顿伺服",
+         "MAXSINE_SERVO" : "迈信伺服",
+         "NULL" : "无伺服",
+         "SERVOTRONIX_SERVO" : "高创伺服",
+         "STEP_SERVO_AS260_1" : "新时达伺服一拖一",
+         "STEP_SERVO_AS260_3" : "新时达伺服一拖三",
+         "STEP_SERVO_AS260_4" : "新时达伺服一拖四",
+         "TECO_SERVO_JSDG2" : "东元伺服",
+         "THINKVO_SERVO" : "图科伺服",
+         "THINKVO_SERVO_ONE" : "图科单轴伺服"
+      }
+   }
+}

@@ -1,0 +1,204 @@
+{
+   "commParm" : [
+      {
+         "client" : {
+            "frameHeader" : "SS",
+            "ip" : "192.168.1.20",
+            "numberSystem" : 0,
+            "port" : 8088,
+            "separator" : ",",
+            "terminator" : "EE"
+         },
+         "customized" : {
+            "customer" : "General"
+         },
+         "server" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.200",
+            "numberSystem" : 0,
+            "port" : 9001,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "type" : 0
+      },
+      {
+         "client" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.111",
+            "numberSystem" : 0,
+            "port" : 9000,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "customized" : {
+            "customer" : "General"
+         },
+         "server" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.13",
+            "numberSystem" : 0,
+            "port" : 9001,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "type" : 1
+      },
+      {
+         "client" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.111",
+            "numberSystem" : 0,
+            "port" : 9000,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "customized" : {
+            "customer" : "General"
+         },
+         "server" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.13",
+            "numberSystem" : 0,
+            "port" : 9001,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "type" : 1
+      },
+      {
+         "client" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.111",
+            "numberSystem" : 0,
+            "port" : 9000,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "customized" : {
+            "customer" : "General"
+         },
+         "server" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.13",
+            "numberSystem" : 0,
+            "port" : 9001,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "type" : 1
+      },
+      {
+         "client" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.111",
+            "numberSystem" : 0,
+            "port" : 9000,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "customized" : {
+            "customer" : "General"
+         },
+         "server" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.13",
+            "numberSystem" : 0,
+            "port" : 9001,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "type" : 1
+      },
+      {
+         "client" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.111",
+            "numberSystem" : 0,
+            "port" : 9000,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "customized" : {
+            "customer" : "General"
+         },
+         "server" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.13",
+            "numberSystem" : 0,
+            "port" : 9001,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "type" : 1
+      },
+      {
+         "client" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.111",
+            "numberSystem" : 0,
+            "port" : 9000,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "customized" : {
+            "customer" : "General"
+         },
+         "server" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.13",
+            "numberSystem" : 0,
+            "port" : 9001,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "type" : 1
+      },
+      {
+         "client" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.111",
+            "numberSystem" : 0,
+            "port" : 9000,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "customized" : {
+            "customer" : "General"
+         },
+         "server" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.13",
+            "numberSystem" : 0,
+            "port" : 9001,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "type" : 1
+      },
+      {
+         "client" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.111",
+            "numberSystem" : 0,
+            "port" : 9000,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "customized" : {
+            "customer" : "General"
+         },
+         "server" : {
+            "frameHeader" : "@",
+            "ip" : "192.168.1.13",
+            "numberSystem" : 0,
+            "port" : 9001,
+            "separator" : ",",
+            "terminator" : "!"
+         },
+         "type" : 1
+      }
+   ],
+   "controllerID" : "314ED47B74AE67C5",
+   "version" : "1.0.4"
+}

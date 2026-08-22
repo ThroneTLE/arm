@@ -1,0 +1,140 @@
+{
+   "controllerID" : "3C332F8B66869F9E",
+   "spray" : {
+      "AnalogGroup" : {
+         "1" : {
+            "atom" : 0,
+            "flow" : 0,
+            "note" : "",
+            "num" : 1,
+            "sector" : 0
+         }
+      },
+      "Sequential" : {
+         "1" : {
+            "changeMaterial" : [ 0, 0, 0, 0, 0, 0, 0 ],
+            "num" : 1,
+            "openGun" : [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+         }
+      },
+      "SprayGun" : {
+         "1" : {
+            "airPurge" : {
+               "port" : 0,
+               "value" : 1
+            },
+            "atom" : {
+               "port" : 0,
+               "value" : 1
+            },
+            "clean" : {
+               "port" : 0,
+               "value" : 1
+            },
+            "color" : [
+               {
+                  "note" : "",
+                  "port" : 0,
+                  "value" : 1
+               },
+               {
+                  "note" : "",
+                  "port" : 0,
+                  "value" : 1
+               },
+               {
+                  "note" : "",
+                  "port" : 0,
+                  "value" : 1
+               },
+               {
+                  "note" : "",
+                  "port" : 0,
+                  "value" : 1
+               },
+               {
+                  "note" : "",
+                  "port" : 0,
+                  "value" : 1
+               },
+               {
+                  "note" : "",
+                  "port" : 0,
+                  "value" : 1
+               },
+               {
+                  "note" : "",
+                  "port" : 0,
+                  "value" : 1
+               },
+               {
+                  "note" : "",
+                  "port" : 0,
+                  "value" : 1
+               },
+               {
+                  "note" : "",
+                  "port" : 0,
+                  "value" : 1
+               },
+               {
+                  "note" : "",
+                  "port" : 0,
+                  "value" : 1
+               }
+            ],
+            "flow" : {
+               "port" : 0,
+               "value" : 1
+            },
+            "num" : 1,
+            "openGun" : {
+               "port" : 0,
+               "value" : 1
+            },
+            "sector" : {
+               "port" : 0,
+               "value" : 1
+            },
+            "useColor" : 1
+         }
+      },
+      "Trajectory" : {
+         "1" : {
+            "append" : 0,
+            "closeGunInTransition" : false,
+            "custom" : {
+               "endPos" : [ 0, 0, 0, 0, 0, 0 ],
+               "middlePos" : [
+                  [
+                     [ 0, 0, 0, 0, 0, 0 ],
+                     [ 0, 0, 0, 0, 0, 0 ]
+                  ],
+                  [
+                     [ 0, 0, 0, 0, 0, 0 ],
+                     [ 0, 0, 0, 0, 0, 0 ]
+                  ],
+                  [
+                     [ 0, 0, 0, 0, 0, 0 ],
+                     [ 0, 0, 0, 0, 0, 0 ]
+                  ]
+               ],
+               "segmentSum" : 2,
+               "segmentType" : [ 0 ],
+               "startPos" : [ 0, 0, 0, 0, 0, 0 ]
+            },
+            "kind" : 1,
+            "layerNum" : 1,
+            "num" : 1,
+            "pos" : [
+               [ 0, 0, 0, 0, 0, 0 ],
+               [ 0, 0, 0, 0, 0, 0 ],
+               [ 0, 0, 0, 0, 0, 0 ],
+               [ 0, 0, 0, 0, 0, 0 ]
+            ],
+            "type" : 0
+         }
+      }
+   },
+   "version" : "1.0.2"
+}

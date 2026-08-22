@@ -1,0 +1,86 @@
+{
+   "controllerID" : "44009EA9FEB0C9F2",
+   "polish" : {
+      "robot1" : {
+         "1" : {
+            "autoFeed" : {
+               "cycle" : 0,
+               "value" : 0.0
+            },
+            "craftNum" : 1,
+            "endToolOffset" : {
+               "X" : 0.0,
+               "Y" : 0.0,
+               "Z" : 0.0
+            },
+            "startToolOffset" : {
+               "X" : 0.0,
+               "Y" : 0.0,
+               "Z" : 0.0
+            },
+            "toolWear" : 0.0
+         }
+      },
+      "robot2" : {
+         "1" : {
+            "autoFeed" : {
+               "cycle" : 0,
+               "value" : 0.0
+            },
+            "craftNum" : 1,
+            "endToolOffset" : {
+               "X" : 0.0,
+               "Y" : 0.0,
+               "Z" : 0.0
+            },
+            "startToolOffset" : {
+               "X" : 0.0,
+               "Y" : 0.0,
+               "Z" : 0.0
+            },
+            "toolWear" : 0.0
+         }
+      },
+      "robot3" : {
+         "1" : {
+            "autoFeed" : {
+               "cycle" : 0,
+               "value" : 0.0
+            },
+            "craftNum" : 1,
+            "endToolOffset" : {
+               "X" : 0.0,
+               "Y" : 0.0,
+               "Z" : 0.0
+            },
+            "startToolOffset" : {
+               "X" : 0.0,
+               "Y" : 0.0,
+               "Z" : 0.0
+            },
+            "toolWear" : 0.0
+         }
+      },
+      "robot4" : {
+         "1" : {
+            "autoFeed" : {
+               "cycle" : 0,
+               "value" : 0.0
+            },
+            "craftNum" : 1,
+            "endToolOffset" : {
+               "X" : 0.0,
+               "Y" : 0.0,
+               "Z" : 0.0
+            },
+            "startToolOffset" : {
+               "X" : 0.0,
+               "Y" : 0.0,
+               "Z" : 0.0
+            },
+            "toolWear" : 0.0
+         }
+      }
+   },
+   "version" : "1.0.5"
+}

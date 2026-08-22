@@ -1,0 +1,665 @@
+{
+   "controllerID" : "D47B0757DF793942",
+   "conveyortrack" : [
+      {
+         "compensation" : {
+            "encoderVal" : 0,
+            "time" : 10.0
+         },
+         "conveyor" : {
+            "checkSpeed" : 0,
+            "encoderDirection" : 1,
+            "encoderResolution" : 44.330,
+            "maxEncoderVal" : 2147483647.0,
+            "minEncoderVal" : -2147483648.0,
+            "userCoord" : 1
+         },
+         "detectSrc" : {
+            "DI_capturePos" : 0,
+            "globalVar" : "GA001",
+            "type" : 0,
+            "visionID" : 1
+         },
+         "grabGesture" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "Z" : 0.0
+         },
+         "identification" : {
+            "communication" : 0,
+            "sensorTrg" : 1,
+            "type" : 0
+         },
+         "pos" : {
+            "posToMove" : [
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+            ],
+            "receLatestPos" : 0,
+            "trackRangeXMax" : 0,
+            "trackRangeYMax" : 0,
+            "trackRangeYMin" : 0,
+            "trackRangeZMax" : 0,
+            "trackRangeZMin" : 0,
+            "trackStartXPoint" : 0
+         },
+         "sensorCalibration" : {
+            "IO_encodorCircles" : 0,
+            "IO_encodorValue" : 0,
+            "calib_X" : 0.0,
+            "calib_Y" : 0.0,
+            "calib_encodorCircles" : 0,
+            "calib_encodorValue" : 0
+         },
+         "sensorPos" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "X" : 0.0,
+            "Y" : 0.0,
+            "Z" : 0.0
+         },
+         "track" : {
+            "height" : 1
+         }
+      },
+      {
+         "compensation" : {
+            "encoderVal" : 0,
+            "time" : 10.0
+         },
+         "conveyor" : {
+            "checkSpeed" : 0,
+            "encoderDirection" : 1,
+            "encoderResolution" : 44.330,
+            "maxEncoderVal" : 2147483647.0,
+            "minEncoderVal" : -2147483648.0,
+            "userCoord" : 1
+         },
+         "detectSrc" : {
+            "DI_capturePos" : 0,
+            "globalVar" : "GA001",
+            "type" : 0,
+            "visionID" : 1
+         },
+         "grabGesture" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "Z" : 0.0
+         },
+         "identification" : {
+            "communication" : 0,
+            "sensorTrg" : 1,
+            "type" : 0
+         },
+         "pos" : {
+            "posToMove" : [
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+            ],
+            "receLatestPos" : 0,
+            "trackRangeXMax" : 0,
+            "trackRangeYMax" : 0,
+            "trackRangeYMin" : 0,
+            "trackRangeZMax" : 0,
+            "trackRangeZMin" : 0,
+            "trackStartXPoint" : 0
+         },
+         "sensorCalibration" : {
+            "IO_encodorCircles" : 0,
+            "IO_encodorValue" : 0,
+            "calib_X" : 0.0,
+            "calib_Y" : 0.0,
+            "calib_encodorCircles" : 0,
+            "calib_encodorValue" : 0
+         },
+         "sensorPos" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "X" : 0.0,
+            "Y" : 0.0,
+            "Z" : 0.0
+         },
+         "track" : {
+            "height" : 1
+         }
+      },
+      {
+         "compensation" : {
+            "encoderVal" : 0,
+            "time" : 10.0
+         },
+         "conveyor" : {
+            "checkSpeed" : 0,
+            "encoderDirection" : 1,
+            "encoderResolution" : 44.330,
+            "maxEncoderVal" : 2147483647.0,
+            "minEncoderVal" : -2147483648.0,
+            "userCoord" : 1
+         },
+         "detectSrc" : {
+            "DI_capturePos" : 0,
+            "globalVar" : "GA001",
+            "type" : 0,
+            "visionID" : 1
+         },
+         "grabGesture" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "Z" : 0.0
+         },
+         "identification" : {
+            "communication" : 0,
+            "sensorTrg" : 1,
+            "type" : 0
+         },
+         "pos" : {
+            "posToMove" : [
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+            ],
+            "receLatestPos" : 0,
+            "trackRangeXMax" : 0,
+            "trackRangeYMax" : 0,
+            "trackRangeYMin" : 0,
+            "trackRangeZMax" : 0,
+            "trackRangeZMin" : 0,
+            "trackStartXPoint" : 0
+         },
+         "sensorCalibration" : {
+            "IO_encodorCircles" : 0,
+            "IO_encodorValue" : 0,
+            "calib_X" : 0.0,
+            "calib_Y" : 0.0,
+            "calib_encodorCircles" : 0,
+            "calib_encodorValue" : 0
+         },
+         "sensorPos" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "X" : 0.0,
+            "Y" : 0.0,
+            "Z" : 0.0
+         },
+         "track" : {
+            "height" : 1
+         }
+      },
+      {
+         "compensation" : {
+            "encoderVal" : 0,
+            "time" : 10.0
+         },
+         "conveyor" : {
+            "checkSpeed" : 0,
+            "encoderDirection" : 1,
+            "encoderResolution" : 44.330,
+            "maxEncoderVal" : 2147483647.0,
+            "minEncoderVal" : -2147483648.0,
+            "userCoord" : 1
+         },
+         "detectSrc" : {
+            "DI_capturePos" : 0,
+            "globalVar" : "GA001",
+            "type" : 0,
+            "visionID" : 1
+         },
+         "grabGesture" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "Z" : 0.0
+         },
+         "identification" : {
+            "communication" : 0,
+            "sensorTrg" : 1,
+            "type" : 0
+         },
+         "pos" : {
+            "posToMove" : [
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+            ],
+            "receLatestPos" : 0,
+            "trackRangeXMax" : 0,
+            "trackRangeYMax" : 0,
+            "trackRangeYMin" : 0,
+            "trackRangeZMax" : 0,
+            "trackRangeZMin" : 0,
+            "trackStartXPoint" : 0
+         },
+         "sensorCalibration" : {
+            "IO_encodorCircles" : 0,
+            "IO_encodorValue" : 0,
+            "calib_X" : 0.0,
+            "calib_Y" : 0.0,
+            "calib_encodorCircles" : 0,
+            "calib_encodorValue" : 0
+         },
+         "sensorPos" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "X" : 0.0,
+            "Y" : 0.0,
+            "Z" : 0.0
+         },
+         "track" : {
+            "height" : 1
+         }
+      },
+      {
+         "compensation" : {
+            "encoderVal" : 0,
+            "time" : 10.0
+         },
+         "conveyor" : {
+            "checkSpeed" : 0,
+            "encoderDirection" : 1,
+            "encoderResolution" : 44.330,
+            "maxEncoderVal" : 2147483647.0,
+            "minEncoderVal" : -2147483648.0,
+            "userCoord" : 1
+         },
+         "detectSrc" : {
+            "DI_capturePos" : 0,
+            "globalVar" : "GA001",
+            "type" : 0,
+            "visionID" : 1
+         },
+         "grabGesture" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "Z" : 0.0
+         },
+         "identification" : {
+            "communication" : 0,
+            "sensorTrg" : 1,
+            "type" : 0
+         },
+         "pos" : {
+            "posToMove" : [
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+            ],
+            "receLatestPos" : 0,
+            "trackRangeXMax" : 0,
+            "trackRangeYMax" : 0,
+            "trackRangeYMin" : 0,
+            "trackRangeZMax" : 0,
+            "trackRangeZMin" : 0,
+            "trackStartXPoint" : 0
+         },
+         "sensorCalibration" : {
+            "IO_encodorCircles" : 0,
+            "IO_encodorValue" : 0,
+            "calib_X" : 0.0,
+            "calib_Y" : 0.0,
+            "calib_encodorCircles" : 0,
+            "calib_encodorValue" : 0
+         },
+         "sensorPos" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "X" : 0.0,
+            "Y" : 0.0,
+            "Z" : 0.0
+         },
+         "track" : {
+            "height" : 1
+         }
+      },
+      {
+         "compensation" : {
+            "encoderVal" : 0,
+            "time" : 10.0
+         },
+         "conveyor" : {
+            "checkSpeed" : 0,
+            "encoderDirection" : 1,
+            "encoderResolution" : 44.330,
+            "maxEncoderVal" : 2147483647.0,
+            "minEncoderVal" : -2147483648.0,
+            "userCoord" : 1
+         },
+         "detectSrc" : {
+            "DI_capturePos" : 0,
+            "globalVar" : "GA001",
+            "type" : 0,
+            "visionID" : 1
+         },
+         "grabGesture" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "Z" : 0.0
+         },
+         "identification" : {
+            "communication" : 0,
+            "sensorTrg" : 1,
+            "type" : 0
+         },
+         "pos" : {
+            "posToMove" : [
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+            ],
+            "receLatestPos" : 0,
+            "trackRangeXMax" : 0,
+            "trackRangeYMax" : 0,
+            "trackRangeYMin" : 0,
+            "trackRangeZMax" : 0,
+            "trackRangeZMin" : 0,
+            "trackStartXPoint" : 0
+         },
+         "sensorCalibration" : {
+            "IO_encodorCircles" : 0,
+            "IO_encodorValue" : 0,
+            "calib_X" : 0.0,
+            "calib_Y" : 0.0,
+            "calib_encodorCircles" : 0,
+            "calib_encodorValue" : 0
+         },
+         "sensorPos" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "X" : 0.0,
+            "Y" : 0.0,
+            "Z" : 0.0
+         },
+         "track" : {
+            "height" : 1
+         }
+      },
+      {
+         "compensation" : {
+            "encoderVal" : 0,
+            "time" : 10.0
+         },
+         "conveyor" : {
+            "checkSpeed" : 0,
+            "encoderDirection" : 1,
+            "encoderResolution" : 44.330,
+            "maxEncoderVal" : 2147483647.0,
+            "minEncoderVal" : -2147483648.0,
+            "userCoord" : 1
+         },
+         "detectSrc" : {
+            "DI_capturePos" : 0,
+            "globalVar" : "GA001",
+            "type" : 0,
+            "visionID" : 1
+         },
+         "grabGesture" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "Z" : 0.0
+         },
+         "identification" : {
+            "communication" : 0,
+            "sensorTrg" : 1,
+            "type" : 0
+         },
+         "pos" : {
+            "posToMove" : [
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+            ],
+            "receLatestPos" : 0,
+            "trackRangeXMax" : 0,
+            "trackRangeYMax" : 0,
+            "trackRangeYMin" : 0,
+            "trackRangeZMax" : 0,
+            "trackRangeZMin" : 0,
+            "trackStartXPoint" : 0
+         },
+         "sensorCalibration" : {
+            "IO_encodorCircles" : 0,
+            "IO_encodorValue" : 0,
+            "calib_X" : 0.0,
+            "calib_Y" : 0.0,
+            "calib_encodorCircles" : 0,
+            "calib_encodorValue" : 0
+         },
+         "sensorPos" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "X" : 0.0,
+            "Y" : 0.0,
+            "Z" : 0.0
+         },
+         "track" : {
+            "height" : 1
+         }
+      },
+      {
+         "compensation" : {
+            "encoderVal" : 0,
+            "time" : 10.0
+         },
+         "conveyor" : {
+            "checkSpeed" : 0,
+            "encoderDirection" : 1,
+            "encoderResolution" : 44.330,
+            "maxEncoderVal" : 2147483647.0,
+            "minEncoderVal" : -2147483648.0,
+            "userCoord" : 1
+         },
+         "detectSrc" : {
+            "DI_capturePos" : 0,
+            "globalVar" : "GA001",
+            "type" : 0,
+            "visionID" : 1
+         },
+         "grabGesture" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "Z" : 0.0
+         },
+         "identification" : {
+            "communication" : 0,
+            "sensorTrg" : 1,
+            "type" : 0
+         },
+         "pos" : {
+            "posToMove" : [
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+            ],
+            "receLatestPos" : 0,
+            "trackRangeXMax" : 0,
+            "trackRangeYMax" : 0,
+            "trackRangeYMin" : 0,
+            "trackRangeZMax" : 0,
+            "trackRangeZMin" : 0,
+            "trackStartXPoint" : 0
+         },
+         "sensorCalibration" : {
+            "IO_encodorCircles" : 0,
+            "IO_encodorValue" : 0,
+            "calib_X" : 0.0,
+            "calib_Y" : 0.0,
+            "calib_encodorCircles" : 0,
+            "calib_encodorValue" : 0
+         },
+         "sensorPos" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "X" : 0.0,
+            "Y" : 0.0,
+            "Z" : 0.0
+         },
+         "track" : {
+            "height" : 1
+         }
+      },
+      {
+         "compensation" : {
+            "encoderVal" : 0,
+            "time" : 10.0
+         },
+         "conveyor" : {
+            "checkSpeed" : 0,
+            "encoderDirection" : 1,
+            "encoderResolution" : 44.330,
+            "maxEncoderVal" : 2147483647.0,
+            "minEncoderVal" : -2147483648.0,
+            "userCoord" : 1
+         },
+         "detectSrc" : {
+            "DI_capturePos" : 0,
+            "globalVar" : "GA001",
+            "type" : 0,
+            "visionID" : 1
+         },
+         "grabGesture" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "Z" : 0.0
+         },
+         "identification" : {
+            "communication" : 0,
+            "sensorTrg" : 1,
+            "type" : 0
+         },
+         "pos" : {
+            "posToMove" : [
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ],
+               [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+            ],
+            "receLatestPos" : 0,
+            "trackRangeXMax" : 0,
+            "trackRangeYMax" : 0,
+            "trackRangeYMin" : 0,
+            "trackRangeZMax" : 0,
+            "trackRangeZMin" : 0,
+            "trackStartXPoint" : 0
+         },
+         "sensorCalibration" : {
+            "IO_encodorCircles" : 0,
+            "IO_encodorValue" : 0,
+            "calib_X" : 0.0,
+            "calib_Y" : 0.0,
+            "calib_encodorCircles" : 0,
+            "calib_encodorValue" : 0
+         },
+         "sensorPos" : {
+            "A" : 0.0,
+            "B" : 0.0,
+            "C" : 0.0,
+            "X" : 0.0,
+            "Y" : 0.0,
+            "Z" : 0.0
+         },
+         "track" : {
+            "height" : 1
+         }
+      }
+   ],
+   "userCoord" : [
+      [
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+      ],
+      [
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+      ],
+      [
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+      ],
+      [
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+      ],
+      [
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+      ],
+      [
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+      ],
+      [
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+      ],
+      [
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+      ],
+      [
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ],
+         [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+      ]
+   ],
+   "version" : "1.0.6"
+}

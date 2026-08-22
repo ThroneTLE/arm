@@ -55,6 +55,9 @@ CMD_HEARTBEAT = 0x7266
 CMD_HEARTBEAT_REPLY = 0x7267
 CMD_MOVJ = 0x4501
 CMD_MOVL = 0x4502
+CMD_ENABLE = 0x2311
+CMD_SERVO_INQUIRE = 0x2002
+CMD_SERVO_RESPOND = 0x2003
 CMD_EMERGENCY_STOP = 0x2314
 CMD_QUERY = 0x9512
 CMD_QUERY_REPLY = 0x9513
@@ -365,9 +368,17 @@ class NexBotTcpRobotController(RobotController):
         position = [float(value) for value in point.axes]
         if self.endpoint.external_axes:
             position = position + [0.0] * self.endpoint.external_axes
+        # IMPORTANT (field-verified 2026-08-22 on MOKA MR07S-930 / C1102,
+        # firmware 21.05.23): the motion parser reads
+        #   robot -> vel -> acc -> dec -> coord -> pos[0..6]
+        # The open.inexbot 22.07 doc omits ``acc``/``dec``; without them the
+        # controller replies 指令[0x4501/0x4502]参数错误.  With them, MOVJ/MOVL
+        # execute (0x3D03 status 2 -> 0), verified via +5mm/-3mm UCS moves.
         payload = {
             "robot": self.endpoint.robot,
             "vel": velocity,
+            "acc": 10,
+            "dec": 10,
             "coord": int(point.coordinate_system),
             "pos": position,
         }
@@ -522,6 +533,39 @@ class NexBotTcpRobotController(RobotController):
 
     # -- teach-pendant style helpers --------------------------------------
 
+    def servo_status(self) -> int:
+        """伺服状态 (0x2002): 0 停止 / 1 就绪 / 2 错误 / 3 运行。
+
+        Field-verified on C1102/21.05.23.  ``0x2301 deadman`` does NOT enable
+        on this firmware; ``enable_servo`` (0x2311) is the working channel.
+        """
+        self.motion.send_frame(CMD_SERVO_INQUIRE, {"robot": self.endpoint.robot})
+        deadline = time.monotonic() + max(2.0, self.endpoint.io_timeout_s * 4.0)
+        while time.monotonic() < deadline:
+            command, data = self.motion.read_frame()
+            if command == CMD_SERVO_RESPOND:
+                return int(data.get("status", 0))
+            if command in CMD_ERRORS or command in CMD_WARNINGS:
+                raise ControllerProtocolError(
+                    "controller frame 0x{:04X}: {}".format(
+                        command,
+                        data.get("data") or json.dumps(data, ensure_ascii=False),
+                    )
+                )
+        raise ControllerTimeout("servo status query timed out")
+
+    def enable_servo(self) -> int:
+        """上位机使能 (0x2311) 并返回伺服状态；状态 != 3 抛异常。"""
+        self.motion.send_frame(CMD_ENABLE, {"robot": self.endpoint.robot})
+        time.sleep(0.8)
+        status = self.servo_status()
+        if status != 3:
+            raise ControllerProtocolError(
+                "servo enable refused (status={}); ensure the teach pendant "
+                "is in 伺服运行/示教模式 and 无报警".format(status)
+            )
+        return status
+
     def go_home(self):
         """回零 (0x3002 GO_HOME, robot 0=机器人在回零/1=外部轴)."""
         self.motion.send_frame(0x3002, {"robot": self.endpoint.robot, "type": 0})
@@ -601,6 +645,9 @@ __all__ = [
     "CMD_EMERGENCY_STOP",
     "CMD_MOVJ",
     "CMD_MOVL",
+    "CMD_ENABLE",
+    "CMD_SERVO_INQUIRE",
+    "CMD_SERVO_RESPOND",
     "CMD_QUERY",
     "CMD_QUERY_REPLY",
     "CMD_DOUT_SET",

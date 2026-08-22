@@ -59,16 +59,23 @@ class NexBotTcpJog:
         """在用户坐标系1 中沿 axis(0=X,1=Y,2=Z) 平移 step_mm（可负）。
 
         绝对运动：当前位姿 + 轴偏移 -> MOVL(coord=用户坐标)。小步长专为
-        坐标核对设计，速度按 JOG_SPEED_SCALE。
+        坐标核对设计，速度按 JOG_SPEED_SCALE。自动确保伺服上电（0x2311）。
         """
-        state = self.controller.read_state()
+        controller = self.controller
+        try:
+            if controller.servo_status() != 3:
+                controller.enable_servo()
+        except Exception:
+            # 上电失败不阻塞读数类动作；运动指令自会报错提示
+            pass
+        state = controller.read_state()
         matrix = as_transform(state.base_from_gripper, "world_from_gripper")
         delta = np.zeros(3, dtype=np.float64)
         delta[int(axis)] = float(step_mm) / 1000.0
         target = np.eye(4, dtype=np.float64)
         target[:3, :3] = matrix[:3, :3]
         target[:3, 3] = matrix[:3, 3] + delta
-        self.controller.move_to(target, speed_scale=JOG_SPEED_SCALE)
+        controller.move_to(target, speed_scale=JOG_SPEED_SCALE)
 
     def gripper(self, open_: bool):
         """开/关夹爪：开=(15,16)=(0,1) 关=(15,16)=(1,0)。"""

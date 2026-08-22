@@ -1,0 +1,253 @@
+{
+   "IO" : {
+      "AI_factcurrent" : 0,
+      "AI_factvoltage" : 0,
+      "AO_setcurrent" : 0,
+      "AO_setvoltage" : 0,
+      "DI_arcstable" : 0,
+      "DI_seeksuccess" : 0,
+      "DO_arcon" : 0,
+      "DO_feedwire" : 0,
+      "DO_gastest" : 0,
+      "DO_returnwire" : 0,
+      "DO_searchmode" : 0
+   },
+   "analogMatch" : {
+      "current" : {
+         "fact_A" : 0.0,
+         "fact_B" : 0.0,
+         "set_A" : 0.0,
+         "set_B" : 0.0
+      },
+      "voltage" : {
+         "fact_A" : 0.0,
+         "fact_B" : 0.0,
+         "set_A" : 0.0,
+         "set_B" : 0.0
+      }
+   },
+   "antiCollision" : {
+      "enable" : false,
+      "inputPort" : 0,
+      "inputValue" : 0,
+      "outputPort" : 0,
+      "outputValue" : 0,
+      "shieldTime" : 0.0,
+      "stopTime" : 60.0
+   },
+   "controllerID" : "6513ECC1BC1DC500",
+   "digitalCustomFun" : {
+      "AOTAI" : {
+         "EtherCAT" : [
+            null,
+            {
+               "1_start_byte" : 0,
+               "2_start_bit" : 2,
+               "3_end_byte" : 0,
+               "4_end_bit" : 4,
+               "5_read_write_type" : 1,
+               "6_init_poll_type" : 1,
+               "7_data_byte_dir" : 0,
+               "8_default_value" : 0,
+               "9_save_change" : 0,
+               "A_enable_init" : 1,
+               "B_note" : "焊机工作模式"
+            }
+         ],
+         "ModBus RTU" : [
+            null,
+            {
+               "1_start_byte" : 0,
+               "2_start_bit" : 2,
+               "3_end_byte" : 0,
+               "4_end_bit" : 4,
+               "5_read_write_type" : 1,
+               "6_init_poll_type" : 1,
+               "7_data_byte_dir" : 0,
+               "8_default_value" : 0,
+               "9_save_change" : 0,
+               "A_enable_init" : 1,
+               "B_note" : "焊机工作模式"
+            }
+         ]
+      }
+   },
+   "equipment" : {
+      "anaToZeroSwitch" : false,
+      "arcInterCheck" : false,
+      "arcInterRestart" : false,
+      "breakReSwitch" : false,
+      "withdrawSwitch" : false
+   },
+   "machineChoose" : {
+      "commMode" : "CAN",
+      "controlMode" : 0,
+      "monufactor" : "MAGMEET",
+      "weldingMode" : 0
+   },
+   "restart" : {
+      "distance" : 0.0,
+      "velocity" : 0.0
+   },
+   "spotWeld" : {
+      "spotWeldCurrent" : 0,
+      "spotWeldMaxTime" : 0,
+      "spotWeldVoltage" : 0
+   },
+   "time" : {
+      "arcoffDetect" : 0.0,
+      "arconConfirm" : 0.0,
+      "arconDetect" : 0.0,
+      "breakRewire" : 0.0,
+      "delAspirated" : 0.0,
+      "preAspirated" : 0.0,
+      "withdrawwire" : 0.0
+   },
+   "version" : "1.1.1",
+   "weldParm" : {
+      "1" : {
+         "annotation" : "",
+         "antiStickCur" : 0.0,
+         "antiStickTime" : 0.0,
+         "antiStickVol" : 0.0,
+         "arcOffCur" : 0.0,
+         "arcOffTime" : 0.0,
+         "arcOffVol" : 0.0,
+         "arcOnCur" : 0.0,
+         "arcOnTime" : 0.0,
+         "arcOnVol" : 0.0,
+         "craftNum" : 1,
+         "flyArcSwitch" : false,
+         "weldingCur" : 0.0,
+         "weldingVol" : 0.0
+      },
+      "2" : {
+         "annotation" : "",
+         "antiStickCur" : 0,
+         "antiStickTime" : 0,
+         "antiStickVol" : 0,
+         "arcOffCur" : 0,
+         "arcOffTime" : 0,
+         "arcOffVol" : 0,
+         "arcOnCur" : 0,
+         "arcOnTime" : 0,
+         "arcOnVol" : 0,
+         "craftNum" : 2,
+         "flyArcSwitch" : false,
+         "weldingCur" : 0,
+         "weldingVol" : 0
+      },
+      "3" : {
+         "annotation" : "",
+         "antiStickCur" : 0,
+         "antiStickTime" : 0,
+         "antiStickVol" : 0,
+         "arcOffCur" : 0,
+         "arcOffTime" : 0,
+         "arcOffVol" : 0,
+         "arcOnCur" : 0,
+         "arcOnTime" : 0,
+         "arcOnVol" : 0,
+         "craftNum" : 3,
+         "flyArcSwitch" : false,
+         "weldingCur" : 0,
+         "weldingVol" : 0
+      },
+      "4" : {
+         "annotation" : "",
+         "antiStickCur" : 0,
+         "antiStickTime" : 0,
+         "antiStickVol" : 0,
+         "arcOffCur" : 0,
+         "arcOffTime" : 0,
+         "arcOffVol" : 0,
+         "arcOnCur" : 0,
+         "arcOnTime" : 0,
+         "arcOnVol" : 0,
+         "craftNum" : 4,
+         "flyArcSwitch" : false,
+         "weldingCur" : 0,
+         "weldingVol" : 0
+      },
+      "5" : {
+         "annotation" : "",
+         "antiStickCur" : 0,
+         "antiStickTime" : 0,
+         "antiStickVol" : 0,
+         "arcOffCur" : 0,
+         "arcOffTime" : 0,
+         "arcOffVol" : 0,
+         "arcOnCur" : 0,
+         "arcOnTime" : 0,
+         "arcOnVol" : 0,
+         "craftNum" : 5,
+         "flyArcSwitch" : false,
+         "weldingCur" : 0,
+         "weldingVol" : 0
+      },
+      "6" : {
+         "annotation" : "",
+         "antiStickCur" : 0,
+         "antiStickTime" : 0,
+         "antiStickVol" : 0,
+         "arcOffCur" : 0,
+         "arcOffTime" : 0,
+         "arcOffVol" : 0,
+         "arcOnCur" : 0,
+         "arcOnTime" : 0,
+         "arcOnVol" : 0,
+         "craftNum" : 6,
+         "flyArcSwitch" : false,
+         "weldingCur" : 0,
+         "weldingVol" : 0
+      },
+      "7" : {
+         "annotation" : "",
+         "antiStickCur" : 0,
+         "antiStickTime" : 0,
+         "antiStickVol" : 0,
+         "arcOffCur" : 0,
+         "arcOffTime" : 0,
+         "arcOffVol" : 0,
+         "arcOnCur" : 0,
+         "arcOnTime" : 0,
+         "arcOnVol" : 0,
+         "craftNum" : 7,
+         "flyArcSwitch" : false,
+         "weldingCur" : 0,
+         "weldingVol" : 0
+      },
+      "8" : {
+         "annotation" : "",
+         "antiStickCur" : 0,
+         "antiStickTime" : 0,
+         "antiStickVol" : 0,
+         "arcOffCur" : 0,
+         "arcOffTime" : 0,
+         "arcOffVol" : 0,
+         "arcOnCur" : 0,
+         "arcOnTime" : 0,
+         "arcOnVol" : 0,
+         "craftNum" : 8,
+         "flyArcSwitch" : false,
+         "weldingCur" : 0,
+         "weldingVol" : 0
+      },
+      "9" : {
+         "annotation" : "",
+         "antiStickCur" : 0,
+         "antiStickTime" : 0,
+         "antiStickVol" : 0,
+         "arcOffCur" : 0,
+         "arcOffTime" : 0,
+         "arcOffVol" : 0,
+         "arcOnCur" : 0,
+         "arcOnTime" : 0,
+         "arcOnVol" : 0,
+         "craftNum" : 9,
+         "flyArcSwitch" : false,
+         "weldingCur" : 0,
+         "weldingVol" : 0
+      }
+   }
+}

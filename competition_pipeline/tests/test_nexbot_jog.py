@@ -27,6 +27,7 @@ from competition_pipeline.nexbot_tcp import (
     CMD_DOUT_QUERY,
     CMD_DOUT_QUERY_REPLY,
     CMD_MOVL,
+    CMD_SERVO_RESPOND,
 )
 
 
@@ -131,6 +132,10 @@ class NexBotJogTest(unittest.TestCase):
                 },
             )
         ]
+        self.server.replies[0x2002] = [
+            build_frame(CMD_SERVO_RESPOND,
+                        {"mode": 0, "robot": 1, "status": 3}),
+        ]
         self.server.replies[0x3602] = [
             build_frame(
                 CMD_DOUT_QUERY_REPLY,
@@ -180,6 +185,8 @@ class NexBotJogTest(unittest.TestCase):
         self.assertEqual(len(movl), 1)
         payload = movl[0][1]
         self.assertEqual(payload["coord"], 3)
+        self.assertEqual(payload["acc"], 10)
+        self.assertEqual(payload["dec"], 10)
         self.assertEqual(payload["vel"], 50)
         self.assertAlmostEqual(payload["pos"][0], 720.0, places=4)
         self.assertAlmostEqual(payload["pos"][1], 100.0, places=4)

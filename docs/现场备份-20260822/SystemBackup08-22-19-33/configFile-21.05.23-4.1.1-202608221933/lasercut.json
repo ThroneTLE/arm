@@ -1,0 +1,110 @@
+{
+   "IO" : {
+      "AO_laserPower" : 0,
+      "AO_pressure" : 0,
+      "DI_backMiddleArrival" : 0,
+      "DI_followArrival" : 0,
+      "DI_laserFault" : 0,
+      "DI_liftUpArrival" : 0,
+      "DI_perforateArrival" : 0,
+      "DI_pressureFault" : 0,
+      "DI_regulatorFault" : 0,
+      "DI_watercoolerFault" : 0,
+      "DO_aspiration" : 0,
+      "DO_backMiddle" : 0,
+      "DO_follow" : 0,
+      "DO_liftUp" : 0,
+      "DO_lightGate" : 0
+   },
+   "analogMatch" : {
+      "laserPower" : {
+         "x1" : 0,
+         "x2" : 0,
+         "y1" : 0,
+         "y2" : 0
+      },
+      "pressure" : {
+         "x1" : 0,
+         "x2" : 0,
+         "y1" : 0,
+         "y2" : 0
+      }
+   },
+   "controllerID" : "314ED47B74AE67C5",
+   "cut" : [
+      {
+         "dutyRatio" : 0,
+         "freq" : 0,
+         "power" : 0,
+         "pressure" : 0
+      },
+      {
+         "dutyRatio" : 0,
+         "freq" : 0,
+         "power" : 0,
+         "pressure" : 0
+      },
+      {
+         "dutyRatio" : 0,
+         "freq" : 0,
+         "power" : 0,
+         "pressure" : 0
+      },
+      {
+         "dutyRatio" : 0,
+         "freq" : 0,
+         "power" : 0,
+         "pressure" : 0
+      },
+      {
+         "dutyRatio" : 0,
+         "freq" : 0,
+         "power" : 0,
+         "pressure" : 0
+      },
+      {
+         "dutyRatio" : 0,
+         "freq" : 0,
+         "power" : 0,
+         "pressure" : 0
+      },
+      {
+         "dutyRatio" : 0,
+         "freq" : 0,
+         "power" : 0,
+         "pressure" : 0
+      },
+      {
+         "dutyRatio" : 0,
+         "freq" : 0,
+         "power" : 0,
+         "pressure" : 0
+      },
+      {
+         "dutyRatio" : 0,
+         "freq" : 0,
+         "power" : 0,
+         "pressure" : 0
+      }
+   ],
+   "equipment" : {
+      "RetreatDistance" : 0,
+      "arrivalOutLightMode" : 0,
+      "delAspiratedTime" : 0,
+      "preAspiratedTime" : 0,
+      "waitFollowTime" : 1.0,
+      "waitLiftUpTime" : 1.0
+   },
+   "perforate" : {
+      "dutyRatio" : 0,
+      "freq" : 0,
+      "power" : 0,
+      "pressure" : 0,
+      "time" : 0
+   },
+   "shot" : {
+      "shotPower" : 0,
+      "shotTime" : 0.10
+   },
+   "version" : "1.0.0"
+}
