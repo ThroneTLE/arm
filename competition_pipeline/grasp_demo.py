@@ -74,25 +74,43 @@ class GraspDemoWorker(QThread):
 
 
 def _pose_spins(group, prefix):
-    """一行 XYZ(mm) + 一行 ABC(°) 输入。返回 dict 与每行控件。"""
+    """XYZ(mm) 与 ABC(°) 各占一行输入。返回 dict。"""
     out = {}
-    for axis, unit, rng in [
+    for i, (axis, unit, rng) in enumerate([
         ("X", " mm", (-2000.0, 2000.0)),
         ("Y", " mm", (-2000.0, 2000.0)),
         ("Z", " mm", (-2000.0, 2000.0)),
         ("A", " °", (-360.0, 360.0)),
         ("B", " °", (-180.0, 180.0)),
         ("C", " °", (-360.0, 360.0)),
-    ]:
+    ]):
         spin = QDoubleSpinBox()
         spin.setDecimals(3)
         spin.setRange(*rng)
         spin.setSuffix(unit)
         spin.setValue(0.0)
-        group.addWidget(QLabel(prefix + axis), 0, 0)
-        group.addWidget(spin, 0, 1)
+        group.addWidget(QLabel(prefix + axis), i, 0)
+        group.addWidget(spin, i, 1)
         out[axis] = spin
     return out
+
+
+class _ReadbackThread(QThread):
+    """回读当前位姿（QThread：回调自动回到 Qt 主线程，绝不非主线程操作控件）。"""
+
+    done = pyqtSignal(object)
+
+    def __init__(self, jog_provider, parent=None):
+        super().__init__(parent)
+        self.jog_provider = jog_provider
+
+    def run(self):
+        try:
+            jog = self.jog_provider()
+            xyz, abc_deg = jog.current_pose()
+            self.done.emit(("OK", xyz, abc_deg))
+        except Exception as error:
+            self.done.emit(("ERR", str(error)))
 
 
 class GraspDemoPanel(QGroupBox):
@@ -112,7 +130,7 @@ class GraspDemoPanel(QGroupBox):
         for i, spin in enumerate(_pose_spins(g_layout, "").values()):
             self.g_spins[list("XYZABC")[i]] = spin
         self.g_set = QPushButton("设为当前抓取位")
-        self.g_set.clicked.connect(lambda: self._read_into(self.g_spins))
+        self.g_set.clicked.connect(lambda: self._read_into(self.g_spins, "抓取位"))
         g_layout.addWidget(self.g_set, 1, 0, 1, 2)
         grid.addWidget(g_box, 0, 0)
 
@@ -123,7 +141,7 @@ class GraspDemoPanel(QGroupBox):
         for i, spin in enumerate(_pose_spins(p_layout, "").values()):
             self.p_spins[list("XYZABC")[i]] = spin
         self.p_set = QPushButton("设为当前放置位")
-        self.p_set.clicked.connect(lambda: self._read_into(self.p_spins))
+        self.p_set.clicked.connect(lambda: self._read_into(self.p_spins, "放置位"))
         p_layout.addWidget(self.p_set, 1, 0, 1, 2)
         grid.addWidget(p_box, 1, 0)
 
@@ -160,22 +178,26 @@ class GraspDemoPanel(QGroupBox):
         abc = np.radians([spins[k].value() for k in ("A", "B", "C")])
         return list(xyz), list(np.asarray(abc, dtype=float))
 
-    def _read_into(self, spins):
-        def _go():
-            try:
-                jog = self.jog_provider()
-                xyz, abc_deg = jog.current_pose()
-                for k, v in zip(("X", "Y", "Z"), xyz):
-                    spins[k].setValue(float(v))
-                for k, v in zip(("A", "B", "C"), abc_deg):
-                    spins[k].setValue(float(v))
-                self.status.setText(
-                    "✅ 已填入当前位姿 X={:.2f} Y={:.2f} Z={:.2f} mm".format(*xyz)
-                )
-            except Exception as error:
-                self.status.setText("回读失败：{}".format(error))
+    def _read_into(self, spins, label):
+        self.status.setText("⏳ 回读当前位姿…")
 
-        threading.Thread(target=_go, daemon=True).start()
+        def _done(payload):
+            if payload[0] == "ERR":
+                self.status.setText("回读失败：{}".format(payload[1]))
+                return
+            _ok, xyz, abc_deg = payload
+            for k, v in zip(("X", "Y", "Z"), xyz):
+                spins[k].setValue(float(v))          # 主线程回调，安全
+            for k, v in zip(("A", "B", "C"), abc_deg):
+                spins[k].setValue(float(v))
+            self.status.setText(
+                "✅ {}已填入当前位姿 X={:.2f} Y={:.2f} Z={:.2f} mm".format(
+                    label, *xyz)
+            )
+
+        worker = _ReadbackThread(self.jog_provider)
+        worker.done.connect(_done)
+        self._keep(worker)
 
     def _keep(self, worker):
         self._workers.append(worker)
@@ -212,18 +234,29 @@ class GraspDemoPanel(QGroupBox):
     def _on_estop(self):
         self.status.setText("🚨 急停发送中…")
 
-        def _go():
-            try:
-                self.jog_provider().emergency_stop()
-            except Exception as error:
-                self.status.setText("急停失败：{}".format(error))
-                return
-            for worker in self._workers:
-                if isinstance(worker, GraspDemoWorker):
-                    worker.abort.set()
-            self.status.setText("🚨 急停已发送并中止序列（请现场确认机器人已停）")
+        class _EstopThread(QThread):
+            done = pyqtSignal(object)
 
-        threading.Thread(target=_go, daemon=True).start()
+            def run(self):
+                try:
+                    self.jog_provider().emergency_stop()
+                    for worker in self._workers:
+                        if isinstance(worker, GraspDemoWorker):
+                            worker.abort.set()
+                    self.done.emit(("OK",))
+                except Exception as error:
+                    self.done.emit(("ERR", str(error)))
+
+        worker = _EstopThread(self.jog_provider)
+
+        def _done(payload):
+            if payload[0] == "ERR":
+                self.status.setText("急停失败：{}".format(payload[1]))
+            else:
+                self.status.setText("🚨 急停已发送并中止序列（请现场确认机器人已停）")
+
+        worker.done.connect(_done)
+        self._keep(worker)
 
 
 __all__ = ["GraspDemoPanel", "GraspDemoWorker"]
