@@ -83,8 +83,12 @@ def check(config_path, competition_config):
         print("  ✓ {}".format(weights))
         names = _weight_class_names(weights)
         if names is None:
-            notes.append("未能读出权重类别名，跳过映射校验")
-            print("  ⚠️ 未能读出类别名（torch 不可用或格式不符），跳过映射校验")
+            problems.append(
+                "未能读出权重类别名 —— 映射校验被跳过了。这道检查专防"
+                "『类别改名后静默落到 default_object』(merged_best.pt 就改过名)。"
+                "请确认用的是 foundationpose 环境(torch 可用)。"
+            )
+            print("  ❌ 未能读出类别名(torch 不可用或格式不符) —— 映射无法校验")
         else:
             print("  类别: {}".format(names))
             for index, name in sorted(names.items()):
@@ -121,8 +125,14 @@ def check(config_path, competition_config):
         import numpy as np
         import trimesh
     except ImportError:
-        notes.append("trimesh/numpy 不可用，跳过尺寸检查")
-        print("  ⚠️ trimesh 不可用，跳过")
+        problems.append(
+            "缺少 trimesh/numpy —— 网格尺寸与缩放检查被跳过了。"
+            "**跳过的检查会给假信心**，而缩放错会直接算错抓取高度。"
+            "请改用 foundationpose 环境: "
+            "PYTHONPATH=. /home/throne/miniconda3/envs/foundationpose/bin/python "
+            "-m competition_pipeline.scripts.check_vision_assets"
+        )
+        print("  ❌ trimesh 不可用 —— 尺寸检查无法进行（见下方问题列表）")
     else:
         for object_key in sorted(set(mapping.values())):
             mesh_path = models.get(object_key, "")
@@ -181,7 +191,7 @@ def check(config_path, competition_config):
         import numpy as np
         import trimesh
     except ImportError:
-        print("  ⚠️ trimesh 不可用，跳过")
+        print("  ❌ trimesh 不可用 —— 缩放核对无法进行")
     else:
         for object_key in used_keys:
             expected = measured.get(object_key)

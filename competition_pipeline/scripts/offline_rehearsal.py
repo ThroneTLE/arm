@@ -18,25 +18,25 @@
 - 夹爪 DOUT 回读校验
 - 放置槽位推进与"已放置区域"排除
 
-用法::
+用法（**用配套的启动脚本**，它会切到 foundationpose 环境；系统自带的 python3.8
+没有 trimesh 等依赖）::
 
-    # 只演练运动链路（**不需要 GPU / 相机 / 机械臂**，几秒钟）
-    python -m competition_pipeline.scripts.offline_rehearsal
+    # 只演练运动链路（不需要 GPU / 相机 / 机械臂，几秒钟）
+    ./competition_pipeline/scripts/run_offline_rehearsal.sh
 
     # 指定物体与位置
-    python -m competition_pipeline.scripts.offline_rehearsal \\
-        --object sprite --at 120 -80
+    ./competition_pipeline/scripts/run_offline_rehearsal.sh --object cola --at 120 -80
 
-    # 连抓 3 个，看槽位怎么推进
-    python -m competition_pipeline.scripts.offline_rehearsal --rounds 3
+    # 连抓 5 个，看放置槽位怎么推进、用满时怎么报
+    ./competition_pipeline/scripts/run_offline_rehearsal.sh --rounds 5
 
     # 故意注入故障，**提前看清现场会报什么错**
-    python -m competition_pipeline.scripts.offline_rehearsal --fault servo-refuse
-    python -m competition_pipeline.scripts.offline_rehearsal --fault gripper-stuck
-    python -m competition_pipeline.scripts.offline_rehearsal --fault motion-rejected
+    ./competition_pipeline/scripts/run_offline_rehearsal.sh --fault servo-refuse
+    ./competition_pipeline/scripts/run_offline_rehearsal.sh --fault gripper-stuck
+    ./competition_pipeline/scripts/run_offline_rehearsal.sh --fault motion-rejected
 
     # 附带跑一遍视觉（需要 GPU + FoundationPose，用仓库自带的 static_frame 样本）
-    python -m competition_pipeline.scripts.offline_rehearsal --with-vision
+    ./competition_pipeline/scripts/run_offline_rehearsal.sh --with-vision
 """
 
 import argparse
@@ -172,9 +172,28 @@ def _upright_pose(bounds, xy_mm):
     return _pose(translation_mm, rotation)
 
 
+def _require(module_name):
+    """导入依赖；缺了就给出能直接照做的提示，而不是甩一个 traceback。"""
+    import importlib
+
+    try:
+        return importlib.import_module(module_name)
+    except ImportError:
+        raise SystemExit(
+            "缺少依赖 {!r}。\n"
+            "系统自带的 python3.8 没装这些依赖，请用项目的 foundationpose 环境：\n\n"
+            "    ./competition_pipeline/scripts/run_offline_rehearsal.sh\n\n"
+            "（或者手动指定解释器：\n"
+            "    PYTHONPATH=. /home/throne/miniconda3/envs/foundationpose/bin/python \\\n"
+            "        -m competition_pipeline.scripts.offline_rehearsal ）".format(
+                module_name
+            )
+        )
+
+
 def _object_bounds(visual_config, object_key):
     """从视觉配置读该物体的米制包围盒（已应用缩放）。"""
-    import trimesh
+    trimesh = _require("trimesh")
 
     raw = yaml.safe_load(Path(visual_config).read_text(encoding="utf-8")) or {}
     models = raw.get("object_models", {}) or {}
