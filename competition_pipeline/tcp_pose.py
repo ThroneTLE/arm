@@ -56,10 +56,12 @@ class NexBotTcpPoseSource:
     single-client 7000/6001 ports; the adapter transports are lock-protected.
     """
 
-    def __init__(self, endpoint: NexBotTcpEndpoint, controller: object = None):
+    def __init__(self, endpoint: NexBotTcpEndpoint, jog: object = None):
+        """Share the jog's current controller and transaction lock."""
         self.endpoint = endpoint
-        self._controller = controller
-        self._owns_controller = controller is None
+        self._jog = jog
+        self._controller = None
+        self._owns_controller = jog is None
 
     @property
     def controller(self):
@@ -77,7 +79,27 @@ class NexBotTcpPoseSource:
         numbers match the teach pendant's tool-coordinate display -- this is
         the verification step before every hand-eye sample.
         """
-        controller = self.connect().controller
+        if self._jog is not None:
+            return self._jog._run(
+                lambda controller: self._read_controller(controller)
+            )
+        return self._read_controller(self.connect().controller)
+
+    def try_read(self):
+        """Read without queueing behind motion; return ``None`` while busy."""
+        if self._jog is None:
+            return self.read()
+        if not self._jog._lock.acquire(blocking=False):
+            return None
+        try:
+            return self._jog._run_locked(
+                lambda controller: self._read_controller(controller)
+            )
+        finally:
+            self._jog._lock.release()
+
+    @staticmethod
+    def _read_controller(controller):
         state = controller.read_state()
         xyz_m, abc_rad = inexbot_abc_from_transform(state.base_from_gripper)
         return tuple(xyz_m * 1000.0), tuple(np.degrees(abc_rad))

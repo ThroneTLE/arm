@@ -18,6 +18,7 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from arm_vision_framework.adapters.inexbot_modbus import (
+    ControllerConnectionError,
     ControllerProtocolError,
     ControllerTimeout,
     InexbotPoint,
@@ -215,6 +216,12 @@ class NexBotControllerTest(unittest.TestCase):
         command, data = self.server.received[0]
         self.assertEqual(command, CMD_EMERGENCY_STOP)
         self.assertEqual(data, {"robot": 1})
+
+    def test_closed_controller_cannot_lazily_reconnect(self):
+        controller = self._controller()
+        controller.close()
+        with self.assertRaises(ControllerConnectionError):
+            controller.read_state()
 
     def test_crc_mismatch_raises_protocol_error(self):
         good = build_frame(

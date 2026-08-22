@@ -143,6 +143,22 @@ class PoseSourceTest(unittest.TestCase):
         second_source.close()
         self.assertTrue(np.allclose(first[0], second[0], atol=1e-9))
 
+    def test_shared_poller_skips_instead_of_queueing_behind_motion(self):
+        class BusyJog:
+            def __init__(self):
+                self._lock = threading.Lock()
+
+            def _run_locked(self, action):
+                raise AssertionError("busy poll must not start a state query")
+
+        jog = BusyJog()
+        source = NexBotTcpPoseSource(object(), jog=jog)
+        jog._lock.acquire()
+        try:
+            self.assertIsNone(source.try_read())
+        finally:
+            jog._lock.release()
+
 
 if __name__ == "__main__":
     unittest.main()

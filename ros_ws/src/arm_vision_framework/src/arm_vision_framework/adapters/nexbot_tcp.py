@@ -294,6 +294,14 @@ class NexBotTcpTransport:
         with self._lock:
             if self._socket is not None:
                 try:
+                    # Wake a thread blocked in recv immediately.  close()
+                    # alone may leave the blocking syscall alive until its
+                    # timeout on Linux, which prevents the Qt worker from
+                    # terminating cleanly during UI shutdown.
+                    self._socket.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
                     self._socket.close()
                 except OSError:
                     pass
@@ -344,8 +352,13 @@ class NexBotTcpRobotController(RobotController):
 
     # -- helpers -----------------------------------------------------------
 
+    def _ensure_open(self):
+        if self._closed:
+            raise ControllerConnectionError("NexBot controller is closed")
+
     def _check_errors(self):
         """Surface any pending controller error/warning frame without blocking."""
+        self._ensure_open()
         for _ in range(4):
             try:
                 command, data = self.motion.read_frame(
@@ -366,6 +379,7 @@ class NexBotTcpRobotController(RobotController):
                 )
 
     def _send_motion(self, command: int, point: InexbotPoint, velocity: int):
+        self._ensure_open()
         if not isinstance(point, InexbotPoint):
             raise ValueError("NexBot motion requires InexbotPoint, got {!r}".format(type(point)))
         position = [float(value) for value in point.axes]
@@ -388,6 +402,7 @@ class NexBotTcpRobotController(RobotController):
         self.motion.send_frame(command, payload)
 
     def _request_state(self, query_type: Sequence[str]):
+        self._ensure_open()
         payload = {
             "channel": self.endpoint.channel,
             "robot": self.endpoint.robot,
@@ -452,7 +467,7 @@ class NexBotTcpRobotController(RobotController):
                     quiet_windows += 1
                 else:
                     quiet_windows = 0
-                if quiet_windows >= 2:
+                if quiet_windows >= 4:  # >= ~2s 持续静止（覆盖指令延迟竞态）
                     return
                 last_pose = pose.copy()
                 last_t = now
@@ -553,6 +568,7 @@ class NexBotTcpRobotController(RobotController):
                 self._wait_motion_finish()
 
     def stop(self):
+        self._ensure_open()
         self.motion.send_frame(CMD_EMERGENCY_STOP, {"robot": self.endpoint.robot})
         self._check_errors()
 
@@ -564,6 +580,7 @@ class NexBotTcpRobotController(RobotController):
         Field-verified on C1102/21.05.23.  ``0x2301 deadman`` does NOT enable
         on this firmware; ``enable_servo`` (0x2311) is the working channel.
         """
+        self._ensure_open()
         self.motion.send_frame(CMD_SERVO_INQUIRE, {"robot": self.endpoint.robot})
         deadline = time.monotonic() + max(2.0, self.endpoint.io_timeout_s * 4.0)
         while time.monotonic() < deadline:
@@ -581,6 +598,7 @@ class NexBotTcpRobotController(RobotController):
 
     def enable_servo(self) -> int:
         """上位机使能 (0x2311) 并返回伺服状态；状态 != 3 抛异常。"""
+        self._ensure_open()
         self.motion.send_frame(CMD_ENABLE, {"robot": self.endpoint.robot})
         time.sleep(0.8)
         status = self.servo_status()
@@ -593,6 +611,7 @@ class NexBotTcpRobotController(RobotController):
 
     def go_home(self):
         """回零 (0x3002 GO_HOME, robot 0=机器人在回零/1=外部轴)."""
+        self._ensure_open()
         self.motion.send_frame(0x3002, {"robot": self.endpoint.robot, "type": 0})
         self._check_errors()
         if self.endpoint.wait_for_finish:
@@ -600,6 +619,7 @@ class NexBotTcpRobotController(RobotController):
 
     def go_reset_position(self):
         """回复位点 (0x3007 GO_RESET_POSITION); 现场约定复位点=拍摄点."""
+        self._ensure_open()
         self.motion.send_frame(0x3007, {"robot": self.endpoint.robot})
         self._check_errors()
         if self.endpoint.wait_for_finish:
@@ -607,12 +627,14 @@ class NexBotTcpRobotController(RobotController):
 
     def set_digital_output(self, port: int, status: int):
         """GPIO_DOUT_SET 0x3601: port 从 1 开始; status 0 低/1 高."""
+        self._ensure_open()
         self.motion.send_frame(
             CMD_DOUT_SET, {"port": int(port), "status": 1 if int(status) else 0}
         )
 
     def digital_output_states(self):
         """GPIO_DOUT_INQUIRE 0x3602 -> 0x3603 返回每个 DOUT 的状态数组[0/1]."""
+        self._ensure_open()
         self.motion.send_frame(CMD_DOUT_QUERY, {})
         deadline = time.monotonic() + max(2.0, self.endpoint.io_timeout_s * 4.0)
         while time.monotonic() < deadline:

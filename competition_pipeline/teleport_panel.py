@@ -1,8 +1,8 @@
-"""目标点传送面板（用户坐标系1）—— 等 pipeline UI 合并后一行挂接。
+"""目标点传送面板（用户坐标系1）。
 
-设计为独立模块：不修改 ``ui.py`` 既有逻辑，只导出：
+挂接（复用 UI 的共享持久连接，6001/7000 单客户端端口不新增连接）：
     from competition_pipeline.teleport_panel import TeleportPanel
-    panel = TeleportPanel(endpoint)      # endpoint = pose_endpoint_from_config(...)
+    panel = TeleportPanel(jog_provider=lambda: self._get_robot_jog())
     layout.addWidget(panel)
 
 面板内容：
@@ -26,37 +26,37 @@ from PyQt5.QtWidgets import (
 )
 
 from competition_pipeline.geometry import inexbot_abc_from_transform
-from competition_pipeline.scripts.move_user1 import User1Mover
 
 
 class TeleportWorker(QThread):
-    """一次传送动作（独立线程；不碰 jog 面板的共享连接）。"""
+    """一次传送动作（复用共享持久 jog 连接）。"""
 
     done = pyqtSignal(bool, str)
 
-    def __init__(self, endpoint, xyz_mm, abc_rad, tolerance_mm=1.0, parent=None):
+    def __init__(self, jog_provider, xyz_mm, abc_rad, tolerance_mm=1.0,
+                 vel_mm_s=100.0, parent=None):
         super().__init__(parent)
-        self.endpoint = endpoint
+        self.jog_provider = jog_provider
         self.xyz = list(xyz_mm)
         self.abc = list(abc_rad)
         self.tolerance = float(tolerance_mm)
+        self.vel = float(vel_mm_s)
 
     def run(self):
-        mover = User1Mover(self.endpoint)
         try:
-            (start_xyz, _), (_final, _), deviation = mover.move_to(
-                self.xyz, self.abc, tolerance_mm=self.tolerance
+            jog = self.jog_provider()
+            deviation = jog.move_to_ucs(
+                self.xyz, self.abc, vel_mm_s=self.vel,
+                tolerance_mm=self.tolerance,
             )
             self.done.emit(
                 True,
                 "✅ 传送完成：X={:.2f} Y={:.2f} Z={:.2f} mm → 偏差 {:.3f} mm".format(
-                    *[_final[0], _final[1], _final[2]], deviation
+                    *self.xyz, deviation
                 ),
             )
         except Exception as error:
             self.done.emit(False, "传送失败：{}".format(error))
-        finally:
-            mover.close()
 
 
 class ReadbackWorker(QThread):
@@ -64,27 +64,25 @@ class ReadbackWorker(QThread):
 
     done = pyqtSignal(bool, object, str)
 
-    def __init__(self, endpoint, parent=None):
+    def __init__(self, jog_provider, parent=None):
         super().__init__(parent)
-        self.endpoint = endpoint
+        self.jog_provider = jog_provider
 
     def run(self):
-        mover = User1Mover(self.endpoint)
         try:
-            xyz, abc_rad = mover.current_pose()
-            self.done.emit(True, (xyz, abc_rad), "")
+            jog = self.jog_provider()
+            xyz, abc_deg = jog.current_pose()
+            self.done.emit(True, (xyz, np.radians(abc_deg)), "")
         except Exception as error:
             self.done.emit(False, None, str(error))
-        finally:
-            mover.close()
 
 
 class TeleportPanel(QGroupBox):
     """目标点传送（用户坐标系1）：输入 XYZ(mm) + ABC → 传送 → 到达偏差。"""
 
-    def __init__(self, endpoint, parent=None):
+    def __init__(self, jog_provider, parent=None):
         super().__init__("目标点传送（用户坐标系1）· 输入点直接发到控制器并核对到位", parent)
-        self.endpoint = endpoint
+        self.jog_provider = jog_provider
         self._workers = []          # 强引用防 QThread 被 GC（QThread 崩溃教训）
         self._busy = False
 
@@ -153,7 +151,7 @@ class TeleportPanel(QGroupBox):
         self._busy = True
         self.btn_teleport.setEnabled(False)
         self.status.setText("⏳ 传送到 X={:.2f} Y={:.2f} Z={:.2f} mm …".format(*xyz))
-        worker = TeleportWorker(self.endpoint, xyz, abc)
+        worker = TeleportWorker(self.jog_provider, xyz, abc)
 
         def _done(ok, message):
             self._busy = False
@@ -167,7 +165,7 @@ class TeleportPanel(QGroupBox):
         if self._busy:
             return
         self.status.setText("⏳ 回读当前位姿…")
-        worker = ReadbackWorker(self.endpoint)
+        worker = ReadbackWorker(self.jog_provider)
 
         def _done(ok, payload, error):
             if ok:
@@ -189,18 +187,18 @@ class TeleportPanel(QGroupBox):
         self._keep(worker)
 
     def _on_estop(self):
-        # 急停直发：0x2314（万不得已人人可用；与传送互斥锁无关）
-        from competition_pipeline.scripts.move_user1 import User1Mover
-        mover = User1Mover(self.endpoint)
+        # 急停直发：0x2314（经 jog 的 _estop_lock 通道，不排队于普通动作）
+        self.status.setText("🚨 急停发送中…")
 
         def _go():
             try:
-                mover.emergency_stop()
-            finally:
-                mover.close()
+                self.jog_provider().emergency_stop()
+            except Exception as error:
+                self.status.setText("急停失败：{}".format(error))
+                return
+            self.status.setText("🚨 急停已发送（请到现场确认机器人已停）")
 
         threading.Thread(target=_go, daemon=True).start()
-        self.status.setText("🚨 急停已发送")
 
 
 __all__ = ["TeleportPanel", "TeleportWorker", "ReadbackWorker"]

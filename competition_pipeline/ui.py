@@ -325,18 +325,14 @@ class NexBotPoseWorker(QThread):
 
     def run(self):
         try:
-            shared_controller = None
-            if self.jog is not None:
-                try:
-                    shared_controller = self.jog.controller
-                except Exception:
-                    shared_controller = None
-            self.source = NexBotTcpPoseSource(
-                self.endpoint, controller=shared_controller
-            )
+            self.source = NexBotTcpPoseSource(self.endpoint, jog=self.jog)
             while not self.stopping:
                 try:
-                    xyz_mm, rpy_deg = self.source.read()
+                    pose = self.source.try_read()
+                    if pose is None:
+                        self.msleep(int(self.interval_s * 1000.0))
+                        continue
+                    xyz_mm, rpy_deg = pose
                     if self.stopping:
                         break
                     self.pose_ready.emit(True, (tuple(xyz_mm), tuple(rpy_deg)))
@@ -3627,6 +3623,13 @@ state_codec:
 
         self.robot_ctrl_status = self._strong("就绪（勾选上方后启用步进）")
         grid.addWidget(self.robot_ctrl_status, 6, 0, 1, 3)
+
+        # 目标点传送面板（复用共享持久 jog 连接；用户坐标系1）
+        from competition_pipeline.teleport_panel import TeleportPanel
+        self.teleport_panel = TeleportPanel(
+            jog_provider=lambda: self._get_robot_jog()
+        )
+        grid.addWidget(self.teleport_panel, 7, 0, 1, 3)
         return box
 
     def _motion_enabled(self):
@@ -3639,9 +3642,14 @@ state_codec:
 
     def _get_robot_jog(self):
         """共享持久 NexBotTcpJog（6001/7000 单客户端端口全程占用 + 保活）。"""
+        endpoint = pose_endpoint_from_config(self.config.data.get("controller", {}))
         jog = getattr(self, "_robot_jog", None)
+        if jog is not None and jog.endpoint != endpoint:
+            if self._jog_worker_busy():
+                raise RuntimeError("动作进行中，不能更换控制器连接参数")
+            jog.close()
+            jog = self._robot_jog = None
         if jog is None:
-            endpoint = pose_endpoint_from_config(self.config.data.get("controller", {}))
             jog = self._robot_jog = NexBotTcpJog(endpoint, keepalive_s=2.0)
         return jog
 
@@ -3658,16 +3666,37 @@ state_codec:
         if the QThread object is garbage-collected while running; always
         keep workers in ``self._jog_workers`` while they are alive.
         """
+        running = [
+            worker for worker in (getattr(self, "_jog_workers", None) or [])
+            if worker.isRunning()
+        ]
+        if action == "estop":
+            if any(worker.action == "estop" for worker in running):
+                self.robot_ctrl_status.setText("⏳ 急停指令正在发送…")
+                return None
+        elif running:
+            self.robot_ctrl_status.setText("⏳ 动作执行中，请稍候…")
+            return None
         jog = self._get_robot_jog()
         worker = NexBotJogWorker(jog, action, args)
-        worker.done.connect(self._jog_done)
+        worker.done.connect(
+            lambda ok, message, a=action: self._jog_done(a, ok, message)
+        )
         workers = getattr(self, "_jog_workers", None)
         if workers is None:
             workers = self._jog_workers = []
         workers.append(worker)
+        if action != "estop":
+            self._estop_latched = False
         worker.finished.connect(lambda w=worker: self._forget_jog_worker(w))
         worker.start()
         return worker
+
+    def _jog_worker_busy(self):
+        return any(
+            worker.isRunning()
+            for worker in (getattr(self, "_jog_workers", None) or [])
+        )
 
     def _forget_jog_worker(self, worker):
         workers = getattr(self, "_jog_workers", ())
@@ -3693,7 +3722,12 @@ state_codec:
             return
         self._new_jog_worker(command)
 
-    def _jog_done(self, ok, message):
+    def _jog_done(self, action, ok, message):
+        if action == "estop" and ok:
+            self._estop_latched = True
+            self.robot_ctrl_enable.setChecked(False)
+        elif action != "estop" and getattr(self, "_estop_latched", False):
+            return
         self.robot_ctrl_status.setText(message)
         if ok and isinstance(message, str) and "夹爪" in message:
             self.gripper_status.setText(message)
@@ -3702,7 +3736,9 @@ state_codec:
         worker = getattr(self, "nexbot_pose_worker", None)
         if worker is not None:
             worker.stop()
-            worker.wait(1000)
+            if not worker.wait(2000):
+                self.nexbot_status.setText("正在断开 TCP 读取……")
+                return
             self.nexbot_pose_worker = None
             self.nexbot_toggle.setText("保存参数并连接读取 TCP")
             self.nexbot_status.setText("已断开")
@@ -4076,7 +4112,15 @@ state_codec:
         """)
 
     def closeEvent(self, event):
+        pose_worker = getattr(self, "nexbot_pose_worker", None)
+        if pose_worker is not None:
+            pose_worker.stop()
         self._close_robot_jog()
+        if pose_worker is not None:
+            pose_worker.wait(5000)
+        for worker in list(getattr(self, "_jog_workers", ())):
+            worker.wait(5000)
+        self._jog_workers = []
         self.stop_rviz_visualization(stop_master=False)
         self._stop_live_processing_workers()
         if self.controller_worker is not None:

@@ -8,7 +8,9 @@ import sys
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -28,6 +30,7 @@ from competition_pipeline.nexbot_tcp import (
     CMD_DOUT_QUERY_REPLY,
     CMD_MOVL,
     CMD_SERVO_RESPOND,
+    ControllerConnectionError,
 )
 
 
@@ -228,6 +231,143 @@ class NexBotJogTest(unittest.TestCase):
         xyz, abc = jog.current_pose()
         jog.close()
         self.assertTrue(np.allclose(xyz, [700.0, 100.0, 400.0], atol=1e-6))
+
+    def test_reconnect_uses_a_new_controller_without_deadlock(self):
+        instances = []
+
+        class ReconnectingController:
+            def __init__(self, _endpoint):
+                self.index = len(instances)
+                self.closed = False
+                instances.append(self)
+
+            def read_state(self):
+                if self.index == 0:
+                    raise ControllerConnectionError("old connection dropped")
+                return SimpleNamespace(base_from_gripper=np.eye(4))
+
+            def close(self):
+                self.closed = True
+
+        with patch(
+            "competition_pipeline.nexbot_jog.NexBotTcpRobotController",
+            ReconnectingController,
+        ):
+            jog = NexBotTcpJog(object())
+            jog.RETRY_WAIT_S = 0.0
+            xyz, _abc = jog.current_pose()
+            jog.close()
+
+        self.assertEqual(len(instances), 2)
+        self.assertTrue(instances[0].closed)
+        self.assertTrue(np.allclose(xyz, [0.0, 0.0, 0.0]))
+
+    def test_step_retry_resends_the_same_absolute_target(self):
+        instances = []
+        targets = []
+
+        class AmbiguousMoveController:
+            def __init__(self, _endpoint):
+                self.index = len(instances)
+                instances.append(self)
+
+            def servo_status(self):
+                return 3
+
+            def read_state(self):
+                matrix = np.eye(4)
+                matrix[0, 3] = 0.0 if self.index == 0 else 0.01
+                return SimpleNamespace(base_from_gripper=matrix)
+
+            def move_to(self, target, speed_scale):
+                targets.append(np.asarray(target).copy())
+                if self.index == 0:
+                    raise ControllerConnectionError("ambiguous MOVL disconnect")
+
+            def close(self):
+                pass
+
+        with patch(
+            "competition_pipeline.nexbot_jog.NexBotTcpRobotController",
+            AmbiguousMoveController,
+        ):
+            jog = NexBotTcpJog(object())
+            jog.RETRY_WAIT_S = 0.0
+            jog.step(0, 10.0)
+            jog.close()
+
+        self.assertEqual(len(targets), 2)
+        self.assertAlmostEqual(targets[0][0, 3], 0.01)
+        self.assertTrue(np.array_equal(targets[0], targets[1]))
+
+    def test_emergency_stop_bypasses_an_active_motion(self):
+        motion_started = threading.Event()
+        release_motion = threading.Event()
+        stop_sent = threading.Event()
+
+        class BlockingMoveController:
+            def __init__(self, _endpoint):
+                self.motion = SimpleNamespace(close=lambda: None)
+
+            def servo_status(self):
+                return 3
+
+            def read_state(self):
+                return SimpleNamespace(base_from_gripper=np.eye(4))
+
+            def move_to(self, _target, speed_scale):
+                motion_started.set()
+                release_motion.wait(2.0)
+
+            def stop(self):
+                stop_sent.set()
+
+            def close(self):
+                release_motion.set()
+
+        with patch(
+            "competition_pipeline.nexbot_jog.NexBotTcpRobotController",
+            BlockingMoveController,
+        ):
+            jog = NexBotTcpJog(object())
+            worker = threading.Thread(target=jog.step, args=(0, 10.0))
+            worker.start()
+            self.assertTrue(motion_started.wait(0.5))
+            jog.emergency_stop()
+            self.assertTrue(stop_sent.wait(0.2))
+            release_motion.set()
+            worker.join(1.0)
+            jog.close()
+
+        self.assertFalse(worker.is_alive())
+
+    def test_keepalive_recovers_without_stopping_itself(self):
+        instances = []
+
+        class KeepaliveController:
+            def __init__(self, _endpoint):
+                self.index = len(instances)
+                instances.append(self)
+
+            def servo_status(self):
+                if self.index == 0:
+                    raise ControllerConnectionError("idle connection dropped")
+                return 3
+
+            def close(self):
+                pass
+
+        with patch(
+            "competition_pipeline.nexbot_jog.NexBotTcpRobotController",
+            KeepaliveController,
+        ):
+            jog = NexBotTcpJog(object(), keepalive_s=0.01)
+            deadline = time.monotonic() + 1.0
+            while len(instances) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertGreaterEqual(len(instances), 2)
+            self.assertFalse(jog._keepalive_stop.is_set())
+            jog.close()
 
 
 if __name__ == "__main__":
