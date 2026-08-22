@@ -370,11 +370,9 @@ hand_eye:
   max_sample_translation_error_mm: 8.0
   max_sample_rotation_error_deg: 3.0
   tcp_from_color_camera:
-    # 现场手眼标定结果（2026-08-22 11:53-11:56 采集 16 帧，15 内点；
-    # trans_rms=3.02mm rot_rms=0.715deg max_t=6.02mm max_r=1.397deg）。
-    # 相机安装在工具手1（TCP）下方：T_tcp_camera 平移约 (-102.6, 4.4, -161.1)mm。
     valid: true
-    description: p_tcp = T_tcp_color_camera * p_color_camera; field hand-eye 2026-08-22 (15/16 inliers)
+    description: p_tcp = T_tcp_color_camera * p_color_camera; field hand-eye 2026-08-22
+      (15/16 inliers)
     matrix:
     - - 0.000634
       - 0.9953
