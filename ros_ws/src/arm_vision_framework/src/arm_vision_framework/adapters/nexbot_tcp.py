@@ -58,6 +58,9 @@ CMD_MOVL = 0x4502
 CMD_EMERGENCY_STOP = 0x2314
 CMD_QUERY = 0x9512
 CMD_QUERY_REPLY = 0x9513
+CMD_DOUT_SET = 0x3601
+CMD_DOUT_QUERY = 0x3602
+CMD_DOUT_QUERY_REPLY = 0x3603
 CMD_ERRORS = frozenset({0x6010, 0x6020, 0x6030, 0x6040})
 CMD_WARNINGS = frozenset({0x6110, 0x6210})
 
@@ -517,6 +520,53 @@ class NexBotTcpRobotController(RobotController):
         self.motion.send_frame(CMD_EMERGENCY_STOP, {"robot": self.endpoint.robot})
         self._check_errors()
 
+    # -- teach-pendant style helpers --------------------------------------
+
+    def go_home(self):
+        """回零 (0x3002 GO_HOME, robot 0=机器人在回零/1=外部轴)."""
+        self.motion.send_frame(0x3002, {"robot": self.endpoint.robot, "type": 0})
+        self._check_errors()
+        if self.endpoint.wait_for_finish:
+            self._wait_motion_finish()
+
+    def go_reset_position(self):
+        """回复位点 (0x3007 GO_RESET_POSITION); 现场约定复位点=拍摄点."""
+        self.motion.send_frame(0x3007, {"robot": self.endpoint.robot})
+        self._check_errors()
+        if self.endpoint.wait_for_finish:
+            self._wait_motion_finish()
+
+    def set_digital_output(self, port: int, status: int):
+        """GPIO_DOUT_SET 0x3601: port 从 1 开始; status 0 低/1 高."""
+        self.motion.send_frame(
+            CMD_DOUT_SET, {"port": int(port), "status": 1 if int(status) else 0}
+        )
+
+    def digital_output_states(self):
+        """GPIO_DOUT_INQUIRE 0x3602 -> 0x3603 返回每个 DOUT 的状态数组[0/1]."""
+        self.motion.send_frame(CMD_DOUT_QUERY, {})
+        deadline = time.monotonic() + max(2.0, self.endpoint.io_timeout_s * 4.0)
+        while time.monotonic() < deadline:
+            command, data = self.motion.read_frame()
+            if command == CMD_DOUT_QUERY_REPLY:
+                status = (data or {}).get("status")
+                if isinstance(status, list):
+                    return [1 if int(value) == 1 else 0 for value in status]
+                raise ControllerProtocolError(
+                    "DOUT reply is missing status array: {}".format(
+                        json.dumps(data, ensure_ascii=False)[:200]
+                    )
+                )
+            if command in CMD_ERRORS or command in CMD_WARNINGS:
+                raise ControllerProtocolError(
+                    "controller frame 0x{:04X}: {}".format(
+                        command, json.dumps(data, ensure_ascii=False)[:200]
+                    )
+                )
+        raise ControllerTimeout(
+            "DOUT query timed out after {:.1f}s".format(deadline)
+        )
+
 
 def nexbot_tcp_client_from_config(settings):
     """Build a ``NexBotTcpEndpoint`` from the ``controller.nexbot_tcp`` section."""
@@ -553,6 +603,9 @@ __all__ = [
     "CMD_MOVL",
     "CMD_QUERY",
     "CMD_QUERY_REPLY",
+    "CMD_DOUT_SET",
+    "CMD_DOUT_QUERY",
+    "CMD_DOUT_QUERY_REPLY",
     "ControllerConnectionError",
     "ControllerProtocolError",
     "ControllerTimeout",

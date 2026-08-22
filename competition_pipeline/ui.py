@@ -38,6 +38,7 @@ from .controller_state_reader import ControllerStateReader
 from .controller_tcp import InexbotPoint, modbus_client_from_config
 from .shape_latch import ShapeLatch
 from .tcp_pose import NexBotTcpPoseSource, pose_endpoint_from_config
+from .nexbot_jog import NexBotTcpJog
 from .geometry import transform_from_xyz_rpy_mm, xyz_rpy_from_transform
 from .hand_eye import APRILTAG_MAP_TARGET, HandEyeCalibrator
 from .localization import (
@@ -341,6 +342,67 @@ class NexBotPoseWorker(QThread):
             if self.source is not None:
                 self.source.close()
                 self.source = None
+
+
+class NexBotJogWorker(QThread):
+    """One-shot NexBot jog/gripper/home/reset action in a worker thread."""
+
+    done = pyqtSignal(bool, str)
+
+    def __init__(self, endpoint, action, args=()):
+        super().__init__()
+        self.endpoint = endpoint
+        self.action = action
+        self.args = tuple(args)
+
+    def run(self):
+        jog = None
+        try:
+            jog = NexBotTcpJog(self.endpoint)
+            if self.action == "step":
+                axis, step_mm = self.args
+                name = ("X", "Y", "Z")[int(axis)]
+                sign = "正" if float(step_mm) >= 0 else "负"
+                jog.step(int(axis), float(step_mm))
+                xyz, abc = jog.current_pose()
+                self.done.emit(
+                    True,
+                    "步进完成：{}轴{}方向 {:.1f} mm；当前用户1系 TCP "
+                    "X={:.1f} Y={:.1f} Z={:.1f} mm".format(
+                        name, sign, abs(float(step_mm)), *xyz
+                    ),
+                )
+            elif self.action == "gripper":
+                open_ = bool(self.args[0])
+                jog.gripper(open_)
+                d15, d16 = jog.gripper_state()
+                self.done.emit(
+                    True,
+                    "夹爪状态：{}（DOUT15={}, DOUT16={}）".format(
+                        "打开" if open_ else "关闭", d15, d16
+                    ),
+                )
+            elif self.action == "home":
+                jog.go_home()
+                self.done.emit(True, "回零完成")
+            elif self.action == "reset":
+                jog.go_reset_position()
+                xyz, abc = jog.current_pose()
+                self.done.emit(
+                    True,
+                    "复位（拍摄点）完成；当前用户1系 TCP "
+                    "X={:.1f} Y={:.1f} Z={:.1f} mm".format(*xyz),
+                )
+            elif self.action == "estop":
+                jog.emergency_stop()
+                self.done.emit(True, "急停已发送（如机器人在动请确认停止）")
+            else:
+                self.done.emit(False, "未知动作：{}".format(self.action))
+        except Exception as error:
+            self.done.emit(False, "动作失败：{}".format(error))
+        finally:
+            if jog is not None:
+                jog.close()
 
 
 class TagLocalizationWorker(QThread):
@@ -1520,6 +1582,7 @@ class CompetitionCalibrationWindow(QMainWindow):
         self.hand_squares_y.valueChanged.connect(self._refresh_hand_target_hint)
         self._refresh_hand_target_hint()
         layout.addWidget(self._build_tcp_pose_box())
+        layout.addWidget(self._build_robot_control_box())
         box, self.hand_pose_spins = self._pose_box("当前 T_base_tcp")
         layout.addWidget(box)
         capture = action_button(self, "采集当前 RGB 与 TCP", "SP_DialogSaveButton", True)
@@ -3496,6 +3559,104 @@ state_codec:
         grid.addWidget(self.nexbot_toggle, 4, 0, 1, 2)
         grid.addWidget(self.nexbot_status, 5, 0, 1, 2)
         return box
+
+    def _build_robot_control_box(self):
+        """机器人控制（用户坐标系1）：步进/夹爪/回零/复位/急停。"""
+        box = QGroupBox("机器人控制（用户坐标系1）· 步进为安全小位移，用于坐标核对")
+        grid = QGridLayout(box)
+        self.robot_ctrl_enable = QCheckBox("已确认急停可用 — 启用运动/夹爪控制（默认关闭）")
+        self.jog_step_mm = QSpinBox()
+        self.jog_step_mm.setRange(1, 100)
+        self.jog_step_mm.setValue(10)
+        self.jog_step_mm.setSuffix(" mm")
+        grid.addWidget(self.robot_ctrl_enable, 0, 0, 1, 3)
+        grid.addWidget(QLabel("步长"), 1, 0)
+        grid.addWidget(self.jog_step_mm, 1, 1, 1, 2)
+
+        self.jog_buttons = {}
+        for label, axis, sign in (
+            ("前进 X+", 0, 1), ("后退 X-", 0, -1),
+            ("右移 Y+", 1, 1), ("左移 Y-", 1, -1),
+            ("抬高 Z+", 2, 1), ("降低 Z-", 2, -1),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(
+                lambda _checked, a=axis, s=sign: self._jog(a, s)
+            )
+            self.jog_buttons[label] = button
+        positions = ((2, 0), (2, 1), (2, 2), (3, 0), (3, 1), (3, 2))
+        for (row, column), label in zip(positions, (
+            "前进 X+", "后退 X-", "右移 Y+", "左移 Y-", "抬高 Z+", "降低 Z-"
+        )):
+            grid.addWidget(self.jog_buttons[label], row, column)
+
+        self.gripper_open = QPushButton("夹爪 打开")
+        self.gripper_close = QPushButton("夹爪 关闭")
+        self.gripper_open.clicked.connect(lambda: self._gripper(True))
+        self.gripper_close.clicked.connect(lambda: self._gripper(False))
+        grid.addWidget(self.gripper_open, 4, 0)
+        grid.addWidget(self.gripper_close, 4, 1)
+        self.gripper_status = self._strong("夹爪状态：读取中…")
+        grid.addWidget(self.gripper_status, 4, 2)
+
+        self.jog_home = QPushButton("回零")
+        self.jog_reset = QPushButton("复位（拍摄点）")
+        self.jog_home.clicked.connect(lambda: self._jog_command("home"))
+        self.jog_reset.clicked.connect(lambda: self._jog_command("reset"))
+        grid.addWidget(self.jog_home, 5, 0)
+        grid.addWidget(self.jog_reset, 5, 1)
+
+        self.jog_estop = QPushButton("急停")
+        self.jog_estop.setStyleSheet("background:#c0392b; color:white; font-weight:bold;")
+        self.jog_estop.clicked.connect(lambda: self._jog_command("estop"))
+        grid.addWidget(self.jog_estop, 5, 2)
+
+        self.robot_ctrl_status = self._strong("就绪（勾选上方后启用步进）")
+        grid.addWidget(self.robot_ctrl_status, 6, 0, 1, 3)
+        return box
+
+    def _motion_enabled(self):
+        if not self.robot_ctrl_enable.isChecked():
+            self.robot_ctrl_status.setText(
+                "⛔ 运动/夹爪未启用：请先在现场确认急停按钮有效并勾选上方复选框"
+            )
+            return False
+        return True
+
+    def _new_jog_worker(self, action, args=()):
+        endpoint = pose_endpoint_from_config(self.config.data.get("controller", {}))
+        worker = NexBotJogWorker(endpoint, action, args)
+        worker.done.connect(self._jog_done)
+        worker.start()
+        return worker
+
+    def _jog(self, axis, sign):
+        if not self._motion_enabled():
+            return
+        self._new_jog_worker("step", (axis, sign * self.jog_step_mm.value()))
+
+    def _gripper(self, open_):
+        if not self._motion_enabled():
+            return
+        self._new_jog_worker("gripper", (open_,))
+
+    def _jog_command(self, command):
+        if command == "estop":
+            worker = NexBotJogWorker(
+                pose_endpoint_from_config(self.config.data.get("controller", {})),
+                "estop", (),
+            )
+            worker.done.connect(self._jog_done)
+            worker.start()
+            return
+        if not self._motion_enabled():
+            return
+        self._new_jog_worker(command)
+
+    def _jog_done(self, ok, message):
+        self.robot_ctrl_status.setText(message)
+        if ok and isinstance(message, str) and "夹爪" in message:
+            self.gripper_status.setText(message)
 
     def toggle_nexbot_pose(self):
         worker = getattr(self, "nexbot_pose_worker", None)
