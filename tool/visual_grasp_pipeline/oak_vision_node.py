@@ -1168,23 +1168,48 @@ class OakVisionNode:
         ttk.Separator(param_row, orient="vertical").pack(
             side="left", fill="y", padx=(0, 12)
         )
+        # 夹爪单独放在参数行：它走 0x3601 DOUT，**不经过**运动闸门，因此
+        # 空跑模式下也能用 —— 上电先单独试夹爪、再谈动不动臂，是最省时的顺序。
+        ttk.Label(param_row, text="夹爪").pack(side="left", padx=(0, 4))
+        self.gripper_open_button = ttk.Button(
+            param_row, text="张开", width=6,
+            command=lambda: self.on_gripper(True),
+        )
+        self.gripper_open_button.pack(side="left", padx=(0, 4))
+        self.gripper_close_button = ttk.Button(
+            param_row, text="闭合", width=6,
+            command=lambda: self.on_gripper(False),
+        )
+        self.gripper_close_button.pack(side="left", padx=(0, 4))
         ttk.Button(
-            param_row, text="读取当前 TCP", command=self.on_read_tcp
+            param_row, text="读状态", width=7, command=self.on_read_gripper
+        ).pack(side="left", padx=(0, 6))
+        self.gripper_label = ttk.Label(
+            param_row, text="夹爪状态未知", foreground="#5a6b73"
+        )
+        self.gripper_label.pack(side="left")
+
+        # 第五行 = 手动 TCP 读取与传送
+        # 单独一行是因为第四行已经排到窗口外了（现场看不见"传送到该点"按钮）。
+        manual_row = ttk.Frame(self.root, padding=(10, 0, 10, 8))
+        manual_row.pack(fill="x")
+        ttk.Button(
+            manual_row, text="读取当前 TCP", command=self.on_read_tcp
         ).pack(side="left")
         self.teleport_entries = []
         for axis in ("X", "Y", "Z"):
-            ttk.Label(param_row, text=axis).pack(side="left", padx=(8, 2))
-            entry = ttk.Entry(param_row, width=8)
+            ttk.Label(manual_row, text=axis).pack(side="left", padx=(8, 2))
+            entry = ttk.Entry(manual_row, width=8)
             entry.insert(0, "0")
             entry.pack(side="left")
             self.teleport_entries.append(entry)
-        ttk.Label(param_row, text="mm").pack(side="left", padx=(4, 6))
+        ttk.Label(manual_row, text="mm").pack(side="left", padx=(4, 6))
         self.teleport_button = ttk.Button(
-            param_row, text="传送到该点", command=self.on_teleport
+            manual_row, text="传送到该点", command=self.on_teleport
         )
         self.teleport_button.pack(side="left")
         self.tcp_label = ttk.Label(
-            param_row, text="（先【读取当前 TCP】）", foreground="#5a6b73"
+            manual_row, text="（先【读取当前 TCP】）", foreground="#5a6b73"
         )
         self.tcp_label.pack(side="left", padx=10)
 
@@ -1432,6 +1457,85 @@ class OakVisionNode:
             self.ui_queue.put(("tcp_read", (list(xyz_mm), list(abc_deg))))
         except Exception as error:
             self.ui_queue.put(("error", ("传送失败", str(error))))
+        finally:
+            self.ui_queue.put(("busy", False))
+
+    # -- 手动操作：夹爪开合 -------------------------------------------------
+    @staticmethod
+    def describe_gripper_state(states):
+        """把 ``(DOUT15, DOUT16)`` 翻成人话。
+
+        现场实测映射：``(15,16)=(1,0)`` 关、``(0,1)`` 开（双线圈气阀）。
+        另外两种组合是**异常**，不是"半开"：``(0,0)`` 两个线圈都没通电，
+        气阀停在上一个位置，读数说明不了夹爪现在在哪；``(1,1)`` 两路同时
+        通电，是接线或写入错误。这两种都必须如实说"不可判定"，绝不能猜。
+        """
+        pair = (int(states[0]), int(states[1]))
+        if pair == (1, 0):
+            return "闭合"
+        if pair == (0, 1):
+            return "张开"
+        if pair == (0, 0):
+            return "两线圈均未通电（气阀保持在上一位置，状态不可判定）"
+        return "两线圈同时通电（异常，检查接线/写入）"
+
+    def on_gripper(self, open_):
+        """手动开/合夹爪。
+
+        **不受【空跑】限制**：夹爪是 0x3601 DOUT，另一条码路，不动机械臂本体，
+        也不经过复位点安全闸门。上电后先单独确认夹爪通不通，是最省时的排查顺序
+        （2026-08-22 的现场表象恰恰是"夹爪照常开合、机械臂纹丝不动"）。
+
+        不弹确认框：这是手动点动性质的控制，且立刻可逆（合错了再张开）。
+        真正的证据是 DOUT 回读，下面会如实报告"已确认"还是"未确认"。
+        """
+        if self.busy:
+            return
+        self._set_busy(True, "夹爪{}……".format("张开" if open_ else "闭合"))
+        threading.Thread(
+            target=self._gripper_worker, args=(bool(open_),), daemon=True
+        ).start()
+
+    def _gripper_worker(self, open_):
+        action = "张开" if open_ else "闭合"
+        try:
+            jog = self._ensure_jog()
+            _ok, detail = jog.gripper(open_)
+            if detail:
+                # 回读本身失败：动作已下发，但拿不到客观证据，不能报"✅"。
+                self.ui_queue.put((
+                    "gripper", ("{}（未确认）".format(action),
+                                "⚠ 夹爪{}指令已下发，但 DOUT 回读失败：{}"
+                                .format(action, detail))
+                ))
+            else:
+                self.ui_queue.put((
+                    "gripper", (action,
+                                "✅ 夹爪已{}（DOUT 回读一致）".format(action))
+                ))
+        except Exception as error:
+            self.ui_queue.put(("error", ("夹爪{}失败".format(action), str(error))))
+        finally:
+            self.ui_queue.put(("busy", False))
+
+    def on_read_gripper(self):
+        if self.busy:
+            return
+        self._set_busy(True, "读取夹爪 DOUT……")
+        threading.Thread(target=self._read_gripper_worker, daemon=True).start()
+
+    def _read_gripper_worker(self):
+        try:
+            jog = self._ensure_jog()
+            states = jog.gripper_state()
+            described = self.describe_gripper_state(states)
+            self.ui_queue.put((
+                "gripper", (described,
+                            "夹爪 DOUT(15,16)=({},{}) -> {}".format(
+                                int(states[0]), int(states[1]), described))
+            ))
+        except Exception as error:
+            self.ui_queue.put(("error", ("读取夹爪状态失败", str(error))))
         finally:
             self.ui_queue.put(("busy", False))
 
@@ -1927,6 +2031,9 @@ class OakVisionNode:
         state = "disabled" if self.busy else "normal"
         self.capture_button.configure(state=state)
         self.start_button.configure(state=state)
+        # 夹爪与运动共用同一条 6001/7000 连接，忙的时候不能并发下发。
+        self.gripper_open_button.configure(state=state)
+        self.gripper_close_button.configure(state=state)
         # Emergency stop must remain clickable during real motion/busy work.
         self.estop_button.configure(state="normal")
         self.grasp_button.configure(state=(
@@ -2226,6 +2333,10 @@ class OakVisionNode:
                     for entry, value_mm in zip(self.teleport_entries, xyz_mm):
                         entry.delete(0, tk.END)
                         entry.insert(0, "{:.2f}".format(float(value_mm)))
+                elif kind == "gripper":
+                    label, status = value
+                    self.gripper_label.configure(text="夹爪 {}".format(label))
+                    self.status.configure(text=str(status))
                 elif kind == "result":
                     self.result_text.delete("1.0", tk.END)
                     self.result_text.insert("1.0", value)

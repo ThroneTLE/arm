@@ -383,6 +383,107 @@ class MotionDefaultTest(unittest.TestCase):
         self.assertIn("真实运动", target.status.text)
 
 
+class _GripperJog:
+    """只实现 jog 的夹爪部分。"""
+
+    def __init__(self, result=(True, ""), states=(1, 0), raises=None):
+        self.result = result
+        self.states = states
+        self.raises = raises
+        self.calls = []
+
+    def gripper(self, open_, verify=True):
+        self.calls.append(("gripper", bool(open_)))
+        if self.raises is not None:
+            raise self.raises
+        return self.result
+
+    def gripper_state(self):
+        self.calls.append(("state", None))
+        if self.raises is not None:
+            raise self.raises
+        return self.states
+
+
+class _GripperSelf:
+    def __init__(self, jog):
+        self.ui_queue = queue.Queue()
+        self._jog = jog
+        self.describe_gripper_state = OakVisionNode.describe_gripper_state
+
+    def _ensure_jog(self):
+        return self._jog
+
+    def drain(self):
+        items = []
+        while not self.ui_queue.empty():
+            items.append(self.ui_queue.get_nowait())
+        return items
+
+
+class GripperControlTest(unittest.TestCase):
+    """手动夹爪开合。
+
+    夹爪走 0x3601 DOUT，是**唯一**在 2026-08-22 现场一直通着的通道；上电后
+    先单独确认它，比连着机械臂一起试省很多时间。所以它不受【空跑】限制。
+    """
+
+    def test_open_and_close_send_the_right_command(self):
+        for open_ in (True, False):
+            with self.subTest(open=open_):
+                jog = _GripperJog()
+                target = _GripperSelf(jog)
+                OakVisionNode._gripper_worker(target, open_)
+                self.assertEqual(jog.calls, [("gripper", open_)])
+                self.assertIn(("busy", False), target.drain())
+
+    def test_a_verified_action_is_reported_as_confirmed(self):
+        target = _GripperSelf(_GripperJog(result=(True, "")))
+        OakVisionNode._gripper_worker(target, True)
+        messages = [item for item in target.drain() if item[0] == "gripper"]
+        self.assertTrue(messages)
+        _label, status = messages[0][1]
+        self.assertIn("✅", status)
+
+    def test_an_unreadable_dout_is_never_reported_as_success(self):
+        """回读失败 = 动作已下发但拿不到证据。报"✅ 已夹住"就是现场最贵的
+        那种失败：程序说成功了，实际什么都没夹到。"""
+        target = _GripperSelf(_GripperJog(result=(True, "未回读: timeout")))
+        OakVisionNode._gripper_worker(target, False)
+        messages = [item for item in target.drain() if item[0] == "gripper"]
+        self.assertTrue(messages)
+        label, status = messages[0][1]
+        self.assertIn("未确认", label)
+        self.assertNotIn("✅", status)
+
+    def test_a_mismatched_readback_surfaces_as_an_error(self):
+        target = _GripperSelf(_GripperJog(raises=RuntimeError("DOUT 回读不符")))
+        OakVisionNode._gripper_worker(target, True)
+        errors = [item[1] for item in target.drain() if item[0] == "error"]
+        self.assertTrue(errors)
+        self.assertIn("夹爪", errors[0][0])
+
+    def test_reading_the_state_describes_both_coils(self):
+        target = _GripperSelf(_GripperJog(states=(0, 1)))
+        OakVisionNode._read_gripper_worker(target)
+        messages = [item for item in target.drain() if item[0] == "gripper"]
+        self.assertTrue(messages)
+        label, status = messages[0][1]
+        self.assertEqual(label, "张开")
+        self.assertIn("(0,1)", status)
+
+    def test_ambiguous_coil_states_are_not_guessed(self):
+        """(0,0) 和 (1,1) 说明不了夹爪在哪；猜一个出来比不说更危险。"""
+        describe = OakVisionNode.describe_gripper_state
+        self.assertEqual(describe((1, 0)), "闭合")
+        self.assertEqual(describe((0, 1)), "张开")
+        for pair in ((0, 0), (1, 1)):
+            with self.subTest(pair=pair):
+                text = describe(pair)
+                self.assertNotIn("闭合", text)
+                self.assertNotIn("张开", text)
+
+
 class ConfirmDialogGeometryTest(unittest.TestCase):
     """确认框是最后一道人工闸门，"会不会压爆"的那个数必须在框里。"""
 
