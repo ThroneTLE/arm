@@ -92,11 +92,16 @@ class FakeRunner:
 
     instances = []
 
-    def __init__(self, jog, place_x_mm=0.0, place_y_mm=0.0, on_event=None):
+    def __init__(self, jog, place_x_mm=0.0, place_y_mm=0.0, on_event=None,
+                 speed_mm_s=None, arrival_dwell_s=None, gripper_settle_s=None):
         self.jog = jog
         self.place_x_mm = place_x_mm
         self.place_y_mm = place_y_mm
         self.on_event = on_event
+        # UI 参数必须真的传到执行器；漏传会表现为"界面上改了速度但机器人没变"
+        self.speed_mm_s = speed_mm_s
+        self.arrival_dwell_s = arrival_dwell_s
+        self.gripper_settle_s = gripper_settle_s
         self.result = {"status": "ok", "grasp_xyz_mm": [0.0, 0.0, 60.0],
                        "place_xyz_mm": [-100.0, 100.0, 60.0]}
         self.raises = None
@@ -108,6 +113,16 @@ class FakeRunner:
         if dry_run:
             return dict(self.result, status="dry_run")
         return self.result
+
+
+class _Entry:
+    """ttk.Entry 的最小替身：参数读取只用到 .get()。"""
+
+    def __init__(self, text):
+        self._text = str(text)
+
+    def get(self):
+        return self._text
 
 
 class _FakeSelf:
@@ -128,9 +143,23 @@ class _FakeSelf:
         self._occupied_slots = []
         self.place_x_mm = -170.0
         self.place_y_mm = 170.0
+        # 参数控件的最小替身：只需要 .get() 返回字符串，
+        # 这样 _speed_mm_s / _dwell_s 走的是**真实现**而不是被 mock 掉。
+        self.speed_entry = _Entry("50")
+        self.dwell_entry = _Entry("0.20")
+        self.settle_entry = _Entry("0.50")
 
     def _grasp_error_with_hint(self, error):
         return OakVisionNode._grasp_error_with_hint(self, error)
+
+    def _ensure_jog(self):
+        return OakVisionNode._ensure_jog(self)
+
+    def _speed_mm_s(self):
+        return OakVisionNode._speed_mm_s(self)
+
+    def _dwell_s(self, entry, fallback):
+        return OakVisionNode._dwell_s(self, entry, fallback)
 
     def drain(self):
         items = []
@@ -188,6 +217,37 @@ class GraspWorkerGlueTest(unittest.TestCase):
         runner = FakeRunner.instances[0]
         self.assertAlmostEqual(runner.place_x_mm, -170.0)
         self.assertAlmostEqual(runner.place_y_mm, 170.0)
+
+    def test_ui_parameters_reach_the_runner(self):
+        """界面上改了速度/停顿，必须真的传到执行器。
+
+        漏传的表现是"界面上改了但机器人没变"，现场很难当场看出来。
+        """
+        target = _FakeSelf()
+        target.speed_entry = _Entry("135")
+        target.dwell_entry = _Entry("0.35")
+        target.settle_entry = _Entry("0.80")
+        OakVisionNode._grasp_worker(target, [0.0, 0.0, 60.0], True)
+        runner = FakeRunner.instances[0]
+        self.assertAlmostEqual(runner.speed_mm_s, 135.0)
+        self.assertAlmostEqual(runner.arrival_dwell_s, 0.35)
+        self.assertAlmostEqual(runner.gripper_settle_s, 0.80)
+
+    def test_a_garbled_parameter_falls_back_instead_of_crashing(self):
+        """输入框里打错字不该让整轮抓取变成一条含糊的失败。"""
+        from tool.visual_grasp_pipeline.ucs_grasp import (
+            ARRIVAL_DWELL_S, DEFAULT_SPEED_MM_S, GRIPPER_SETTLE_S,
+        )
+
+        target = _FakeSelf()
+        target.speed_entry = _Entry("很快")
+        target.dwell_entry = _Entry("")
+        target.settle_entry = _Entry("abc")
+        OakVisionNode._grasp_worker(target, [0.0, 0.0, 60.0], True)
+        runner = FakeRunner.instances[0]
+        self.assertAlmostEqual(runner.speed_mm_s, DEFAULT_SPEED_MM_S)
+        self.assertAlmostEqual(runner.arrival_dwell_s, ARRIVAL_DWELL_S)
+        self.assertAlmostEqual(runner.gripper_settle_s, GRIPPER_SETTLE_S)
 
     def test_a_successful_place_advances_to_the_next_slot(self):
         """连抓多个时必须换槽位；都放同一点会堆叠，第二个落在第一个上面必倒。"""

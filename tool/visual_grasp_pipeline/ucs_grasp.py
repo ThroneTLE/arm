@@ -66,6 +66,22 @@ MAX_SINGLE_LEG_MM = 600.0
 #: 速度比例（0.05 -> 50 mm/s，与比赛 UI 步进一致，安全）
 SPEED_SCALE = 0.05
 
+#: 默认运行速度（mm/s）。这是 UI 直接暴露的量纲。
+#: 链路: speed_mm_s -> move_to_ucs(vel_mm_s) -> controller.move_to(speed_scale=v/1000)
+#:       -> move_l(speed_mm_s=v*1000) -> _clamp(round(v), 1, 1000) -> MOVL 的 "vel" 字段。
+#: 所以 UI 里填的 mm/s 就是控制器 MOVL 帧里的 vel，中间不会再被缩放一次。
+DEFAULT_SPEED_MM_S = 50.0
+
+#: 到位之后、动夹爪之前的停顿（秒）。
+#: ``move_to_ucs`` 已经用位姿轮询确认过到位，所以这不是"等它走到"，而是等
+#: 机械结构的余振停下来再合爪 —— 罐子是圆的，余振会把它推开。默认给短。
+ARRIVAL_DWELL_S = 0.2
+
+#: 发完夹爪指令之后的停顿（秒）= 气阀动作时间。
+#: **这一条以前是缺的**：合爪指令发出后立刻执行抬升，气阀还没动作完就抬，
+#: 会抓空。competition_pipeline/grasp_demo.py 里一直有 0.5s，本执行器漏了。
+GRIPPER_SETTLE_S = 0.5
+
 #: 单段位移上限（mm）。**不要沿用 move_to_ucs 的 400mm 默认值** —— 那个默认值是给
 #: 传送面板防"未确认输入（默认 0,0,0）"用的。本流程的第一段是「复位/拍摄点 -> 抓取位
 #: 上方」，拍摄点要俯视整张 493mm 的桌子，离桌角的抓取点很容易超过 400mm，
@@ -228,11 +244,28 @@ class UcsGraspRunner:
         place_y_mm: float = UCS_PLACE_Y_MM,
         speed_scale: float = SPEED_SCALE,
         on_event: Optional[Callable[[str], None]] = None,
+        speed_mm_s: Optional[float] = None,
+        arrival_dwell_s: float = ARRIVAL_DWELL_S,
+        gripper_settle_s: float = GRIPPER_SETTLE_S,
     ):
         self.jog = jog
         self.place_x_mm = float(place_x_mm)
         self.place_y_mm = float(place_y_mm)
-        self.speed_scale = float(speed_scale)
+        # ``speed_mm_s`` 是 UI 直接暴露的量纲；``speed_scale`` 保留向后兼容。
+        # 两者描述同一个量: speed_mm_s == speed_scale * 1000。
+        self.speed_mm_s = float(
+            speed_scale * 1000.0 if speed_mm_s is None else speed_mm_s
+        )
+        if not 1.0 <= self.speed_mm_s <= 1000.0:
+            # 控制器 MOVL 的 vel 会被夹到 [1, 1000]；超出范围就是操作者填错了单位。
+            raise ValueError(
+                "运行速度 {:.1f} mm/s 超出控制器 MOVL 的 [1, 1000] 范围".format(
+                    self.speed_mm_s
+                )
+            )
+        self.speed_scale = self.speed_mm_s / 1000.0
+        self.arrival_dwell_s = max(0.0, float(arrival_dwell_s))
+        self.gripper_settle_s = max(0.0, float(gripper_settle_s))
         self._on_event = on_event or (lambda message: None)
 
     def _emit(self, message: str):
@@ -337,8 +370,15 @@ class UcsGraspRunner:
                 gripper_unverified = []
                 for step in plan.steps[1:-1]:
                     if step["kind"] == "gripper":
+                        # 到位停顿：move_to_ucs 已确认到位，这里等的是机械余振。
+                        # 罐子是圆的，余振会把它推开。
+                        if self.arrival_dwell_s:
+                            time.sleep(self.arrival_dwell_s)
                         self._emit(step["detail"])
                         result = self.jog.gripper(bool(step["open"]))
+                        # 气阀动作时间。缺了这一条，合爪指令发完立刻抬升 = 抓空。
+                        if self.gripper_settle_s:
+                            time.sleep(self.gripper_settle_s)
                         # jog.gripper 回读 DOUT：读到相反值会抛错；读不到则返回
                         # ("未回读: …")，累积起来写进结论，不冒充"已确认"。
                         if isinstance(result, tuple) and result[1]:
@@ -351,7 +391,7 @@ class UcsGraspRunner:
                     # 直调 controller.move_to 会绕过事务锁和全部闸门。
                     self.jog.move_to_ucs(
                         step["xyz_mm"], abc_rad,
-                        vel_mm_s=self.speed_scale * 1000.0,
+                        vel_mm_s=self.speed_mm_s,
                         # 闸门全部显式给值，不要沿用传送面板的默认值 ——
                         # 那套默认是给短距离手动传送调的，会在第一段就拒掉本流程。
                         tolerance_mm=ARRIVAL_TOLERANCE_MM,

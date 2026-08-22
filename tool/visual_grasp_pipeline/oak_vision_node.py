@@ -54,6 +54,11 @@ from tool.visual_grasp_pipeline.geometry import (
 from tool.visual_grasp_pipeline.tracking import StableTracker, parse_sequence
 from tool.visual_grasp_pipeline.ucs_grasp import (
     APPROACH_CLEARANCE_MM,
+    ARRIVAL_DWELL_S,
+    ARRIVAL_TOLERANCE_MM,
+    DEFAULT_SPEED_MM_S,
+    GRIPPER_SETTLE_S,
+    MAX_LEG_TRANSLATION_MM,
     TABLE_HALF_MM,
     UCS_PLACE_X_MM,
     UCS_PLACE_Y_MM,
@@ -911,6 +916,8 @@ class OakVisionNode:
         self._tcp_user1 = None
         self._tcp_timestamp = None
         self._tcp_source = ""
+        #: 操作者显式钉死了位姿？置位后 _refresh_tcp_live 不再去碰控制器。
+        self._tcp_is_static = False
         if tcp_xyz_mm is not None and tcp_rpy_deg is not None:
             # 控制器约定 A/B/C(RxRyRz, 与手眼样本修正一致)
             from competition_pipeline.geometry import transform_from_inexbot_abc
@@ -919,6 +926,7 @@ class OakVisionNode:
                 np.radians(np.asarray(tcp_rpy_deg, dtype=np.float64)),
             )
             self._tcp_source = "手动指定 --tcp-xyz-mm/--tcp-rpy-deg (静态)"
+            self._tcp_is_static = True
         elif no_tcp_read:
             self._tcp_source = "--no-tcp-read: 未读取机械臂位姿"
         else:
@@ -956,6 +964,14 @@ class OakVisionNode:
 
     def _refresh_tcp_live(self):
         """Refresh ``T_user1_tcp`` and fail closed on every read error."""
+        if self._tcp_is_static:
+            # ``--tcp-xyz-mm/--tcp-rpy-deg`` 是操作者显式钉死的位姿，不该被"实时
+            # 回读"覆盖。之前这里无条件去连 7000，于是构造函数刚设好的静态位姿
+            # 在第一次拍照时就被一次失败的回读清成 None ——
+            # 那个命令行选项因此一直是**坏的**。
+            # 它有两个用处: 7000 端口被别的程序占住时的应急通路,
+            # 以及无硬件演练(见 tool/visual_grasp_pipeline/simulate_node.py)。
+            return self._tcp_user1
         if self._jog is not None:
             # After the first execution, vision and motion intentionally share
             # the same persistent controller instead of reopening 7000/6001.
@@ -1002,55 +1018,104 @@ class OakVisionNode:
             )
         return self._tcp_user1
 
+    def _setup_fonts(self):
+        """把 Tk 的默认字号从 5 调到能看清，并挑一个能渲染中文的字族。
+
+        conda 的 Tk **没有链接 Xft/fontconfig**，只看得到 20 个 X11 点阵字体
+        （系统 Tk 能看到 254 个，含 Noto Sans CJK SC）。默认 ``TkDefaultFont``
+        因此落到 ``gothic`` **5 号**——这就是界面糊成一团的原因，不是编码问题。
+
+        可用字体里 gothic / song ti / fangsong ti / mincho 都能渲染中文
+        （实测 14 个汉字宽 385~399px，即双宽），``clean`` 不能（缺字形）。
+        这里按偏好挑第一个可用的，所以在正常的 Xft 环境下会自动用上
+        Noto Sans CJK SC。
+        """
+        import tkinter.font as tkfont
+
+        available = {name.lower() for name in tkfont.families()}
+
+        def pick(candidates, fallback):
+            for name in candidates:
+                if name.lower() in available:
+                    return name
+            return fallback
+
+        ui_family = pick(
+            ["Noto Sans CJK SC", "WenQuanYi Micro Hei", "Microsoft YaHei",
+             "gothic", "song ti"],
+            "gothic",
+        )
+        mono_family = pick(
+            ["Noto Sans Mono CJK SC", "WenQuanYi Micro Hei Mono",
+             "courier 10 pitch", "fixed"],
+            "courier 10 pitch",
+        )
+        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
+                     "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont",
+                     "TkIconFont", "TkTooltipFont"):
+            try:
+                tkfont.nametofont(name).configure(family=ui_family, size=11)
+            except tk.TclError:
+                pass
+        try:
+            tkfont.nametofont("TkFixedFont").configure(
+                family=mono_family, size=11
+            )
+        except tk.TclError:
+            pass
+        # 结果面板用等宽：坐标是一列一列对着看的，比例字体会错位。
+        self._mono_font = (mono_family, 11)
+        self._ui_family = ui_family
+
     def _build_ui(self):
-        toolbar = ttk.Frame(self.root, padding=10)
+        self._setup_fonts()
+        toolbar = ttk.Frame(self.root, padding=(10, 8, 10, 4))
         toolbar.pack(fill="x")
+        # 第一行 = 识别与选目标（单目标的常规路径都在这一行走完）
+        ttk.Label(toolbar, text="① 识别").pack(side="left")
         self.capture_button = ttk.Button(
             toolbar, text="拍照识别", command=self.on_capture
         )
-        self.capture_button.pack(side="left")
-        self.object_combo = ttk.Combobox(toolbar, state="readonly", width=28)
-        self.object_combo.pack(side="left", padx=8)
+        self.capture_button.pack(side="left", padx=(6, 12))
+        ttk.Label(toolbar, text="② 选目标").pack(side="left")
+        self.object_combo = ttk.Combobox(toolbar, state="readonly", width=26)
+        self.object_combo.pack(side="left", padx=6)
         # 两条路径都要顺手：
         #   单目标 —— 点画面选中 -> 【计算选中目标】
         #   多目标 —— 双击画面逐个加入序列 -> 【开始算法序列】
         self.compute_button = ttk.Button(
-            toolbar, text="计算选中目标", command=self.on_compute_selected
+            toolbar, text="③ 计算选中目标", command=self.on_compute_selected
         )
-        self.compute_button.pack(side="left")
-        ttk.Button(toolbar, text="＋加入序列", command=self.on_add).pack(
-            side="left", padx=(16, 0)
-        )
-        ttk.Button(toolbar, text="− 撤销末项", command=self.on_undo).pack(
-            side="left"
-        )
-        ttk.Button(toolbar, text="清空序列", command=self.on_clear).pack(
-            side="left", padx=8
-        )
-        ttk.Button(
-            toolbar, text="重置放置区", command=self.on_reset_place_slots
-        ).pack(side="left")
+        self.compute_button.pack(side="left", padx=(6, 12))
         ttk.Label(
-            toolbar, text="提示：单击画面选中物体，双击加入序列"
-        ).pack(side="left", padx=8)
+            toolbar, text="（也可直接单击画面里的物体；双击 = 加入序列）",
+            foreground="#5a6b73",
+        ).pack(side="left")
 
-        sequence_row = ttk.Frame(self.root, padding=(10, 0, 10, 8))
+        # 第二行 = 多目标序列
+        sequence_row = ttk.Frame(self.root, padding=(10, 0, 10, 4))
         sequence_row.pack(fill="x")
-        ttk.Label(sequence_row, text="目标序列：").pack(side="left")
-        self.sequence_entry = ttk.Entry(sequence_row, width=56)
+        ttk.Label(sequence_row, text="多目标序列").pack(side="left")
+        self.sequence_entry = ttk.Entry(sequence_row)
         self.sequence_entry.pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Button(sequence_row, text="＋加入", command=self.on_add).pack(side="left")
+        ttk.Button(sequence_row, text="− 撤销", command=self.on_undo).pack(side="left")
+        ttk.Button(sequence_row, text="清空", command=self.on_clear).pack(
+            side="left", padx=(0, 8)
+        )
         button_text = (
             "开始序列（旧模拟机械臂）" if self.arm.enabled
-            else "开始算法序列（Dry-run，不运动）"
+            else "开始算法序列（Dry-run）"
         )
         self.start_button = ttk.Button(
             sequence_row, text=button_text, command=self.on_start
         )
         self.start_button.pack(side="left")
 
+        # 第三行 = 执行与安全
         grasp_row = ttk.Frame(self.root, padding=(10, 0, 10, 8))
         grasp_row.pack(fill="x")
-        ttk.Label(grasp_row, text="一键抓取(用户1)：").pack(side="left")
+        ttk.Label(grasp_row, text="④ 执行").pack(side="left")
         self.grasp_button = ttk.Button(
             grasp_row, text="执行抓取", command=self.on_grasp_execute,
             state="disabled",
@@ -1060,27 +1125,105 @@ class OakVisionNode:
             grasp_row, text="急停", command=self.on_grasp_estop,
             state="disabled",
         )
-        self.estop_button.pack(side="left")
-        self.grasp_info = ttk.Label(grasp_row, text="先运行目标序列计算坐标")
-        self.grasp_info.pack(side="left", padx=8)
+        self.estop_button.pack(side="left", padx=(0, 8))
+        ttk.Button(
+            grasp_row, text="重置放置区", command=self.on_reset_place_slots
+        ).pack(side="left", padx=(0, 12))
+        self.grasp_info = ttk.Label(grasp_row, text="先计算坐标，确认无误后才能执行")
+        self.grasp_info.pack(side="left")
 
-        content = ttk.Frame(self.root, padding=(10, 0, 10, 8))
-        content.pack(fill="both", expand=True)
-        self.image_label = tk.Label(content, bg="#11181c")
-        self.image_label.pack(side="left", fill="both", expand=True)
+        # 第四行 = 运行参数 + 手动操作
+        # 速度用 mm/s：这就是控制器 MOVL 帧里 vel 字段的量纲，中间不再缩放，
+        # 现场看到多少就是发下去多少（见 ucs_grasp.DEFAULT_SPEED_MM_S 的注释）。
+        param_row = ttk.Frame(self.root, padding=(10, 0, 10, 8))
+        param_row.pack(fill="x")
+        ttk.Label(param_row, text="速度").pack(side="left")
+        self.speed_entry = ttk.Entry(param_row, width=6)
+        self.speed_entry.insert(0, "{:.0f}".format(DEFAULT_SPEED_MM_S))
+        self.speed_entry.pack(side="left", padx=(4, 2))
+        ttk.Label(param_row, text="mm/s").pack(side="left", padx=(0, 12))
+
+        ttk.Label(param_row, text="到位停顿").pack(side="left")
+        self.dwell_entry = ttk.Entry(param_row, width=5)
+        self.dwell_entry.insert(0, "{:.2f}".format(ARRIVAL_DWELL_S))
+        self.dwell_entry.pack(side="left", padx=(4, 2))
+        ttk.Label(param_row, text="s").pack(side="left", padx=(0, 12))
+
+        ttk.Label(param_row, text="气阀停顿").pack(side="left")
+        self.settle_entry = ttk.Entry(param_row, width=5)
+        self.settle_entry.insert(0, "{:.2f}".format(GRIPPER_SETTLE_S))
+        self.settle_entry.pack(side="left", padx=(4, 2))
+        ttk.Label(param_row, text="s").pack(side="left", padx=(0, 20))
+
+        ttk.Separator(param_row, orient="vertical").pack(
+            side="left", fill="y", padx=(0, 12)
+        )
+        ttk.Button(
+            param_row, text="读取当前 TCP", command=self.on_read_tcp
+        ).pack(side="left")
+        self.teleport_entries = []
+        for axis in ("X", "Y", "Z"):
+            ttk.Label(param_row, text=axis).pack(side="left", padx=(8, 2))
+            entry = ttk.Entry(param_row, width=8)
+            entry.insert(0, "0")
+            entry.pack(side="left")
+            self.teleport_entries.append(entry)
+        ttk.Label(param_row, text="mm").pack(side="left", padx=(4, 6))
+        self.teleport_button = ttk.Button(
+            param_row, text="传送到该点", command=self.on_teleport
+        )
+        self.teleport_button.pack(side="left")
+        self.tcp_label = ttk.Label(
+            param_row, text="（先【读取当前 TCP】）", foreground="#5a6b73"
+        )
+        self.tcp_label.pack(side="left", padx=10)
+
+        # 三栏可拖拽：现场经常要临时把某一栏拉大看细节
+        content = ttk.PanedWindow(self.root, orient="horizontal")
+        content.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+
+        camera_pane = ttk.Frame(content)
+        ttk.Label(camera_pane, text="相机画面（单击选中物体 / 双击加入序列）").pack(
+            anchor="w"
+        )
+        self.image_label = tk.Label(
+            camera_pane, bg="#11181c", text="点【拍照识别】开始",
+            fg="#5a6b73", compound="center",
+        )
+        self.image_label.pack(fill="both", expand=True, pady=(4, 0))
         # 单击选中、双击加入序列（映射由 display_to_image_pixel 负责）
         self.image_label.bind("<Button-1>", self.on_image_click)
         self.image_label.bind("<Double-Button-1>", self.on_image_double_click)
-        self.image3d_label = tk.Label(content, bg="#14171a")
-        self.image3d_label.pack(side="left", fill="both", expand=True, padx=(10, 0))
-        result_frame = ttk.Frame(content, width=410)
-        result_frame.pack(side="right", fill="y", padx=(10, 0))
-        ttk.Label(result_frame, text="算法结果").pack(anchor="w")
-        self.result_text = tk.Text(
-            result_frame, width=48, height=32, wrap="word",
-            background="#20272b", foreground="#e4ecef",
+        content.add(camera_pane, weight=4)
+
+        viz_pane = ttk.Frame(content)
+        ttk.Label(viz_pane, text="用户坐标系1 工作台（桌面/抓取点/放置点/路径）").pack(
+            anchor="w"
         )
-        self.result_text.pack(fill="both", expand=True, pady=(5, 0))
+        self.image3d_label = tk.Label(
+            viz_pane, bg="#14171a", fg="#5a6b73", compound="center",
+            text="算完坐标后显示\n桌面 · 物体 · 抓取点 · 放置点 · 实际路径",
+        )
+        self.image3d_label.pack(fill="both", expand=True, pady=(4, 0))
+        content.add(viz_pane, weight=3)
+
+        result_frame = ttk.Frame(content)
+        ttk.Label(result_frame, text="算法结果（执行前先核对这里的数字）").pack(
+            anchor="w"
+        )
+        self.result_text = tk.Text(
+            result_frame, width=52, height=30, wrap="word",
+            background="#20272b", foreground="#e4ecef",
+            font=self._mono_font, padx=8, pady=6,
+            insertbackground="#e4ecef",
+        )
+        result_scroll = ttk.Scrollbar(
+            result_frame, orient="vertical", command=self.result_text.yview
+        )
+        self.result_text.configure(yscrollcommand=result_scroll.set)
+        result_scroll.pack(side="right", fill="y", pady=(4, 0))
+        self.result_text.pack(fill="both", expand=True, pady=(4, 0))
+        content.add(result_frame, weight=3)
         self.result_text.insert(
             "end",
             "相机：OAK-D-PRO-FF\n"
@@ -1189,6 +1332,110 @@ class OakVisionNode:
         self.sequence_items.append("{}#{}".format(item["name"], item.get("id")))
         self.sequence_entry.delete(0, tk.END)
         self.sequence_entry.insert(0, ", ".join(self.sequence_items))
+
+    # -- 手动操作：读当前 TCP / 传送到某点 ---------------------------------
+    def _read_tcp_now(self):
+        """回读当前 TCP，返回 ``(xyz_mm, abc_deg)``。只读，不发运动。
+
+        用户坐标系1 的读数就是**工具末梢**（《iNexBot 系统操作手册 2207》
+        "坐标系说明与切换"：用户坐标系点位为"机器人所带工具末梢相对用户坐标系
+        原点的坐标值"，未带工具时才退化为法兰中心）。本机工具手1 已标到夹爪
+        尖端，所以这里读到的就是指尖位置。
+        """
+        from competition_pipeline.geometry import inexbot_abc_from_transform
+
+        if self._jog is not None:
+            # 执行器已经占着 6001/7000，走它的通道，别再开第二个连接。
+            return self._jog.current_pose()
+        pose = self._refresh_tcp_live()
+        if pose is None:
+            raise RuntimeError(self._tcp_source or "无法读取 TCP 位姿")
+        xyz_m, abc_rad = inexbot_abc_from_transform(pose)
+        return tuple(xyz_m * 1000.0), tuple(np.degrees(abc_rad))
+
+    def on_read_tcp(self):
+        if self.busy:
+            return
+        self._set_busy(True, "读取当前 TCP 位姿……")
+        threading.Thread(target=self._read_tcp_worker, daemon=True).start()
+
+    def _read_tcp_worker(self):
+        try:
+            xyz_mm, abc_deg = self._read_tcp_now()
+            self.ui_queue.put(("tcp_read", (list(xyz_mm), list(abc_deg))))
+        except Exception as error:
+            self.ui_queue.put(("error", ("读取 TCP 失败", str(error))))
+        finally:
+            self.ui_queue.put(("busy", False))
+
+    def on_teleport(self):
+        """把 TCP 传送到手填的 XYZ；姿态保持当前姿态不变。"""
+        if self.busy:
+            return
+        if not self.enable_robot_motion:
+            messagebox.showinfo(
+                "未启用真实运动",
+                "传送会让机械臂实际运动。请加 --enable-robot-motion 重启后再用。",
+                parent=self.root,
+            )
+            return
+        try:
+            target = [float(entry.get()) for entry in self.teleport_entries]
+        except ValueError:
+            messagebox.showerror("传送目标格式错误", "XYZ 必须是数字（mm）",
+                                 parent=self.root)
+            return
+        proceed = messagebox.askokcancel(
+            "确认传送（真实运动）",
+            "⚠ 机械臂将实际运动！\n\n"
+            "目标 XYZ(mm): {}\n"
+            "姿态: 保持当前姿态不变（只动 XYZ）\n"
+            "速度: {:.0f} mm/s\n\n"
+            "确认路径无障碍？".format(
+                [round(value, 2) for value in target], self._speed_mm_s()
+            ),
+            parent=self.root,
+        )
+        if not proceed:
+            return
+        self._set_busy(True, "传送中……")
+        threading.Thread(
+            target=self._teleport_worker, args=(target,), daemon=True
+        ).start()
+
+    def _teleport_worker(self, target_xyz_mm):
+        try:
+            jog = self._ensure_jog()
+            # 姿态取当前姿态：本项目全程只动 XYZ，换姿态是摔臂的直接成因。
+            _xyz_mm, abc_rad = jog.current_pose_rad()
+            deviation = jog.move_to_ucs(
+                target_xyz_mm, abc_rad,
+                vel_mm_s=self._speed_mm_s(),
+                tolerance_mm=ARRIVAL_TOLERANCE_MM,
+                max_translation_mm=MAX_LEG_TRANSLATION_MM,
+            )
+            self.ui_queue.put((
+                "status",
+                "✅ 传送完成，到位偏差 {:.2f} mm".format(deviation),
+            ))
+            xyz_mm, abc_deg = jog.current_pose()
+            self.ui_queue.put(("tcp_read", (list(xyz_mm), list(abc_deg))))
+        except Exception as error:
+            self.ui_queue.put(("error", ("传送失败", str(error))))
+        finally:
+            self.ui_queue.put(("busy", False))
+
+    def _speed_mm_s(self):
+        try:
+            return float(self.speed_entry.get())
+        except (ValueError, AttributeError):
+            return DEFAULT_SPEED_MM_S
+
+    def _dwell_s(self, entry, fallback):
+        try:
+            return max(0.0, float(entry.get()))
+        except (ValueError, AttributeError):
+            return fallback
 
     def _next_place_slot_xy(self):
         """下一个空槽位的 XY。用满时抛 ``IndexError``（不回绕，回绕会堆叠）。"""
@@ -1722,25 +1969,34 @@ class OakVisionNode:
             target=self._grasp_worker, args=(grasp, dry_run), daemon=True
         ).start()
 
+    def _ensure_jog(self):
+        """拿到（必要时建立）执行用的 jog。
+
+        7000/6001 都是**单客户端**端口：不能"关掉再重连"，而要把视觉回读用的
+        持久 controller 直接移交给执行器。抓取和手动传送共用这一条，否则第二个
+        使用者会被端口拒绝。
+        """
+        if self._jog is not None:
+            return self._jog
+        shared_controller = None
+        if self._live_reader is not None:
+            try:
+                shared_controller = self._live_reader.detach_controller()
+            except Exception as error:
+                raise UcsGraspExecutorError(
+                    "无法复用视觉 controller: {}".format(error)
+                ) from error
+            self._live_reader = None
+        self._jog = build_jog(
+            self._competition_yaml,
+            host=self._controller_host,
+            controller=shared_controller,
+        )
+        return self._jog
+
     def _grasp_worker(self, grasp_mm, dry_run):
         try:
-            if self._jog is None:
-                # 7000/6001 均为单客户端: 不关闭后重连，直接把视觉
-                # 回读的持久 controller 移交给执行器。
-                shared_controller = None
-                if self._live_reader is not None:
-                    try:
-                        shared_controller = self._live_reader.detach_controller()
-                    except Exception as error:
-                        raise UcsGraspExecutorError(
-                            "无法复用视觉 controller: {}".format(error)
-                        ) from error
-                    self._live_reader = None
-                self._jog = build_jog(
-                    self._competition_yaml,
-                    host=self._controller_host,
-                    controller=shared_controller,
-                )
+            self._ensure_jog()
             slot_index = len(self._occupied_slots)
             place_xy = self._place_layout.slot_xy_mm(slot_index)
             runner = UcsGraspRunner(
@@ -1748,6 +2004,11 @@ class OakVisionNode:
                 place_x_mm=place_xy[0],
                 place_y_mm=place_xy[1],
                 on_event=lambda message: self.ui_queue.put(("status", message)),
+                speed_mm_s=self._speed_mm_s(),
+                arrival_dwell_s=self._dwell_s(self.dwell_entry, ARRIVAL_DWELL_S),
+                gripper_settle_s=self._dwell_s(
+                    self.settle_entry, GRIPPER_SETTLE_S
+                ),
             )
             result = runner.execute(grasp_mm, dry_run=dry_run)
             if result["status"] == "ok":
@@ -1908,6 +2169,16 @@ class OakVisionNode:
                         # 跟置信度无关，操作者不看清楚就点很容易算错目标。
                         _sorted, original = sort_objects_for_picking(self.objects)
                         self.object_combo.current(original[0])
+                elif kind == "tcp_read":
+                    xyz_mm, abc_deg = value
+                    self.tcp_label.configure(
+                        text="当前 TCP  X={:.2f} Y={:.2f} Z={:.2f} mm  "
+                             "A={:.2f} B={:.2f} C={:.2f}°".format(*xyz_mm, *abc_deg)
+                    )
+                    # 顺手填进传送框：最常见的用法是"读出来，改一个数，传过去"
+                    for entry, value_mm in zip(self.teleport_entries, xyz_mm):
+                        entry.delete(0, tk.END)
+                        entry.insert(0, "{:.2f}".format(float(value_mm)))
                 elif kind == "result":
                     self.result_text.delete("1.0", tk.END)
                     self.result_text.insert("1.0", value)

@@ -287,6 +287,96 @@ class UcsGraspRunnerTests(unittest.TestCase):
         ]))
         self.assertGreaterEqual(MAX_LEG_TRANSLATION_MM, diagonal)
 
+    def test_ui_speed_reaches_move_to_ucs_unscaled(self):
+        """UI 填的 mm/s 必须原样到达 move_to_ucs。
+
+        链路 speed_mm_s -> move_to_ucs(vel_mm_s) -> controller.move_to(v/1000)
+        -> move_l(speed_mm_s=v*1000) -> MOVL 的 vel。中间任何一处多乘/漏乘 1000，
+        速度就会差三个数量级 —— 这种错在现场表现为"机械臂突然飞出去"。
+        """
+        jog = FakeJog(reset_pose())
+        seen = []
+        original = jog.move_to_ucs
+
+        def _record(xyz_mm, abc_rad, **kwargs):
+            seen.append(kwargs.get("vel_mm_s"))
+            return original(xyz_mm, abc_rad, **kwargs)
+
+        jog.move_to_ucs = _record
+        UcsGraspRunner(jog, speed_mm_s=120.0).execute(
+            np.array([0.0, 0.0, 60.0]), dry_run=False
+        )
+        self.assertTrue(seen)
+        self.assertTrue(all(value == 120.0 for value in seen), seen)
+
+    def test_speed_outside_the_controller_range_is_rejected(self):
+        """MOVL 的 vel 会被夹到 [1, 1000]；超出就是操作者填错了单位。"""
+        for bad in (0.0, 0.5, 1001.0):
+            with self.subTest(speed=bad):
+                with self.assertRaises(ValueError):
+                    UcsGraspRunner(FakeJog(reset_pose()), speed_mm_s=bad)
+
+    def test_speed_scale_and_speed_mm_s_describe_the_same_quantity(self):
+        self.assertAlmostEqual(
+            UcsGraspRunner(FakeJog(reset_pose()), speed_scale=0.08).speed_mm_s,
+            80.0,
+        )
+        self.assertAlmostEqual(
+            UcsGraspRunner(FakeJog(reset_pose()), speed_mm_s=80.0).speed_scale,
+            0.08,
+        )
+
+    def test_gripper_settle_happens_after_the_command_not_before_the_lift(self):
+        """气阀动作时间：合爪指令发完立刻抬升会抓空。
+
+        这条以前是缺的 —— grasp_demo 一直有 0.5s，本执行器漏了。
+        """
+        jog = FakeJog(reset_pose())
+        timeline = []
+        original_gripper = jog.gripper
+        original_move = jog.move_to_ucs
+
+        def _gripper(open_, verify=True):
+            timeline.append(("gripper", bool(open_)))
+            return original_gripper(open_, verify=verify)
+
+        def _move(xyz_mm, abc_rad, **kwargs):
+            timeline.append(("move", tuple(np.round(xyz_mm, 1))))
+            return original_move(xyz_mm, abc_rad, **kwargs)
+
+        jog.gripper = _gripper
+        jog.move_to_ucs = _move
+
+        import time as _time
+        sleeps = []
+        original_sleep = _time.sleep
+        import tool.visual_grasp_pipeline.ucs_grasp as module
+        module.time.sleep = lambda seconds: sleeps.append(seconds)
+        try:
+            UcsGraspRunner(
+                jog, arrival_dwell_s=0.3, gripper_settle_s=0.7
+            ).execute(np.array([0.0, 0.0, 60.0]), dry_run=False)
+        finally:
+            module.time.sleep = original_sleep
+
+        # 两次夹爪动作，每次前后各一个停顿
+        self.assertEqual(sleeps.count(0.3), 2, sleeps)
+        self.assertEqual(sleeps.count(0.7), 2, sleeps)
+
+    def test_zero_dwell_is_allowed_and_emits_no_sleep(self):
+        jog = FakeJog(reset_pose())
+        sleeps = []
+        import tool.visual_grasp_pipeline.ucs_grasp as module
+        original_sleep = module.time.sleep
+        module.time.sleep = lambda seconds: sleeps.append(seconds)
+        try:
+            UcsGraspRunner(
+                jog, arrival_dwell_s=0.0, gripper_settle_s=0.0
+            ).execute(np.array([0.0, 0.0, 60.0]), dry_run=False)
+        finally:
+            module.time.sleep = original_sleep
+        self.assertNotIn(0.0, sleeps)
+
     def test_the_orientation_stays_at_the_reset_pose_for_every_leg(self):
         """姿态全程不变是这条路径的安全前提：只动 XYZ，绝不换姿态。
 
