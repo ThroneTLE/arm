@@ -172,6 +172,63 @@ def check(config_path, competition_config):
         else:
             print("  ✓ {:<10} type={}".format(object_key, grasp_type))
 
+    # 4.5) 缩放核对（尺子实测 vs CAD）
+    print("\n[4.5] CAD 缩放 vs 尺子实测")
+    measured = raw.get("measured_object_mm", {}) or {}
+    used_keys = sorted(set(mapping.values()))
+    unmeasured = [key for key in used_keys if key not in measured]
+    try:
+        import numpy as np
+        import trimesh
+    except ImportError:
+        print("  ⚠️ trimesh 不可用，跳过")
+    else:
+        for object_key in used_keys:
+            expected = measured.get(object_key)
+            if not expected:
+                continue
+            mesh_path = models.get(object_key, "")
+            if not mesh_path or not Path(mesh_path).is_file():
+                continue
+            scale = float(scales.get(object_key,
+                                     pipeline.get("mesh_scale_to_meters", 1.0)))
+            mesh = trimesh.load(mesh_path, process=False)
+            if isinstance(mesh, trimesh.Scene):
+                mesh = mesh.dump(concatenate=True)
+            extent_mm = np.sort(
+                (np.asarray(mesh.bounds, dtype=float)[1]
+                 - np.asarray(mesh.bounds, dtype=float)[0]) * scale * 1000.0
+            )
+            cad_height = float(extent_mm[2])          # 最长边 = 高度(直立物体)
+            cad_diameter = float(extent_mm[1])        # 次长边 = 直径
+            want_height = float(expected["height"])
+            want_diameter = float(expected["diameter"])
+            bad = []
+            if abs(cad_height - want_height) > max(3.0, want_height * 0.05):
+                bad.append("高 CAD {:.1f} vs 实测 {:.1f}".format(
+                    cad_height, want_height))
+            if abs(cad_diameter - want_diameter) > max(3.0, want_diameter * 0.05):
+                bad.append("直径 CAD {:.1f} vs 实测 {:.1f}".format(
+                    cad_diameter, want_diameter))
+            if bad:
+                problems.append(
+                    "{} 的 CAD 缩放与尺子实测不符（{}）。抓取高度正比于物体高度，"
+                    "缩放错就会压爆或抓空 —— 改 object_model_scales。".format(
+                        object_key, "；".join(bad))
+                )
+                print("  ❌ {:<10} {}".format(object_key, "；".join(bad)))
+            else:
+                print("  ✓ {:<10} 高 {:.1f}mm 直径 {:.1f}mm 与实测相符".format(
+                    object_key, cad_height, cad_diameter))
+    if unmeasured:
+        notes.append(
+            "以下物体的 CAD 缩放**未经尺子核对**：{}。"
+            "缩放错会直接算错抓取高度；量完填进 measured_object_mm 即可自动校验。"
+            .format("、".join(unmeasured))
+        )
+        print("  ⚠️ 未核对: {}".format("、".join(unmeasured)))
+        print("     （运行时还有一道点云交叉校验兜底，但尺子最可靠）")
+
     # 5) 工具坐标系一致性
     print("\n[5] 工具坐标系 / 夹爪几何一致性")
     competition_path = Path(competition_config)

@@ -158,6 +158,113 @@ class GraspHeightRuleTest(unittest.TestCase):
         self.assertAlmostEqual(info["requested_engage_mm"], 100.0, places=3)
 
 
+class OriginInvarianceTest(unittest.TestCase):
+    """抓取点与**网格原点在哪**完全无关 —— 所以不需要去"修复"任何模型的原点。
+
+    可乐/雪碧的原点是对的（已用尺子验证），苹果/雀巢的原点偏了几十毫米。
+    本方法用包围盒 8 角点的均值当中心，而刚体变换下角点均值恒等于包围盒中心，
+    与原点位置无关。下面把这条性质钉死：同一个物体、同一个摆放，只把网格原点
+    人为挪走，抓取点必须一模一样。
+    """
+
+    def _grasp_point(self, origin_offset_mm):
+        """物体固定摆在桌面上，只改变网格原点的定义位置。"""
+        height, diameter = 115.0, 66.0
+        bounds = _bounds(diameter, height,
+                         origin_offset_mm=origin_offset_mm, long_axis=2)
+        # 让包围盒底面始终落在 z=0：原点位置随偏移反向移动
+        origin_z = height / 2.0 - origin_offset_mm
+        corrected, info = apply_grasp_height_rule(
+            _grasp_at(origin_z), _pose(origin_z), bounds, "cylinder", GRIPPER
+        )
+        return corrected[:3, 3] * 1000.0, info
+
+    def test_moving_the_mesh_origin_does_not_move_the_grasp_point(self):
+        reference, reference_info = self._grasp_point(0.0)
+        for offset in (-74.5, -49.1, 0.0, 30.0, 200.0):
+            xyz, info = self._grasp_point(offset)
+            np.testing.assert_allclose(
+                xyz, reference, atol=1e-9,
+                err_msg="原点偏移 {}mm 改变了抓取点".format(offset),
+            )
+            self.assertAlmostEqual(
+                info["object_top_mm"], reference_info["object_top_mm"], places=9
+            )
+            self.assertAlmostEqual(
+                info["engage_mm"], reference_info["engage_mm"], places=9
+            )
+
+    def test_a_correct_origin_gives_exactly_the_same_answer_as_before(self):
+        """对可乐/雪碧这类原点已经正确的模型，本方法与"直接用原点"结果一致。
+
+        也就是说这次改动**没有动**已经验证过的那两个模型的行为。
+        """
+        xyz, _info = self._grasp_point(0.0)
+        # 原点在几何中心时，包围盒中心 == 原点 -> XY 与原点一致
+        self.assertAlmostEqual(xyz[0], 0.0, places=9)
+        self.assertAlmostEqual(xyz[1], 0.0, places=9)
+
+
+class CloudCrossCheckTest(unittest.TestCase):
+    """网格缩放只有可乐/雪碧用尺子对过，其余是按模型单位推的。
+
+    缩放错 -> 物体高度错 -> 抓取高度错，而那正是压爆的成因。点云是唯一不依赖
+    CAD 的第二来源。
+    """
+
+    def _cloud(self, top_mm, count=200, xy=(0.0, 0.0)):
+        points = np.zeros((count, 3))
+        points[:, 0] = xy[0]
+        points[:, 1] = xy[1]
+        points[:, 2] = top_mm
+        return points
+
+    def test_agreeing_cloud_passes_and_is_reported(self):
+        bounds = _bounds(66.0, 115.0)
+        _corrected, info = apply_grasp_height_rule(
+            _grasp_at(57.5), _pose(57.5), bounds, "cylinder", GRIPPER,
+            cloud_user1_mm=self._cloud(115.0),
+        )
+        self.assertEqual(info["reasons"], [])
+        self.assertAlmostEqual(info["cloud_top_mm"], 115.0, places=3)
+        self.assertEqual(info["cloud_points_used"], 200)
+
+    def test_a_wrong_mesh_scale_is_caught_by_the_cloud(self):
+        """模拟缩放错一倍：CAD 说 230mm 高，点云说顶面只有 115mm。"""
+        bounds = _bounds(66.0, 230.0)
+        _corrected, info = apply_grasp_height_rule(
+            _grasp_at(115.0), _pose(115.0), bounds, "cylinder", GRIPPER,
+            cloud_user1_mm=self._cloud(115.0),
+        )
+        self.assertTrue(
+            any("object_model_scales" in reason for reason in info["reasons"]),
+            info["reasons"],
+        )
+
+    def test_no_cloud_is_reported_as_unverified_not_as_failure(self):
+        bounds = _bounds(66.0, 115.0)
+        _corrected, info = apply_grasp_height_rule(
+            _grasp_at(57.5), _pose(57.5), bounds, "cylinder", GRIPPER,
+            cloud_user1_mm=None,
+        )
+        self.assertEqual(info["reasons"], [])
+        self.assertIsNone(info["cloud_top_mm"])
+
+    def test_a_taller_neighbour_outside_the_object_radius_is_ignored(self):
+        """矩形掩膜里混着邻近物体；按物体半径取点才不会被更高的邻居污染。"""
+        bounds = _bounds(66.0, 115.0)
+        cloud = np.vstack([
+            self._cloud(115.0, count=150),
+            self._cloud(300.0, count=150, xy=(200.0, 0.0)),   # 远处更高的物体
+        ])
+        _corrected, info = apply_grasp_height_rule(
+            _grasp_at(57.5), _pose(57.5), bounds, "cylinder", GRIPPER,
+            cloud_user1_mm=cloud,
+        )
+        self.assertEqual(info["reasons"], [])
+        self.assertAlmostEqual(info["cloud_top_mm"], 115.0, places=3)
+
+
 class GripperGeometryConfigTest(unittest.TestCase):
     def test_competition_yaml_carries_the_measured_cavity_depth(self):
         from pathlib import Path

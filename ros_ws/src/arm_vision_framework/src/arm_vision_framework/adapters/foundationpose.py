@@ -189,6 +189,76 @@ class FoundationPoseRuntime:
         self._trimesh = trimesh
 
     @staticmethod
+    def _normalize_visual(trimesh_module, mesh):
+        """把 glTF/GLB 的 PBR 材质归一化成 FoundationPose 能直接消费的形式。
+
+        FoundationPose 的 ``Utils.make_mesh_tensors`` 只认两种形态::
+
+            isinstance(mesh.visual, TextureVisuals) -> 读 mesh.visual.material.image
+            否则                                     -> 读 mesh.visual.vertex_colors
+
+        OBJ 走第一条没问题（``material.image`` 有值）。但 **GLB 加载后是
+        ``PBRMaterial``，``.image`` 恒为 None**，纹理挂在 ``baseColorTexture``
+        上 —— 于是第一条分支直接
+        ``AttributeError: 'NoneType' object has no attribute 'convert'``。
+        2026-08-22 实测: ``可口可乐.glb`` 与 ``雀巢咖啡.glb`` 都会这样崩。
+
+        这里按有没有可用纹理分两种处理：
+
+        - 有（可乐: baseColorTexture 是 467x1830 的图）-> ``to_simple()`` 转成
+          ``SimpleMaterial``，``.image`` 就有了，仍走纹理分支；
+        - 没有（雀巢: 只有 baseColorFactor 纯色 [37,14,5]）-> 换成
+          ``ColorVisuals`` 并把纯色铺满所有顶点，改走顶点色分支。
+          注意必须**替换 visual 对象本身**：只给 TextureVisuals 赋
+          ``vertex_colors`` 不会改变 isinstance 判定，照样崩。
+
+        无纹理的模型只有单一颜色，render-and-compare 的信息量明显更少，位姿
+        精度会比有纹理的差 —— 用之前值得单独验一次。
+        """
+        texture_visuals = trimesh_module.visual.texture.TextureVisuals
+        visual = getattr(mesh, "visual", None)
+        if not isinstance(visual, texture_visuals):
+            return mesh
+        material = getattr(visual, "material", None)
+        if getattr(material, "image", None) is not None:
+            return mesh                     # OBJ 那种，本来就是对的
+
+        simple = None
+        if material is not None and hasattr(material, "to_simple"):
+            try:
+                simple = material.to_simple()
+            except Exception:               # noqa: BLE001 - 材质格式千奇百怪
+                simple = None
+        uv = getattr(visual, "uv", None)
+        if (
+            simple is not None
+            and getattr(simple, "image", None) is not None
+            and uv is not None
+            and len(uv) == len(mesh.vertices)
+        ):
+            visual.material = simple
+            return mesh
+
+        color = getattr(material, "main_color", None)
+        if color is None:
+            color = getattr(material, "baseColorFactor", None)
+        color = np.asarray(
+            color if color is not None else [150, 150, 150, 255]
+        ).reshape(-1)
+        if color.size < 3:
+            color = np.asarray([150, 150, 150, 255])
+        if color.dtype.kind == "f":         # glTF 用 0..1 浮点
+            color = np.clip(color * 255.0, 0, 255)
+        rgba = np.zeros(4, dtype=np.uint8)
+        rgba[:3] = color[:3].astype(np.uint8)
+        rgba[3] = color[3].astype(np.uint8) if color.size >= 4 else 255
+        mesh.visual = trimesh_module.visual.ColorVisuals(
+            mesh=mesh,
+            vertex_colors=np.tile(rgba, (len(mesh.vertices), 1)),
+        )
+        return mesh
+
+    @staticmethod
     def _load_mesh(trimesh_module, mesh_path, scale_to_meters):
         try:
             mesh = trimesh_module.load(str(mesh_path), process=False)
@@ -211,13 +281,19 @@ class FoundationPoseRuntime:
             raise BackendUnavailable(
                 "FoundationPose mesh has invalid or insufficient geometry"
             )
+        # GLB/glTF 的 PBR 材质要先归一化，否则 make_mesh_tensors 会在
+        # material.image is None 上崩（见 _normalize_visual）。
+        mesh = FoundationPoseRuntime._normalize_visual(trimesh_module, mesh)
         # make_mesh_tensors expects visual data for a colorless OBJ/STL.
-        colors = getattr(mesh.visual, "vertex_colors", None)
-        if colors is None or len(colors) != len(vertices):
-            mesh.visual.vertex_colors = np.tile(
-                np.asarray([150, 150, 150, 255], dtype=np.uint8),
-                (len(vertices), 1),
-            )
+        # 只对非纹理视觉补顶点色 —— 给 TextureVisuals 赋 vertex_colors 既不改变
+        # isinstance 判定，也没有任何作用。
+        if not isinstance(mesh.visual, trimesh_module.visual.texture.TextureVisuals):
+            colors = getattr(mesh.visual, "vertex_colors", None)
+            if colors is None or len(colors) != len(vertices):
+                mesh.visual.vertex_colors = np.tile(
+                    np.asarray([150, 150, 150, 255], dtype=np.uint8),
+                    (len(vertices), 1),
+                )
         return mesh
 
     def _ensure_estimator(self, mesh_path, mesh_scale_to_meters):

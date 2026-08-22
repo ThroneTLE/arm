@@ -58,6 +58,25 @@ yolo_to_object:
   black_cola_bottle: cola       # 旧权重的名字
   black_red_cola_bottle: cola   # 新权重(merged_best.pt)改的名字
 
+# 尺子实测的真实尺寸（mm）。填了就会在 check_vision_assets 里与 CAD 缩放后的
+# 尺寸比对。
+#
+# 为什么专门盯缩放：抓取高度是从网格包围盒算的（competition_pipeline/grasp_geometry.py）。
+# 「原点偏了」已经被"取包围盒中心"这个做法完全免疫，**不需要去改任何模型的原点**；
+# 但「缩放错了」没有任何东西能免疫 —— 它会让物体高度整个错掉，而抓取高度正比于
+# 物体高度，算错的后果就是压爆或抓空。
+#
+# 2026-08-22 现状：只有 sprite / cola 用尺子核对过。其余是按模型自带单位推的。
+# 量一个填一个，5 分钟能把风险清零。
+measured_object_mm:
+  sprite:  {diameter: 57.0, height: 146.5}   # ✅ 尺子核对过
+  cola:    {diameter: 54.9, height: 245.0}   # ✅ 尺子核对过
+  # 以下**未核对**，量完把注释去掉即可自动参与校验：
+  # nescafe: {diameter: 60.0, height: 169.0}
+  # apple:   {diameter: 75.0, height: 88.0}
+  # orange:  {diameter: 70.0, height: 70.0}
+  # lemon:   {diameter: 68.1, height: 89.9}
+
 grasp_rules:
   wangzai: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
   sprite: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}

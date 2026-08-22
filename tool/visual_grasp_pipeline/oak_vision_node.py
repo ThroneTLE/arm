@@ -334,8 +334,34 @@ def load_gripper_geometry(competition_yaml: Path) -> dict:
     }
 
 
+def masked_cloud_user1_mm(snapshot, mask, user1_from_tcp, tcp_from_camera):
+    """掩膜内的深度点云，变换到用户坐标系1，单位毫米。返回 (N,3)。
+
+    用来**独立**校验网格算出的物体顶面高度。网格缩放错 -> 物体高度错 ->
+    抓取高度错，而抓取高度错的后果正是压爆；点云是唯一不依赖 CAD 的第二来源。
+
+    注意掩膜是 YOLO 的**矩形框**（现场决定不用实例分割输出），框内混着桌面和
+    邻近物体，所以调用方必须按物体 XY 中心取半径内的点，不能直接取 max Z。
+    """
+    from tool.object_model_builder.rgbd_geometry import (
+        depth_pixels_to_points, transform_points,
+    )
+
+    depth = np.asarray(snapshot.depth_m, dtype=np.float32).copy()
+    depth[np.asarray(mask) <= 0] = 0.0
+    points_camera, _pixels = depth_pixels_to_points(depth, snapshot.intrinsics)
+    if points_camera.size == 0:
+        return np.empty((0, 3), dtype=np.float64)
+    user1_from_camera = np.asarray(user1_from_tcp, dtype=np.float64) @ np.asarray(
+        tcp_from_camera, dtype=np.float64
+    )
+    return transform_points(points_camera, user1_from_camera) * 1000.0
+
+
 def apply_grasp_height_rule(user1_grasp, user1_from_object, mesh_bounds_m,
-                            grasp_type, gripper_geometry):
+                            grasp_type, gripper_geometry,
+                            cloud_user1_mm=None,
+                            cloud_tolerance_mm=20.0):
     """把抓取点的 XYZ 换成"不会压爆、也不会怼进桌面"的位置。
 
     返回 ``(修正后的 4x4, 说明 dict 或 None)``。姿态原样保留 —— 这里只动位置。
@@ -350,7 +376,8 @@ def apply_grasp_height_rule(user1_grasp, user1_from_object, mesh_bounds_m,
     说明，由调用方决定是否放行 —— 没有物体尺寸就无法保证不压爆。
     """
     from competition_pipeline.grasp_geometry import (
-        check_graspable, grasp_height_mm, object_extent_user1,
+        check_graspable, cloud_top_consistency, grasp_height_mm,
+        object_extent_user1,
     )
 
     if mesh_bounds_m is None:
@@ -376,6 +403,28 @@ def apply_grasp_height_rule(user1_grasp, user1_from_object, mesh_bounds_m,
             jaw_max_open_mm=float(gripper_geometry["jaw_max_open_mm"]),
             width_margin_mm=float(gripper_geometry["width_margin_mm"]),
         )
+
+    # 点云交叉校验：网格缩放只有可乐/雪碧用尺子对过，其余是按模型单位推的。
+    # 缩放错 -> 物体高度错 -> 抓取高度错，而那正是压爆的成因。点云是唯一
+    # 不依赖 CAD 的第二来源，对不上就拒绝，让人先去查缩放而不是去撞物体。
+    cloud_top_mm = None
+    cloud_points_used = 0
+    if cloud_user1_mm is not None and len(cloud_user1_mm):
+        agrees, cloud_top_mm, cloud_points_used = cloud_top_consistency(
+            extent.z_top_mm, cloud_user1_mm, extent.center_xy_mm,
+            radius_mm=max(15.0, extent.grasp_width_mm * 0.6),
+            tolerance_mm=float(cloud_tolerance_mm),
+        )
+        if not agrees:
+            reasons.append(
+                "CAD 算出的顶面 {:.1f}mm 与深度点云的 {:.1f}mm 相差 {:.1f}mm "
+                "(>{:.0f}mm)。多半是 object_model_scales 缩放不对 —— 高度算错就会"
+                "压爆或抓空，先核对模型尺寸再执行。".format(
+                    extent.z_top_mm, cloud_top_mm,
+                    abs(cloud_top_mm - extent.z_top_mm), float(cloud_tolerance_mm),
+                )
+            )
+
     return corrected, {
         "available": True,
         "rule": height.rule,
@@ -386,6 +435,8 @@ def apply_grasp_height_rule(user1_grasp, user1_from_object, mesh_bounds_m,
         "object_height_mm": extent.height_mm,
         "object_top_mm": extent.z_top_mm,
         "grasp_width_mm": extent.grasp_width_mm,
+        "cloud_top_mm": cloud_top_mm,
+        "cloud_points_used": cloud_points_used,
         "reasons": reasons,
     }
 
@@ -1129,12 +1180,21 @@ class OakVisionNode:
                 #     按原点抓会往桌面下方伸 -> 把夹爪怼进桌子。
                 # 这里做纯后处理，只改抓取点的位置，不动姿态、不动 FoundationPose、
                 # 不改任何坐标约定。规则见 competition_pipeline.grasp_geometry。
+                try:
+                    cloud_user1_mm = masked_cloud_user1_mm(
+                        snapshot, mask, tcp_user1_at_capture, self._hand_eye
+                    )
+                except Exception:
+                    # 点云只是交叉校验；建不出来就退化为"只有 CAD 一个来源"，
+                    # 不阻塞主流程，但下面会如实标注未校验。
+                    cloud_user1_mm = None
                 user1_grasp, grasp_height_info = apply_grasp_height_rule(
                     user1_grasp,
                     user1_from_object,
                     estimator.mesh_bounds,
                     rule.type,
                     self._gripper_geometry,
+                    cloud_user1_mm=cloud_user1_mm,
                 )
                 if grasp_height_info is not None:
                     self._last_grasp_height_info = grasp_height_info
@@ -1319,6 +1379,18 @@ class OakVisionNode:
                     ]
                     text += ("✋ 一键抓取已就绪：抓取 {} → 放置 {} （姿态=复位位置初始姿态）\n".format(
                         grasp, np.round(self._last_place_xyz_mm, 2).tolist()))
+                    cloud_top = info.get("cloud_top_mm")
+                    if cloud_top is None:
+                        cloud_note = "   ⚠️ 顶面高度未经点云交叉校验（只有 CAD 一个来源）\n"
+                    else:
+                        cloud_note = (
+                            "   顶面交叉校验：CAD {:.1f}mm vs 点云 {:.1f}mm"
+                            "（差 {:.1f}mm，{} 个点）\n".format(
+                                info.get("object_top_mm", float("nan")), cloud_top,
+                                abs(cloud_top - info.get("object_top_mm", 0.0)),
+                                info.get("cloud_points_used", 0),
+                            )
+                        )
                     text += (
                         "   抓取高度规则：{rule}｜物体高 {h:.1f}mm 顶面 {top:.1f}mm"
                         "｜伸进夹爪 {e:.1f}mm（腔体 {c:.0f}mm）{clamp}\n"
