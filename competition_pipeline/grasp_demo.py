@@ -73,25 +73,32 @@ class GraspDemoWorker(QThread):
             self.done.emit(False, "抓取失败：{}".format(error))
 
 
-def _pose_spins(group, prefix):
-    """XYZ(mm) 与 ABC(°) 各占一行输入。返回 dict。"""
+def _pose_rows(group):
+    """紧凑布局：X/Y/Z 一行 + A/B/C 一行 + 按钮行。返回 dict。"""
     out = {}
-    for i, (axis, unit, rng) in enumerate([
-        ("X", " mm", (-2000.0, 2000.0)),
-        ("Y", " mm", (-2000.0, 2000.0)),
-        ("Z", " mm", (-2000.0, 2000.0)),
-        ("A", " °", (-360.0, 360.0)),
-        ("B", " °", (-180.0, 180.0)),
-        ("C", " °", (-360.0, 360.0)),
-    ]):
+
+    def _add(axis, unit, rng, row, col):
         spin = QDoubleSpinBox()
         spin.setDecimals(3)
         spin.setRange(*rng)
         spin.setSuffix(unit)
         spin.setValue(0.0)
-        group.addWidget(QLabel(prefix + axis), i, 0)
-        group.addWidget(spin, i, 1)
+        group.addWidget(QLabel(axis), row, col * 2)
+        group.addWidget(spin, row, col * 2 + 1)
         out[axis] = spin
+
+    for i, (axis, unit, rng) in enumerate([
+        ("X", " mm", (-2000.0, 2000.0)),
+        ("Y", " mm", (-2000.0, 2000.0)),
+        ("Z", " mm", (-2000.0, 2000.0)),
+    ]):
+        _add(axis, unit, rng, 0, i)
+    for i, (axis, unit, rng) in enumerate([
+        ("A", " °", (-360.0, 360.0)),
+        ("B", " °", (-180.0, 180.0)),
+        ("C", " °", (-360.0, 360.0)),
+    ]):
+        _add(axis, unit, rng, 1, i)
     return out
 
 
@@ -101,51 +108,31 @@ class _ReadbackThread(QThread):
     done = pyqtSignal(object)
 
     def __init__(self, jog_provider, parent=None):
-        super().__init__(parent)
-        self.jog_provider = jog_provider
-
-    def run(self):
-        try:
-            jog = self.jog_provider()
-            xyz, abc_deg = jog.current_pose()
-            self.done.emit(("OK", xyz, abc_deg))
-        except Exception as error:
-            self.done.emit(("ERR", str(error)))
-
-
-class GraspDemoPanel(QGroupBox):
-    """一键抓取（用户坐标系1）：设抓取位/放置位 + 一键执行。"""
-
-    def __init__(self, jog_provider, parent=None):
-        super().__init__("一键抓取 demo（用户坐标系1）· 设抓取位/放置位后一键执行", parent)
+        super().__init__("一键抓取（用户坐标系1）· 移到目标后【设为当前…】再一键执行", parent)
         self.jog_provider = jog_provider
         self._workers = []
         self._busy = False
 
         grid = QGridLayout(self)
-        # 抓取位行
-        g_box = QGroupBox("抓取位（XYZ + ABC°，先移动到目标再【设为当前抓取位】）")
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+
+        g_box = QGroupBox("抓取位")
         g_layout = QGridLayout(g_box)
-        self.g_spins = {}
-        for i, spin in enumerate(_pose_spins(g_layout, "").values()):
-            self.g_spins[list("XYZABC")[i]] = spin
+        self.g_spins = _pose_rows(g_layout)
         self.g_set = QPushButton("设为当前抓取位")
         self.g_set.clicked.connect(lambda: self._read_into(self.g_spins, "抓取位"))
-        g_layout.addWidget(self.g_set, 1, 0, 1, 2)
-        grid.addWidget(g_box, 0, 0)
+        g_layout.addWidget(self.g_set, 2, 0, 1, 6)
+        grid.addWidget(g_box, 0, 0, 1, 4)
 
-        # 放置位行
-        p_box = QGroupBox("放置位（XYZ + ABC°）")
+        p_box = QGroupBox("放置位")
         p_layout = QGridLayout(p_box)
-        self.p_spins = {}
-        for i, spin in enumerate(_pose_spins(p_layout, "").values()):
-            self.p_spins[list("XYZABC")[i]] = spin
+        self.p_spins = _pose_rows(p_layout)
         self.p_set = QPushButton("设为当前放置位")
         self.p_set.clicked.connect(lambda: self._read_into(self.p_spins, "放置位"))
-        p_layout.addWidget(self.p_set, 1, 0, 1, 2)
-        grid.addWidget(p_box, 1, 0)
+        p_layout.addWidget(self.p_set, 2, 0, 1, 6)
+        grid.addWidget(p_box, 1, 0, 1, 4)
 
-        # 参数
         self.lift = QDoubleSpinBox()
         self.lift.setRange(10.0, 500.0)
         self.lift.setValue(60.0)
@@ -156,8 +143,8 @@ class GraspDemoPanel(QGroupBox):
         self.vel.setSuffix(" mm/s")
         grid.addWidget(QLabel("抬起高度"), 2, 0)
         grid.addWidget(self.lift, 2, 1)
-        grid.addWidget(QLabel("速度"), 3, 0)
-        grid.addWidget(self.vel, 3, 1)
+        grid.addWidget(QLabel("速度"), 2, 2)
+        grid.addWidget(self.vel, 2, 3)
 
         self.btn_go = QPushButton("一键抓取")
         self.btn_estop = QPushButton("急停")
@@ -166,11 +153,11 @@ class GraspDemoPanel(QGroupBox):
         )
         self.btn_go.clicked.connect(self._on_go)
         self.btn_estop.clicked.connect(self._on_estop)
-        grid.addWidget(self.btn_go, 4, 0)
-        grid.addWidget(self.btn_estop, 4, 1)
+        grid.addWidget(self.btn_go, 3, 0, 1, 2)
+        grid.addWidget(self.btn_estop, 3, 2, 1, 2)
 
-        self.status = QLabel("就绪：先把机器人移到抓取位/放置位，各点【设为当前…】")
-        grid.addWidget(self.status, 5, 0, 1, 2)
+        self.status = QLabel("就绪：把机器人移到抓取位/放置位，各点一次【设为当前…】")
+        grid.addWidget(self.status, 4, 0, 1, 4)
 
     # -- helpers ------------------------------------------------------------
     def _pose_of(self, spins):
