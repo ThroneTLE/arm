@@ -53,6 +53,8 @@ from tool.visual_grasp_pipeline.geometry import (
 )
 from tool.visual_grasp_pipeline.tracking import StableTracker, parse_sequence
 from tool.visual_grasp_pipeline.ucs_grasp import (
+    APPROACH_CLEARANCE_MM,
+    TABLE_HALF_MM,
     UCS_PLACE_X_MM,
     UCS_PLACE_Y_MM,
     UcsGraspExecutorError,
@@ -441,6 +443,54 @@ def apply_grasp_height_rule(user1_grasp, user1_from_object, mesh_bounds_m,
     }
 
 
+def format_grasp_summary(grasp_xyz_mm, place_xyz_mm, info, jaw_cavity_depth_mm):
+    """抓取就绪时给操作者看的那段文本。
+
+    抽成独立函数是为了能离线测 —— 这条路径在 2026-08-22 之前**从未真正跑过**
+    （识别一直正常，抓取没执行成功过），格式化里一个 KeyError 就会在现场变成
+    一条"抓取失败"。
+
+    显示的内容按"人能用尺子核对"来选：物体高、顶面、伸入深度、夹持宽度，
+    以及 CAD 与点云两个独立来源的顶面对比。
+    """
+    lines = [
+        "✋ 一键抓取已就绪：抓取 {} → 放置 {} （姿态=复位位置初始姿态）".format(
+            list(grasp_xyz_mm), list(place_xyz_mm)
+        )
+    ]
+    clamp = ""
+    if info.get("clamped"):
+        clamp = "｜⚠️ 已按腔体深度抬高（原需 {:.1f}mm）".format(
+            info.get("requested_engage_mm", float("nan"))
+        )
+    lines.append(
+        "   抓取高度规则：{rule}｜物体高 {h:.1f}mm 顶面 {top:.1f}mm"
+        "｜伸进夹爪 {e:.1f}mm（腔体 {c:.0f}mm）{clamp}".format(
+            rule=info.get("rule", "?"),
+            h=info.get("object_height_mm", float("nan")),
+            top=info.get("object_top_mm", float("nan")),
+            e=info.get("engage_mm", float("nan")),
+            c=float(jaw_cavity_depth_mm),
+            clamp=clamp,
+        )
+    )
+    lines.append("   夹持宽度 {:.1f}mm".format(
+        info.get("grasp_width_mm", float("nan"))))
+    cloud_top = info.get("cloud_top_mm")
+    if cloud_top is None:
+        lines.append("   ⚠️ 顶面高度未经点云交叉校验（只有 CAD 一个来源）")
+    else:
+        lines.append(
+            "   顶面交叉校验：CAD {:.1f}mm vs 点云 {:.1f}mm（差 {:.1f}mm，{} 个点）"
+            .format(
+                info.get("object_top_mm", float("nan")), cloud_top,
+                abs(float(cloud_top) - float(info.get("object_top_mm", 0.0))),
+                info.get("cloud_points_used", 0),
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
 def compose_user1_object(user1_from_tcp, tcp_from_camera, camera_from_object):
     """Map one camera-frame object pose into controller UCS1."""
     from competition_pipeline.geometry import as_transform
@@ -556,8 +606,20 @@ class LiveTcpPoseReader:
 
 
 def render_workspace_3d(workspace_from_object, grasp, mesh_bounds, pose_frame,
-                        debug_dir, out_name="workspace_3d.png"):
-    """旧版 vision_node 同款 3D 工作台视图: 工作系原点 + 物体位姿框 + 抓取三叉戟."""
+                        debug_dir, out_name="workspace_3d.png",
+                        table_half_size_mm=None, place_xy_mm=None,
+                        approach_clearance_mm=None):
+    """3D 工作台视图: 桌面 + 工作系原点 + 物体位姿框 + 抓取三叉戟 + 放置点。
+
+    ``table_half_size_mm`` 给定时画出 49.3cm 方桌（用户坐标系1 的 z=0 就是桌面），
+    并把视野固定成"整张桌子始终可见" —— 这样每次渲染的构图一致，既方便现场核对
+    物体到底落在桌面哪个位置，也适合答辩演示。
+
+    ``place_xy_mm`` 画出放置点，``approach_clearance_mm`` 用虚线画出"垂直进 /
+    高位横移 / 垂直出"的实际路径，方便一眼看出会不会扫到别的物品。
+
+    这几个参数都是可选的：不给就退化成旧版视图（只有物体与抓取点）。
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -576,6 +638,27 @@ def render_workspace_3d(workspace_from_object, grasp, mesh_bounds, pose_frame,
 
     fig = plt.figure(figsize=(6, 6), dpi=100)
     ax = fig.add_subplot(111, projection="3d")
+
+    # 桌面: 49.3cm 方桌, 原点在桌面中心, z=0 即桌面。
+    table_half_m = None
+    if table_half_size_mm:
+        table_half_m = float(table_half_size_mm) / 1000.0
+        square = np.array([
+            [-table_half_m, -table_half_m, 0.0],
+            [table_half_m, -table_half_m, 0.0],
+            [table_half_m, table_half_m, 0.0],
+            [-table_half_m, table_half_m, 0.0],
+        ])
+        try:
+            from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+            surface = Poly3DCollection([square], alpha=0.18)
+            surface.set_facecolor("#4a90d9")
+            surface.set_edgecolor("#8ab4e8")
+            ax.add_collection3d(surface)
+        except Exception:
+            pass
+        loop = np.vstack([square, square[:1]])
+        ax.plot(loop[:, 0], loop[:, 1], loop[:, 2], color="#8ab4e8", lw=1.5)
 
     # 工作系原点三叉戟(0.12 m, 同旧版 draw_3d)
     length = 0.12
@@ -614,10 +697,45 @@ def render_workspace_3d(workspace_from_object, grasp, mesh_bounds, pose_frame,
     ax.scatter([g0[0]], [g0[1]], [g0[2]], color="magenta", s=60, edgecolors="k")
     ax.text(g0[0], g0[1], g0[2] + 0.02, "  grasp", color="magenta", fontsize=9)
 
-    span = 0.35
-    ax.set_xlim(origin[0] - span, origin[0] + span)
-    ax.set_ylim(origin[1] - span, origin[1] + span)
-    ax.set_zlim(origin[2] - span, origin[2] + span)
+    # 放置点 + 实际路径(垂直进 / 高位横移 / 垂直出)
+    place_point = None
+    if place_xy_mm is not None:
+        place_point = np.asarray(
+            [float(place_xy_mm[0]) / 1000.0, float(place_xy_mm[1]) / 1000.0,
+             float(g0[2])], dtype=np.float64,
+        )
+        ax.scatter([place_point[0]], [place_point[1]], [place_point[2]],
+                   color="#2ecc71", s=60, marker="s", edgecolors="k")
+        ax.text(place_point[0], place_point[1], place_point[2] + 0.02,
+                "  place", color="#2ecc71", fontsize=9)
+        if approach_clearance_mm:
+            high = float(g0[2]) + float(approach_clearance_mm) / 1000.0
+            path = np.array([
+                [g0[0], g0[1], high],
+                [g0[0], g0[1], g0[2]],
+                [g0[0], g0[1], high],
+                [place_point[0], place_point[1], high],
+                [place_point[0], place_point[1], place_point[2]],
+            ])
+            ax.plot(path[:, 0], path[:, 1], path[:, 2],
+                    color="#f39c12", lw=1.6, linestyle=":")
+
+    if table_half_m is not None:
+        # 整张桌子始终可见：构图固定，方便核对物体落在桌面哪个位置。
+        top = [origin[2], float(g0[2])]
+        if place_point is not None:
+            top.append(float(place_point[2]))
+        if approach_clearance_mm:
+            top.append(float(g0[2]) + float(approach_clearance_mm) / 1000.0)
+        height = max(0.30, max(top) * 1.15)
+        ax.set_xlim(-table_half_m * 1.1, table_half_m * 1.1)
+        ax.set_ylim(-table_half_m * 1.1, table_half_m * 1.1)
+        ax.set_zlim(min(0.0, min(top)) - 0.02, height)
+    else:
+        span = 0.35
+        ax.set_xlim(origin[0] - span, origin[0] + span)
+        ax.set_ylim(origin[1] - span, origin[1] + span)
+        ax.set_zlim(origin[2] - span, origin[2] + span)
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Y (m)")
     ax.set_zlabel("Z (m)")
@@ -1206,6 +1324,9 @@ class OakVisionNode:
                     estimator.mesh_bounds,
                     "用户坐标系 (UCS1)",
                     self.config.debug_dir,
+                    table_half_size_mm=TABLE_HALF_MM,
+                    place_xy_mm=(self.place_x_mm, self.place_y_mm),
+                    approach_clearance_mm=APPROACH_CLEARANCE_MM,
                 )
                 user1_out = Path(self.config.grasp_file).with_name(
                     "grasp_user1.npy"
@@ -1371,40 +1492,17 @@ class OakVisionNode:
                         text += "⛔ 抓取被拒绝：{}\n".format("；".join(blocked))
                         self.ui_queue.put(("grasp_ready", None))
                         self.ui_queue.put(("result", text))
-                        self.ui_queue.put(("status", "目标序列算法运行完成"))
+                        # 序列里还可能有后续目标，"运行完成"由循环之后统一发。
                         continue
                     self._last_grasp_xyz_mm = grasp
                     self._last_place_xyz_mm = [
                         self.place_x_mm, self.place_y_mm, float(grasp[2])
                     ]
-                    text += ("✋ 一键抓取已就绪：抓取 {} → 放置 {} （姿态=复位位置初始姿态）\n".format(
-                        grasp, np.round(self._last_place_xyz_mm, 2).tolist()))
-                    cloud_top = info.get("cloud_top_mm")
-                    if cloud_top is None:
-                        cloud_note = "   ⚠️ 顶面高度未经点云交叉校验（只有 CAD 一个来源）\n"
-                    else:
-                        cloud_note = (
-                            "   顶面交叉校验：CAD {:.1f}mm vs 点云 {:.1f}mm"
-                            "（差 {:.1f}mm，{} 个点）\n".format(
-                                info.get("object_top_mm", float("nan")), cloud_top,
-                                abs(cloud_top - info.get("object_top_mm", 0.0)),
-                                info.get("cloud_points_used", 0),
-                            )
-                        )
-                    text += (
-                        "   抓取高度规则：{rule}｜物体高 {h:.1f}mm 顶面 {top:.1f}mm"
-                        "｜伸进夹爪 {e:.1f}mm（腔体 {c:.0f}mm）{clamp}\n"
-                        "   夹持宽度 {w:.1f}mm\n".format(
-                            rule=info.get("rule", "?"),
-                            h=info.get("object_height_mm", float("nan")),
-                            top=info.get("object_top_mm", float("nan")),
-                            e=info.get("engage_mm", float("nan")),
-                            c=self._gripper_geometry["jaw_cavity_depth_mm"],
-                            clamp=("｜⚠️ 已按腔体深度抬高（原需 {:.1f}mm）".format(
-                                info.get("requested_engage_mm", float("nan")))
-                                if info.get("clamped") else ""),
-                            w=info.get("grasp_width_mm", float("nan")),
-                        )
+                    text += format_grasp_summary(
+                        grasp,
+                        np.round(self._last_place_xyz_mm, 2).tolist(),
+                        info,
+                        self._gripper_geometry["jaw_cavity_depth_mm"],
                     )
                     self.ui_queue.put(("grasp_ready", (
                         list(grasp), list(self._last_place_xyz_mm)
