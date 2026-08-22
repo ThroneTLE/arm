@@ -20,7 +20,7 @@
 import threading
 
 import numpy as np
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QLabel, QPushButton,
 )
@@ -85,6 +85,13 @@ class TeleportPanel(QGroupBox):
         self.jog_provider = jog_provider
         self._workers = []          # 强引用防 QThread 被 GC（QThread 崩溃教训）
         self._busy = False
+        self._requires_readback = True   # 未确认过当前位姿前禁止传送
+        self._watchdog = QTimer(self)
+        self._watchdog.setSingleShot(True)
+        self._watchdog.setInterval(35000)
+        self._watchdog.timeout.connect(self._on_teleport_timeout)
+        # 启动后自动回读填充（避免直接传默认 (0,0,0) 的坑）
+        QTimer.singleShot(300, self._on_readback)
 
         grid = QGridLayout(self)
         self._spins = {}
@@ -147,19 +154,30 @@ class TeleportPanel(QGroupBox):
         if self._busy:
             self.status.setText("⏳ 传送中，请稍候……")
             return
+        if self._requires_readback:
+            self.status.setText("⚠️ 请先点【回读当前】确认起点（面板启动时会自动填充）")
+            return
         xyz, abc, _deg = self._pending()
         self._busy = True
         self.btn_teleport.setEnabled(False)
         self.status.setText("⏳ 传送到 X={:.2f} Y={:.2f} Z={:.2f} mm …".format(*xyz))
         worker = TeleportWorker(self.jog_provider, xyz, abc)
-
-        def _done(ok, message):
-            self._busy = False
-            self.btn_teleport.setEnabled(True)
-            self.status.setText(message)
-
-        worker.done.connect(_done)
+        worker.done.connect(self._teleport_done)
+        self._watchdog.start()
         self._keep(worker)
+
+    def _teleport_done(self, ok, message):
+        self._watchdog.stop()
+        self._busy = False
+        self.btn_teleport.setEnabled(True)
+        self.status.setText(message)
+
+    def _on_teleport_timeout(self):
+        """看门狗：35s 未完成 -> 面板必定恢复（线程不强杀，引用放弃自然终止）。"""
+        self._watchdog.stop()
+        self._busy = False
+        self.btn_teleport.setEnabled(True)
+        self.status.setText("⚠️ 传送超过 35s 未完成（可能目标超出范围/干涉），请【回读当前】核对")
 
     def _on_readback(self):
         if self._busy:
@@ -169,6 +187,8 @@ class TeleportPanel(QGroupBox):
 
         def _done(ok, payload, error):
             if ok:
+                self._requires_readback = False
+                self.btn_teleport.setEnabled(True)
                 xyz, abc_rad = payload
                 deg = np.degrees(abc_rad)
                 for k, v in zip(("X", "Y", "Z"), xyz):

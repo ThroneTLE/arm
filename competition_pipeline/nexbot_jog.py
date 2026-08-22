@@ -179,6 +179,14 @@ class NexBotTcpJog:
             np.asarray(abc_rad, dtype=float),
         )
         start_xyz = start_state.base_from_gripper[:3, 3] * 1000.0
+        distance = float(np.linalg.norm(
+            np.asarray(xyz_mm, dtype=float) - start_xyz))
+        if distance > 400.0:
+            raise RuntimeError(
+                "目标距当前 {:.0f} mm > 400mm：疑似未确认输入（默认 0,0,0）或目标超工作范围；"
+                "请先【回读当前】核对（当前 {:.2f},{:.2f},{:.2f}）".format(
+                    distance, *start_xyz)
+            )
 
         def _go(c):
             c.move_to(target, speed_scale=vel_mm_s / 1000.0)
