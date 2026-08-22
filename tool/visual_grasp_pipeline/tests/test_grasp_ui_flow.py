@@ -320,5 +320,101 @@ class GraspWorkerGlueTest(unittest.TestCase):
                 self.assertIn(("busy", False), messages)
 
 
+class _ToggleSelf:
+    """只带 on_dry_run_toggle 需要的东西。"""
+
+    class _Var:
+        def __init__(self, value):
+            self.value = bool(value)
+
+        def get(self):
+            return self.value
+
+    class _Status:
+        def __init__(self):
+            self.text = ""
+
+        def configure(self, text):
+            self.text = str(text)
+
+    def __init__(self, dry_run):
+        self._dry_run_var = self._Var(dry_run)
+        self.status = self._Status()
+        self.enable_robot_motion = not dry_run
+
+
+class MotionDefaultTest(unittest.TestCase):
+    """真实运动是默认；空跑是运行期开关，不是启动参数。
+
+    背景：现场只有三小时，"看完坐标才决定执行"是人来做的判断，把它编码成
+    "必须加命令行参数重启"只会浪费那三小时里的时间，而且重启会丢掉已算好的坐标。
+    """
+
+    def test_launching_with_no_flags_allows_real_motion(self):
+        from tool.visual_grasp_pipeline.oak_vision_node import build_parser
+
+        arguments = build_parser().parse_args([])
+        self.assertFalse(arguments.dry_run)
+
+    def test_dry_run_flag_starts_in_dry_run(self):
+        from tool.visual_grasp_pipeline.oak_vision_node import build_parser
+
+        arguments = build_parser().parse_args(["--dry-run"])
+        self.assertTrue(arguments.dry_run)
+
+    def test_the_old_flag_still_parses(self):
+        """旧脚本/旧文档里写着 --enable-robot-motion；9 点钟不能因为它报
+        'unrecognized argument' 起不来。"""
+        from tool.visual_grasp_pipeline.oak_vision_node import build_parser
+
+        arguments = build_parser().parse_args(["--enable-robot-motion"])
+        self.assertFalse(arguments.dry_run)
+
+    def test_the_checkbox_flips_motion_without_a_restart(self):
+        target = _ToggleSelf(dry_run=False)
+        target._dry_run_var.value = True
+        OakVisionNode.on_dry_run_toggle(target)
+        self.assertFalse(target.enable_robot_motion)
+        self.assertIn("空跑", target.status.text)
+
+        target._dry_run_var.value = False
+        OakVisionNode.on_dry_run_toggle(target)
+        self.assertTrue(target.enable_robot_motion)
+        self.assertIn("真实运动", target.status.text)
+
+
+class ConfirmDialogGeometryTest(unittest.TestCase):
+    """确认框是最后一道人工闸门，"会不会压爆"的那个数必须在框里。"""
+
+    class _Self:
+        def __init__(self, info):
+            self._last_grasp_height_info = info
+            self._gripper_geometry = {"jaw_cavity_depth_mm": 80.0}
+
+    def test_it_shows_the_engage_depth_against_the_cavity(self):
+        line = OakVisionNode._confirm_geometry_line(self._Self({
+            "available": True, "object_height_mm": 146.5,
+            "engage_mm": 36.6, "clamped": False,
+        }))
+        self.assertIn("146.5", line)
+        self.assertIn("36.6", line)
+        self.assertIn("80", line)
+
+    def test_it_flags_a_clamped_grasp(self):
+        line = OakVisionNode._confirm_geometry_line(self._Self({
+            "available": True, "object_height_mm": 400.0,
+            "engage_mm": 65.0, "clamped": True,
+        }))
+        self.assertIn("抬高", line)
+
+    def test_it_says_nothing_rather_than_inventing_numbers(self):
+        self.assertEqual(
+            OakVisionNode._confirm_geometry_line(self._Self({})), ""
+        )
+        self.assertEqual(
+            OakVisionNode._confirm_geometry_line(self._Self(None)), ""
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

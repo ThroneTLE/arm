@@ -20,11 +20,18 @@ TCP 位姿不用假冒：节点本来就支持 ``--tcp-xyz-mm/--tcp-rpy-deg`` �
 
 用法::
 
-    ./tool/visual_grasp_pipeline/run_sim_ui.sh                    # dry-run（默认）
-    ./tool/visual_grasp_pipeline/run_sim_ui.sh --enable-robot-motion   # 走完整执行链路
+    ./tool/visual_grasp_pipeline/run_sim_ui.sh              # 走完整执行链路（控制器是假的）
+    ./tool/visual_grasp_pipeline/run_sim_ui.sh --dry-run    # 只算坐标不发运动
 
-注意 ``--enable-robot-motion`` 在这里**不会**动任何真实硬件（控制器是假的），
-它只是让你能点到"执行抓取"那条分支，看完整的十步序列跑起来。
+这里点"执行抓取"**不会**动任何真实硬件（控制器是假的），只是让完整的十步序列跑起来。
+
+⚠️ 用户坐标系的数字在这里是**没有意义**的
+--------------------------------------
+``user1_from_object = T_user1_tcp @ 手眼 @ T_camera_object``。样本帧是以前用别的
+相机拍的静态图，当时机械臂在哪儿没有记录；这里的 ``--tcp-xyz-mm 0 0 300`` 是
+**编出来**的。于是 user1 的 XYZ 全部锚在一个虚构的位置上，Z 经常落到桌面以下
+而被安全闸门拦掉 —— 那是闸门在正常工作，不是定位算法出错。
+本模拟只用来验证**界面/交互/闸门/序列**；坐标准不准只能上实物看。
 """
 
 from __future__ import annotations

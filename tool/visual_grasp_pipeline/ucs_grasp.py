@@ -28,7 +28,8 @@
 MOVL coord=3 用户系1，与比赛 UI 同一套已验证协议栈）。运动统一走
 ``jog.move_to_ucs``，从而继承单位闸门、姿态闸门、使能前置与到位校验；
 **不要**再直调 ``jog.controller.move_to`` —— 那会绕过事务锁和全部闸门。
-所有守卫默认关闭真实运动：需显式 ``--enable-robot-motion`` 并在 UI 二次确认。
+真实运动是默认行为，人工闸门是执行前的确认框（列出抓取/放置坐标与伸入深度）；
+要只算坐标不动，在 UI 上勾【空跑】或启动时加 ``--dry-run``。
 """
 
 from __future__ import annotations

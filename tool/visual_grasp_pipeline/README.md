@@ -120,16 +120,20 @@ XYZ 和 A/B/C，相机系与工作台系仅作参考；同时保存
 - 安全硬限（用户坐标系1）：XY 不超过 ±300 mm、Z 在 10–350 mm、
   单段位移 ≤ 600 mm，超限直接拒绝并弹窗；
 - 失败/取消：立即急停，绝不把机器人留在放置位上方；
-- 默认 **Dry-run**（只打印/展示计划，不连接不运动）；真实运动需
-  `--enable-robot-motion` 启动并在确认框二次确认；
-- CLI：`--place-x-mm` / `--place-y-mm`（默认 -100 / 100，放置 Z 恒等于抓取 Z）。
+- **真实运动是默认行为**。人工闸门是执行前的确认框：它列出抓取/放置 XYZ、
+  物体高度、伸进夹爪的深度与腔体深度 —— 看过坐标再点确定。
+  只想算坐标不动，就勾界面上的【空跑(只算坐标不动)】（可随时切换，不必重启），
+  或启动时加 `--dry-run`；
+- CLI：`--place-x-mm` / `--place-y-mm`（默认 -170 / 170，放置 Z 恒等于抓取 Z）。
 
 ```bash
-# 验证计划（默认，安全）：
+# 正常启动（可实际运动；每次执行前仍有确认框）：
 ./tool/visual_grasp_pipeline/run_oak_vision_node.sh
-# 真实运动：
-./tool/visual_grasp_pipeline/run_oak_vision_node.sh --enable-robot-motion
+# 启动即空跑（只算坐标）：
+./tool/visual_grasp_pipeline/run_oak_vision_node.sh --dry-run
 ```
+
+`--enable-robot-motion` 仍然接受（旧脚本/旧文档里有），但它已经是默认，加不加一样。
 
 注意：6001/7000 为控制器单客户端端口，运行本节点时请勿同时开启比赛 UI，
 避免抢占连接。

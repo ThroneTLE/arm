@@ -7,11 +7,13 @@
 # 用法::
 #
 #     ./tool/visual_grasp_pipeline/run_sim_ui.sh
-#     ./tool/visual_grasp_pipeline/run_sim_ui.sh --enable-robot-motion
-#     ./tool/visual_grasp_pipeline/run_sim_ui.sh --enable-robot-motion --fault servo-refuse
+#     ./tool/visual_grasp_pipeline/run_sim_ui.sh --dry-run
+#     ./tool/visual_grasp_pipeline/run_sim_ui.sh --fault servo-refuse
 #
-# --enable-robot-motion 在这里不会动任何真实硬件（控制器是假的），
-# 它只是让你能点进"执行抓取"那条分支，看完整的十步序列跑起来。
+# 这里的"执行抓取"不会动任何真实硬件（控制器是假的），只是把完整的十步序列跑一遍。
+#
+# ⚠️ 用户坐标系的数字在这里没有意义：样本帧拍摄时机械臂在哪儿没有记录，
+#    静态 TCP 位姿是编出来的。坐标准不准只能上实物看，这里只验界面/闸门/序列。
 
 set -euo pipefail
 

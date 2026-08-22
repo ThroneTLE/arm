@@ -395,10 +395,42 @@ class _FrameLog:
                 ensure_ascii=False,
             )
         with self._lock:
+            handle = self._reopen_if_unlinked(handle)
             try:
                 handle.write(line + "\n")
             except (OSError, ValueError):
                 pass
+
+    def _reopen_if_unlinked(self, handle):
+        """日志文件被 ``rm`` 掉之后重新开一个。
+
+        为什么需要: 现场排查的实际操作是 UI **一直开着**, 两轮之间
+        ``rm /tmp/frames.log`` 清个场再跑一轮。但 UI 里的句柄还指着那个已经被删
+        掉的 inode, 于是第二轮的帧全写进了谁也看不见的地方 —— 偏偏那才是他要看的
+        那批。等于诊断工具在最需要它的时候悄悄哑了, 而且没有任何报错提示。
+        (``> /tmp/frames.log`` 这种截断不受影响, 那是同一个 inode。)
+
+        ``st_nlink == 0`` 的意思就是"这个 inode 已经没有名字了"。用 fstat 而不是
+        去 stat 路径: 只查已经打开的这个 fd, 不做路径解析, 也不会把"路径被换成了
+        另一个文件"误判进来。
+        """
+        try:
+            if os.fstat(handle.fileno()).st_nlink != 0:
+                return handle
+        except OSError:
+            # 连 fstat 都失败就别折腾了, 继续用老句柄。
+            return handle
+        try:
+            fresh = open(self.path, "a", encoding="utf-8", buffering=1)
+        except OSError:
+            # 重开失败 -> 保持原样。帧日志是诊断开关, 任何情况下都不许连累通信。
+            return handle
+        try:
+            handle.close()
+        except OSError:
+            pass
+        self._handle = fresh
+        return fresh
 
 
 def _open_frame_log():
@@ -525,8 +557,12 @@ class NexBotTcpTransport:
         # 换来的是"日志里的字节 = 线上的字节"(build_frame 是纯函数, 必然一致)。
         self._frame_log.write("tx", self.port, command, data, build_frame(command, data))
 
-    def _read_frame_logged(self, timeout: Optional[float] = None):
-        sink = []
+    def _read_frame_logged(self, timeout: Optional[float] = None, _raw_sink=None):
+        # 形参必须跟被遮蔽的 NexBotTcpTransport.read_frame 完全一致。否则
+        # ``transport.read_frame(0.1, sink)`` 这种调用在关日志时是合法的, 一开
+        # 日志就 TypeError —— 诊断开关改变调用约定, 正是竞赛日最不该有的惊喜。
+        # 调用方给了 sink 就用他的, 抄下来的字节两边都看得到。
+        sink = _raw_sink if _raw_sink is not None else []
         try:
             command, data = NexBotTcpTransport.read_frame(
                 self, timeout=timeout, _raw_sink=sink

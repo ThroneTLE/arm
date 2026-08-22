@@ -877,7 +877,7 @@ class OakVisionNode:
         no_tcp_read=False,
         place_x_mm=UCS_PLACE_X_MM,
         place_y_mm=UCS_PLACE_Y_MM,
-        enable_robot_motion=False,
+        enable_robot_motion=True,
     ):
         self.root = root
         self.config = visual_config
@@ -897,6 +897,8 @@ class OakVisionNode:
         self._controller_host = str(controller_host or "")
         self.place_x_mm = float(place_x_mm)
         self.place_y_mm = float(place_y_mm)
+        # 真实运动**默认开启**：现场是先看坐标、再决定执行，人工确认就是那道闸门，
+        # 不该再要求重启换参数。要只算坐标不动，勾界面上的【空跑】即可（可随时切换）。
         self.enable_robot_motion = bool(enable_robot_motion)
         self._jog = None
         self._last_grasp_xyz_mm = None
@@ -1129,6 +1131,14 @@ class OakVisionNode:
         ttk.Button(
             grasp_row, text="重置放置区", command=self.on_reset_place_slots
         ).pack(side="left", padx=(0, 12))
+        # 空跑开关放在执行按钮旁边，随时可切 —— 以前要重启换命令行参数才能改，
+        # 现场三小时里没人愿意为了"这次先别动"重开一次程序。
+        self._dry_run_var = tk.BooleanVar(value=not self.enable_robot_motion)
+        self.dry_run_check = ttk.Checkbutton(
+            grasp_row, text="空跑(只算坐标不动)", variable=self._dry_run_var,
+            command=self.on_dry_run_toggle,
+        )
+        self.dry_run_check.pack(side="left", padx=(0, 12))
         self.grasp_info = ttk.Label(grasp_row, text="先计算坐标，确认无误后才能执行")
         self.grasp_info.pack(side="left")
 
@@ -1374,8 +1384,8 @@ class OakVisionNode:
             return
         if not self.enable_robot_motion:
             messagebox.showinfo(
-                "未启用真实运动",
-                "传送会让机械臂实际运动。请加 --enable-robot-motion 重启后再用。",
+                "当前是空跑模式",
+                "传送会让机械臂实际运动。请先取消勾选【空跑(只算坐标不动)】。",
                 parent=self.root,
             )
             return
@@ -1448,6 +1458,18 @@ class OakVisionNode:
         self.status.configure(
             text="放置区已重置（原有 {} 个占用），下次从 0 号槽位开始".format(count)
         )
+
+    def on_dry_run_toggle(self):
+        """【空跑】勾选框：勾上=只算坐标不发运动，取消=真实运动。
+
+        这是运行期开关，不需要重启。执行前仍有确认框列出坐标，那才是最后一道人工闸门。
+        """
+        self.enable_robot_motion = not bool(self._dry_run_var.get())
+        self.status.configure(text=(
+            "已切到【空跑】：只生成执行计划，不发送任何运动"
+            if not self.enable_robot_motion
+            else "已切到【真实运动】：执行/传送会让机械臂实际动作"
+        ))
 
     def on_undo(self):
         """撤销序列末项 —— 点错一个不必整条清空重来。"""
@@ -1935,15 +1957,20 @@ class OakVisionNode:
             return
         place = [place_xy[0], place_xy[1], float(grasp[2])]
         dry_run = not self.enable_robot_motion
+        # 确认框就是现场那道人工闸门：坐标之外，把"会不会压爆"的那个数
+        # （伸进夹爪多深 / 腔体多深）也摆出来，否则得回结果面板翻。
+        geometry = self._confirm_geometry_line()
         if dry_run:
             proceed = messagebox.askokcancel(
-                "Dry-run 验证（默认）",
-                "未加 --enable-robot-motion，不会发送真实运动。\n\n"
+                "空跑：只生成计划，不发送运动",
+                "当前勾选了【空跑(只算坐标不动)】，机械臂不会动。\n\n"
                 "抓取 XYZ(mm): {}\n"
                 "放置 XYZ(mm): {}\n"
+                "{}"
                 "姿态: 复位位置初始姿态(只动 XYZ)\n\n"
                 "确认生成执行计划？".format(
-                    np.round(grasp, 2).tolist(), np.round(place, 2).tolist()
+                    np.round(grasp, 2).tolist(), np.round(place, 2).tolist(),
+                    geometry,
                 ),
                 parent=self.root,
             )
@@ -1953,10 +1980,15 @@ class OakVisionNode:
             proceed = messagebox.askokcancel(
                 "确认执行抓取（真实运动）",
                 "⚠ 机械臂将实际运动！\n\n"
-                "流程: 回复位 -> 抓取 {} -> 夹爪合 -> 放置 {} -> 夹爪开 -> 回复位\n"
-                "姿态: 按复位位置初始姿态\n\n"
-                "确认开始？".format(
-                    np.round(grasp, 2).tolist(), np.round(place, 2).tolist()
+                "抓取 XYZ(mm): {}\n"
+                "放置 XYZ(mm): {}\n"
+                "{}"
+                "流程: 回复位 -> 上方 -> ↓抓取 -> 夹爪合 -> ↑抬升 -> 高位横移\n"
+                "      -> ↓放置 -> 夹爪开 -> ↑抬升 -> 回复位\n"
+                "姿态: 按复位位置初始姿态(只动 XYZ)\n\n"
+                "确认坐标无误、路径无障碍？".format(
+                    np.round(grasp, 2).tolist(), np.round(place, 2).tolist(),
+                    geometry,
                 ),
                 parent=self.root,
             )
@@ -1968,6 +2000,21 @@ class OakVisionNode:
         threading.Thread(
             target=self._grasp_worker, args=(grasp, dry_run), daemon=True
         ).start()
+
+    def _confirm_geometry_line(self):
+        """确认框里那一行抓取几何摘要；没有信息就返回空串（不编造）。"""
+        info = self._last_grasp_height_info or {}
+        if not info.get("available", False):
+            return ""
+        clamp = "（已按腔体深度抬高）" if info.get("clamped") else ""
+        return (
+            "物体高 {h:.1f}mm｜伸进夹爪 {e:.1f}mm / 腔体 {c:.0f}mm{clamp}\n"
+        ).format(
+            h=float(info.get("object_height_mm", float("nan"))),
+            e=float(info.get("engage_mm", float("nan"))),
+            c=float(self._gripper_geometry["jaw_cavity_depth_mm"]),
+            clamp=clamp,
+        )
 
     def _ensure_jog(self):
         """拿到（必要时建立）执行用的 jog。
@@ -2322,9 +2369,15 @@ def build_parser():
         "--place-y-mm", type=float, default=UCS_PLACE_Y_MM,
         help="放置点 Y(mm, 用户坐标系1, 默认 100)",
     )
+    # 真实运动是**默认**行为：执行前的确认框（列出抓取/放置坐标与伸入深度）就是
+    # 人工闸门，不再要求为了能动而重启换参数。
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="启动即为空跑：只算坐标、不发送任何运动(界面上可随时切回)",
+    )
     parser.add_argument(
         "--enable-robot-motion", action="store_true",
-        help="允许真实机械臂运动(默认仅 Dry-run; 需在 UI 二次确认)",
+        help="（兼容旧脚本/旧文档；真实运动已是默认，加不加都一样）",
     )
     return parser
 
@@ -2359,7 +2412,7 @@ def main(argv=None):
         no_tcp_read=arguments.no_tcp_read,
         place_x_mm=arguments.place_x_mm,
         place_y_mm=arguments.place_y_mm,
-        enable_robot_motion=arguments.enable_robot_motion,
+        enable_robot_motion=not arguments.dry_run,
     )
     signal.signal(signal.SIGINT, lambda *_args: root.after(0, node.close))
     try:
