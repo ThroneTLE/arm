@@ -62,8 +62,14 @@ CMD_ERRORS = frozenset({0x6010, 0x6020, 0x6030, 0x6040})
 CMD_WARNINGS = frozenset({0x6110, 0x6210})
 
 #: Coord value used by the protocol for joint / Cartesian coordinate systems.
+#: Canonical mapping from the Inexbot system manual/位置变量参数:
+#: 0 关节 / 1 直角 / 2 工具 / 3 用户.  NOTE: one open.inexbot.com JSON doc page
+#: lists 2=用户/3=工具 (conflicting) -- verify the semantics on the first
+#: motion command against the teach pendant before relying on it.
 COORD_JOINT = 0
 COORD_CARTESIAN = 1
+COORD_TOOL = 2
+COORD_USER = 3
 
 
 def build_frame(command: int, data: Optional[Dict[str, Any]] = None) -> bytes:
@@ -148,6 +154,17 @@ class NexBotTcpEndpoint:
     external_axes: int = 0
     wait_for_finish: bool = True
     motion_finish_timeout_s: float = 60.0
+    #: Reference frame of the state readback (realPos*): PCS (tool coord =
+    #: TCP w.r.t. robot base), MCS (Cartesian w.r.t. base) or UCS (user
+    #: coordinate frame; with user 1 active this is 用户坐标系1).
+    pose_frame: str = "PCS"
+    #: Coordinate system for motion commands (COORD_* above).  With the whole
+    #: pipeline on 用户坐标系1 set this to COORD_USER; the controller then
+    #: consumes targets directly in the user frame (no conversion needed).
+    motion_coord: int = COORD_CARTESIAN
+    #: Active tool/user id on the controller (for documentation and checks).
+    tool_id: int = 1
+    user_id: int = 1
     velocity_eps_rad_s: float = 0.02
     heartbeat_s: float = 0.0
 
@@ -410,18 +427,32 @@ class NexBotTcpRobotController(RobotController):
     # -- RobotController interface ----------------------------------------
 
     def read_state(self, now_s=None) -> RobotState:
-        # Field-tested on MOKA MR07S-930 / Inexbot C1102 (RTL-22.07): with the
-        # calibrated 工具手1 active the state service reports the TCP pose in
-        # "realPosPCS" (tool coordinate = TCP w.r.t. robot base), which is the
-        # pose the hand-eye calibration samples need.  MCS is kept as fallback
-        # (older builds / fake-server tests) and for cross-checking.
-        data = self._request_state(["realPosPCS", "realPosMCS", "realPosACS"])
+        # Field-tested on MOKA MR07S-930 / Inexbot C1102 (RTL-22.07).  The
+        # state service reports TCP poses in three frames; which one forms the
+        # pipeline world frame is chosen by ``pose_frame``:
+        #   PCS = tool coordinate (TCP w.r.t. robot base, hand-eye sampling),
+        #   MCS = Cartesian (flange w.r.t. base),
+        #   UCS = user coordinate (TCP w.r.t. the active user frame = user 1).
+        # The full-migration workflow uses "UCS" so every pose is already in
+        # 用户坐标系1; ACS (joints) stays useful for cross-checks.
+        frame = str(self.endpoint.pose_frame).upper()
+        if frame not in ("PCS", "MCS", "UCS"):
+            raise ValueError("pose_frame must be PCS/MCS/UCS, got {!r}".format(frame))
+        query_payload = ["realPos{}".format(frame)]
+        if frame != "MCS":
+            query_payload += ["realPosMCS"]
+        query_payload += ["realPosACS"]
+        data = self._request_state(query_payload)
         reply = data.get("replyData") or {}
-        pose = reply.get("realPosPCS") or reply.get("realPosMCS")
+        pose = reply.get("realPos{}".format(frame))
         if not isinstance(pose, list) or len(pose) < 6:
-            raise ControllerProtocolError(
-                "state reply is missing realPosPCS/realPosMCS: {}".format(json.dumps(data, ensure_ascii=False)[:200])
-            )
+            pose = reply.get("realPosMCS")
+            if not isinstance(pose, list) or len(pose) < 6:
+                raise ControllerProtocolError(
+                    "state reply is missing realPos{}: {}".format(
+                        frame, json.dumps(data, ensure_ascii=False)[:200]
+                    )
+                )
         timestamp = reply.get("timestamp")
         timestamp_s = None
         if isinstance(timestamp, list) and len(timestamp) >= 2:
@@ -432,12 +463,14 @@ class NexBotTcpRobotController(RobotController):
         # rotation is Rx(A)Ry(B)Rz(C) -- NOT the fixed XYZ order that
         # transform_from_xyz_rpy uses.  Field-verified 2026-08-22: using the
         # wrong order broke the checkerboard hand-eye solve by ~190 mm.
-        base_from_gripper = transform_from_inexbot_abc(
+        world_from_gripper = transform_from_inexbot_abc(
             xyz_mm / 1000.0, abc_rad
         )
         return RobotState(
             valid=True,
-            base_from_gripper=base_from_gripper,
+            # NOTE: with pose_frame="UCS" this is 用户坐标系1 下的 TCP 位姿,
+            # i.e. "world" means the pipeline reference frame (user 1).
+            base_from_gripper=world_from_gripper,
             timestamp_s=float(now_s if now_s is not None else (timestamp_s or time.time())),
             simulated=False,
             reason="",
@@ -448,11 +481,11 @@ class NexBotTcpRobotController(RobotController):
         xyz_m, abc_rad = inexbot_abc_from_transform(matrix)
         point = InexbotPoint(
             name="P0001",
-            coordinate_system=COORD_CARTESIAN,
+            coordinate_system=int(self.endpoint.motion_coord),
             angle_unit=1,
             shape=1,
-            tool_id=0,
-            user_id=0,
+            tool_id=int(self.endpoint.tool_id),
+            user_id=int(self.endpoint.user_id),
             axes=[*(xyz_m * 1000.0), *abc_rad, 0.0],
         )
         velocity = _clamp(round(float(speed_scale) * 1000.0), 1, 1000)

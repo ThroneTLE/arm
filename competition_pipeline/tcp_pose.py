@@ -41,6 +41,10 @@ def pose_endpoint_from_config(controller_settings):
         motion_finish_timeout_s=float(config.get("motion_finish_timeout_s", 60.0)),
         velocity_eps_rad_s=float(config.get("velocity_eps_rad_s", 0.02)),
         heartbeat_s=float(config.get("heartbeat_s", 0.0)),
+        pose_frame=str(config.get("pose_frame", "PCS")),
+        motion_coord=int(config.get("motion_coord", 1)),
+        tool_id=int(config.get("tool_id", 1)),
+        user_id=int(config.get("user_id", 1)),
     )
 
 
