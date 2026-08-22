@@ -313,6 +313,83 @@ def load_hand_eye_tcp_from_camera(competition_yaml: Path) -> np.ndarray:
     )
 
 
+def load_gripper_geometry(competition_yaml: Path) -> dict:
+    """读 competition.yaml 的 ``gripper_geometry``；缺省用 grasp_geometry 的默认值。"""
+    from competition_pipeline.grasp_geometry import (
+        JAW_CAVITY_DEPTH_MM, SAFETY_CLEARANCE_MM,
+    )
+    data = yaml.safe_load(competition_yaml.read_text(encoding="utf-8")) or {}
+    section = data.get("gripper_geometry", {}) or {}
+    return {
+        "jaw_cavity_depth_mm": float(
+            section.get("jaw_cavity_depth_mm", JAW_CAVITY_DEPTH_MM)
+        ),
+        "safety_clearance_mm": float(
+            section.get("safety_clearance_mm", SAFETY_CLEARANCE_MM)
+        ),
+        "jaw_max_open_mm": section.get("jaw_max_open_mm"),
+        "width_margin_mm": float(
+            (data.get("grasp_planning", {}) or {}).get("width_margin_mm", 6.0)
+        ),
+    }
+
+
+def apply_grasp_height_rule(user1_grasp, user1_from_object, mesh_bounds_m,
+                            grasp_type, gripper_geometry):
+    """把抓取点的 XYZ 换成"不会压爆、也不会怼进桌面"的位置。
+
+    返回 ``(修正后的 4x4, 说明 dict 或 None)``。姿态原样保留 —— 这里只动位置。
+
+    规则(见 :mod:`competition_pipeline.grasp_geometry`)::
+
+        瓶/罐 (cylinder)   z = (顶点 + 中心)/2   -> 伸入深度 = 高度/4
+        水果   (其余)       z = 中心
+        统一钳位 伸入 <= 腔体深度 - 安全余量
+
+    XY 取**包围盒中心**而不是网格原点。``mesh_bounds_m`` 为 None 时原样返回并给出
+    说明，由调用方决定是否放行 —— 没有物体尺寸就无法保证不压爆。
+    """
+    from competition_pipeline.grasp_geometry import (
+        check_graspable, grasp_height_mm, object_extent_user1,
+    )
+
+    if mesh_bounds_m is None:
+        return user1_grasp, {
+            "available": False,
+            "reasons": ["缺少 CAD 包围盒，无法判断伸进夹爪的深度是否超过腔体"],
+        }
+    extent = object_extent_user1(user1_from_object, mesh_bounds_m, grasp_type)
+    height = grasp_height_mm(
+        extent, grasp_type,
+        jaw_cavity_depth_mm=gripper_geometry["jaw_cavity_depth_mm"],
+        safety_clearance_mm=gripper_geometry["safety_clearance_mm"],
+    )
+    corrected = np.asarray(user1_grasp, dtype=np.float64).copy()
+    corrected[:3, 3] = np.asarray(
+        [extent.center_xy_mm[0], extent.center_xy_mm[1], height.z_mm],
+        dtype=np.float64,
+    ) / 1000.0
+    reasons = []
+    if gripper_geometry.get("jaw_max_open_mm") is not None:
+        reasons = check_graspable(
+            extent, height,
+            jaw_max_open_mm=float(gripper_geometry["jaw_max_open_mm"]),
+            width_margin_mm=float(gripper_geometry["width_margin_mm"]),
+        )
+    return corrected, {
+        "available": True,
+        "rule": height.rule,
+        "z_mm": height.z_mm,
+        "engage_mm": height.engage_mm,
+        "requested_engage_mm": height.requested_engage_mm,
+        "clamped": height.clamped,
+        "object_height_mm": extent.height_mm,
+        "object_top_mm": extent.z_top_mm,
+        "grasp_width_mm": extent.grasp_width_mm,
+        "reasons": reasons,
+    }
+
+
 def compose_user1_object(user1_from_tcp, tcp_from_camera, camera_from_object):
     """Map one camera-frame object pose into controller UCS1."""
     from competition_pipeline.geometry import as_transform
@@ -581,6 +658,9 @@ class OakVisionNode:
         self._jog = None
         self._last_grasp_xyz_mm = None
         self._last_place_xyz_mm = None
+        #: 最近一次抓取高度后处理的说明（见 apply_grasp_height_rule）
+        self._last_grasp_height_info = None
+        self._gripper_geometry = load_gripper_geometry(competition_yaml)
         self._hand_eye = load_hand_eye_tcp_from_camera(competition_yaml)
         self._live_reader = None
         self._tcp_user1 = None
@@ -1041,6 +1121,23 @@ class OakVisionNode:
                     if rule.type == "sphere"
                     else compute_grasp(user1_from_object, rule.offset_mm)
                 )
+                # ⚠️ compute_grasp/compute_grasp_sphere 把抓取点放在**网格原点**上
+                # (docstring 原话 "grip the middle")。这有两个会毁掉物体的后果:
+                #   - 高物体: 伸进夹爪的深度 = 高度/2。腔体只有 80mm，
+                #     245mm 的可乐瓶要求 122.5mm -> 掌根压爆瓶口(隔壁组已发生);
+                #   - 网格原点未必是几何中心: apple 偏 49.1mm、nescafe 偏 74.5mm，
+                #     按原点抓会往桌面下方伸 -> 把夹爪怼进桌子。
+                # 这里做纯后处理，只改抓取点的位置，不动姿态、不动 FoundationPose、
+                # 不改任何坐标约定。规则见 competition_pipeline.grasp_geometry。
+                user1_grasp, grasp_height_info = apply_grasp_height_rule(
+                    user1_grasp,
+                    user1_from_object,
+                    estimator.mesh_bounds,
+                    rule.type,
+                    self._gripper_geometry,
+                )
+                if grasp_height_info is not None:
+                    self._last_grasp_height_info = grasp_height_info
                 _, user1_object_abc_deg = user1_pose_values(user1_from_object)
                 _, user1_grasp_abc_deg = user1_pose_values(user1_grasp)
                 viz3d = render_workspace_3d(
@@ -1202,12 +1299,41 @@ class OakVisionNode:
                     grasp = np.round(
                         result["user1_grasp"][:3, 3] * 1000.0, 2
                     ).tolist()
+                    info = self._last_grasp_height_info or {}
+                    blocked = list(info.get("reasons") or [])
+                    if not info.get("available", False):
+                        # 没有物体尺寸就无法保证伸入深度不超过腔体 —— 那正是压爆
+                        # 的成因，宁可不放行也不要"尽力而为"。
+                        blocked = blocked or ["缺少物体尺寸，无法判断是否会压爆"]
+                    if blocked:
+                        self._last_grasp_xyz_mm = None
+                        self._last_place_xyz_mm = None
+                        text += "⛔ 抓取被拒绝：{}\n".format("；".join(blocked))
+                        self.ui_queue.put(("grasp_ready", None))
+                        self.ui_queue.put(("result", text))
+                        self.ui_queue.put(("status", "目标序列算法运行完成"))
+                        continue
                     self._last_grasp_xyz_mm = grasp
                     self._last_place_xyz_mm = [
                         self.place_x_mm, self.place_y_mm, float(grasp[2])
                     ]
                     text += ("✋ 一键抓取已就绪：抓取 {} → 放置 {} （姿态=复位位置初始姿态）\n".format(
                         grasp, np.round(self._last_place_xyz_mm, 2).tolist()))
+                    text += (
+                        "   抓取高度规则：{rule}｜物体高 {h:.1f}mm 顶面 {top:.1f}mm"
+                        "｜伸进夹爪 {e:.1f}mm（腔体 {c:.0f}mm）{clamp}\n"
+                        "   夹持宽度 {w:.1f}mm\n".format(
+                            rule=info.get("rule", "?"),
+                            h=info.get("object_height_mm", float("nan")),
+                            top=info.get("object_top_mm", float("nan")),
+                            e=info.get("engage_mm", float("nan")),
+                            c=self._gripper_geometry["jaw_cavity_depth_mm"],
+                            clamp=("｜⚠️ 已按腔体深度抬高（原需 {:.1f}mm）".format(
+                                info.get("requested_engage_mm", float("nan")))
+                                if info.get("clamped") else ""),
+                            w=info.get("grasp_width_mm", float("nan")),
+                        )
+                    )
                     self.ui_queue.put(("grasp_ready", (
                         list(grasp), list(self._last_place_xyz_mm)
                     )))

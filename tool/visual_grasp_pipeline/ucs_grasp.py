@@ -43,12 +43,20 @@ import numpy as np
 
 import yaml
 
-#: 放置点默认值（用户坐标系1, mm）；Z 始终取"抓取点的 Z"
+#: 用户坐标系1 的定义（2026-08-22 现场标定，此前没有写在任何地方）：
+#:   原点 = 49.3cm 方桌的**桌面中心**
+#:   +X = 前方   +Y = 左方   +Z = 上方
+#:   z = 0 就是桌面 —— 所以物体的 Z 可以直接读成"离桌面多高"
+#: 桌面半边长 246.5mm。
+TABLE_HALF_MM = 246.5
+
+#: 放置点默认值（用户坐标系1, mm）；Z 由抓取几何决定（见 build_ucs_grasp_plan）。
+#: 放在**X 负半边的左侧**：X 负 = 桌子近端，Y 正 = 左方。远离杂物堆放区。
 UCS_PLACE_X_MM = -100.0
 UCS_PLACE_Y_MM = 100.0
 
-#: 安全硬限（用户坐标系1, mm）：原点在桌面上，Z=0 即桌面
-SAFE_XY_MM = 300.0
+#: 安全硬限（用户坐标系1, mm）。XY 收到桌面范围内 —— 目标点跑出桌子一定是错的。
+SAFE_XY_MM = TABLE_HALF_MM
 SAFE_Z_MIN_MM = 10.0
 SAFE_Z_MAX_MM = 350.0
 MAX_SINGLE_LEG_MM = 600.0

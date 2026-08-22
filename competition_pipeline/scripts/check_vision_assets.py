@@ -28,6 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = (
     REPO_ROOT / "tool/visual_grasp_pipeline/config/visual_grasp_pipeline.yaml"
 )
+DEFAULT_COMPETITION = REPO_ROOT / "competition_pipeline/config/competition.yaml"
 
 #: 顶抓可用的形状类。缺失或写错会让抓取高度规则退化成"对准中心"。
 KNOWN_GRASP_TYPES = ("cylinder", "sphere", "elongated")
@@ -58,7 +59,7 @@ def _weight_class_names(weights_path):
     return dict(names) if names else None
 
 
-def check(config_path):
+def check(config_path, competition_config):
     problems = []
     notes = []
     raw = _load_yaml(config_path)
@@ -171,6 +172,59 @@ def check(config_path):
         else:
             print("  ✓ {:<10} type={}".format(object_key, grasp_type))
 
+    # 5) 工具坐标系一致性
+    print("\n[5] 工具坐标系 / 夹爪几何一致性")
+    competition_path = Path(competition_config)
+    if not competition_path.is_file():
+        notes.append("找不到 {}，跳过工具坐标系检查".format(competition_path))
+        print("  ⚠️ 跳过：{} 不存在".format(competition_path))
+    else:
+        competition = _load_yaml(competition_path)
+        gripper = competition.get("gripper_geometry", {}) or {}
+        planning = competition.get("grasp_planning", {}) or {}
+        entry = planning.get("tcp_from_grasp", {}) or {}
+        matrix = entry.get("matrix") if isinstance(entry, dict) else entry
+        fingertip = gripper.get("tcp_to_fingertip_mm")
+        if matrix is None:
+            problems.append("grasp_planning.tcp_from_grasp.matrix 缺失")
+            print("  ❌ tcp_from_grasp 缺失")
+        elif fingertip is None:
+            problems.append(
+                "gripper_geometry.tcp_to_fingertip_mm 尚未标定（值为 null）。"
+                "跑 scripts/calibrate_fingertip.py：指尖触桌读到的用户系 Z 就是它。"
+            )
+            print("  ❌ tcp_to_fingertip_mm 未标定")
+        else:
+            try:
+                import numpy as np
+                grasp_z_mm = float(
+                    np.asarray(matrix, dtype=float).reshape(4, 4)[2, 3] * 1000.0
+                )
+            except Exception as error:                  # noqa: BLE001 - 诊断脚本
+                problems.append("tcp_from_grasp.matrix 解析失败: {}".format(error))
+                grasp_z_mm = None
+            if grasp_z_mm is not None:
+                delta = abs(grasp_z_mm - float(fingertip))
+                if delta > 2.0:
+                    problems.append(
+                        "tcp_from_grasp 的 Z={:.1f}mm 与 tcp_to_fingertip_mm="
+                        "{:.1f}mm 不一致（差 {:.1f}mm）。抓取会**系统性偏移这个量**。"
+                        "若已把工具坐标系标到尖端(工具手1)，两者都应为 0，"
+                        "并且手眼矩阵必须一起补偿 —— 跑 scripts/retarget_tool_frame.py。"
+                        .format(grasp_z_mm, float(fingertip), delta)
+                    )
+                    print("  ❌ tcp_from_grasp.Z={:.1f} vs 指尖 {:.1f} 差 {:.1f}mm"
+                          .format(grasp_z_mm, float(fingertip), delta))
+                else:
+                    print("  ✓ tcp_from_grasp.Z={:.1f}mm 与指尖标定一致".format(
+                        grasp_z_mm))
+        cavity = gripper.get("jaw_cavity_depth_mm")
+        clearance = gripper.get("safety_clearance_mm")
+        if cavity and clearance is not None:
+            usable = float(cavity) - float(clearance)
+            print("  ✓ 腔体可用深度 {:.0f}mm -> 不触发钳位的物体高度上限 {:.0f}mm"
+                  .format(usable, 4.0 * usable))
+
     print("\n" + "=" * 60)
     for note in notes:
         print("⚠️ {}".format(note))
@@ -186,8 +240,9 @@ def check(config_path):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--visual-config", default=str(DEFAULT_CONFIG))
+    parser.add_argument("--competition-config", default=str(DEFAULT_COMPETITION))
     args = parser.parse_args(argv)
-    return check(Path(args.visual_config))
+    return check(Path(args.visual_config), Path(args.competition_config))
 
 
 if __name__ == "__main__":
