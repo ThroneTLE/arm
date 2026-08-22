@@ -261,6 +261,9 @@ class NexBotTcpTransport:
 
     def read_frame(self, timeout: Optional[float] = None):
         with self._lock:
+            if self._socket is None:
+                # 对被关闭的旧连接读帧（并发陈旧引用）→ 明确连接错误而非 NoneType
+                raise ControllerConnectionError("controller transport is closed")
             self.connect()
             previous = self._socket.gettimeout()
             try:
@@ -419,19 +422,41 @@ class NexBotTcpRobotController(RobotController):
         return None
 
     def _wait_motion_finish(self):
+        """等运动结束：以位姿变化为准（对 axisVel 单位语义不敏感）。
+
+        现场实测：axisVel 在本固件存在单位歧义（疑似 ×57.3 度/秒），
+        21.05.23 上按 rad/s 阈值判断会永远"未停止"→ 卡死 60s/次。
+        改为连续两个 0.5s 窗口的完整位姿无变化才视为静止。
+        """
         deadline = time.monotonic() + self.endpoint.motion_finish_timeout_s
-        quiet = 0
+        last_pose = None
+        last_t = None
+        quiet_windows = 0
         while time.monotonic() < deadline:
-            velocities = self._query_axis_vel()
-            if velocities is not None and all(
-                abs(value) < self.endpoint.velocity_eps_rad_s for value in velocities
-            ):
-                quiet += 1
-                if quiet >= 2:
+            state = self.read_state(now_s=time.time())
+            pose = np.asarray(state.base_from_gripper, dtype=np.float64)
+            now = time.monotonic()
+            if last_pose is None:
+                last_pose = pose.copy()
+                last_t = now
+            elif now - last_t >= 0.5:
+                translation_delta = float(
+                    np.linalg.norm(pose[:3, 3] - last_pose[:3, 3])
+                )
+                relative_rotation = last_pose[:3, :3].T @ pose[:3, :3]
+                cosine = np.clip(
+                    (np.trace(relative_rotation) - 1.0) / 2.0, -1.0, 1.0
+                )
+                rotation_delta_deg = float(np.degrees(np.arccos(cosine)))
+                if translation_delta < 0.0003 and rotation_delta_deg < 0.1:
+                    quiet_windows += 1
+                else:
+                    quiet_windows = 0
+                if quiet_windows >= 2:
                     return
-            else:
-                quiet = 0
-            time.sleep(0.05)
+                last_pose = pose.copy()
+                last_t = now
+            time.sleep(0.1)
         raise ControllerTimeout(
             "motion did not finish within {:.1f}s".format(
                 self.endpoint.motion_finish_timeout_s

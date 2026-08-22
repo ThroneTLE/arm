@@ -166,6 +166,8 @@ class NexBotControllerTest(unittest.TestCase):
         reply = build_frame(
             CMD_QUERY_REPLY,
             {"channel": 1, "robot": 1, "replyData": {
+                "realPosUCS": [700.0, 100.0, 400.0, 0.1, 0.2, 0.3],
+                "realPosMCS": [700.0, 100.0, 400.0, 0.1, 0.2, 0.3],
                 "axisVel": [0.01, -0.01, 0.0, 0.01, 0.0, -0.01],
                 "timestamp": [1759052356, 264138361],
             }, "robot": 1},
