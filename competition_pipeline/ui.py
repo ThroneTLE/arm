@@ -3624,11 +3624,27 @@ state_codec:
         return True
 
     def _new_jog_worker(self, action, args=()):
+        """Start a jog worker keeping a strong reference until it finishes.
+
+        PyQt aborts with "QThread: Destroyed while thread is still running"
+        if the QThread object is garbage-collected while running; always
+        keep workers in ``self._jog_workers`` while they are alive.
+        """
         endpoint = pose_endpoint_from_config(self.config.data.get("controller", {}))
         worker = NexBotJogWorker(endpoint, action, args)
         worker.done.connect(self._jog_done)
+        workers = getattr(self, "_jog_workers", None)
+        if workers is None:
+            workers = self._jog_workers = []
+        workers.append(worker)
+        worker.finished.connect(lambda w=worker: self._forget_jog_worker(w))
         worker.start()
         return worker
+
+    def _forget_jog_worker(self, worker):
+        workers = getattr(self, "_jog_workers", ())
+        if worker in workers:
+            workers.remove(worker)
 
     def _jog(self, axis, sign):
         if not self._motion_enabled():
@@ -3642,12 +3658,8 @@ state_codec:
 
     def _jog_command(self, command):
         if command == "estop":
-            worker = NexBotJogWorker(
-                pose_endpoint_from_config(self.config.data.get("controller", {})),
-                "estop", (),
-            )
-            worker.done.connect(self._jog_done)
-            worker.start()
+            # 急停不受启用开关限制，但同样保持强引用防止 QThread 崩溃。
+            self._new_jog_worker("estop")
             return
         if not self._motion_enabled():
             return

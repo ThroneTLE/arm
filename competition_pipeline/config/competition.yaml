@@ -1,9 +1,4 @@
 schema_version: 1
-# 全流水线参考系 = 用户坐标系1（2026-08-22 全迁约定）：
-#   回读 realPosUCS（TCP 相对用户1），运动指令 coord=3（用户坐标），
-#   全部数学（定位/规划/安全区）都在用户1 下进行；手眼矩阵/相机内参无需迁移
-#   （刚性相对几何，与参考系无关）。tag_map 仅赛前调试用（apriltag 运行时关闭）。
-#   ⚠️ 竞赛期间不得改动 用户坐标系1 / 工具手1，否则全部锚点和安全区漂移。
 frames:
   base: user1_frame
   tcp: robot_tcp
@@ -51,9 +46,6 @@ controller:
     port_state: 7000
     robot: 1
     channel: 1
-    # 全迁用户1：回读用 UCS（realPosUCS，用户1 系），运动用 coord=3（用户坐标）。
-    # ⚠️ 首次运动验证必须与示教器核对 coord 语义（手册:0关节/1直角/2工具/3用户；
-    #     open.inexbot 个别页面写 2用户/3工具——冲突，实测为准）。
     pose_frame: UCS
     motion_coord: 3
     tool_id: 1
@@ -403,8 +395,6 @@ hand_eye:
 safety:
   dry_run: true
   allow_robot_motion: false
-  # 注：坐标系已全迁用户1——以下 XYZ 范围是【用户坐标系1】下的安全围栏，
-  # 现场按用户1 原点实测工作区重新收紧（-1000..2000 仅为宽松默认值）。
   workspace_min_mm:
   - -1000.0
   - -1000.0
