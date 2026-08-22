@@ -1,8 +1,8 @@
 """一键抓取 demo（用户坐标系1）：设抓取位/放置位 → 一键抓取。
 
 序列（每段 move_to_ucs 都做"等到位"验证，超差/出错立即停止）：
-    抓取位上方(抬起高度) → 抓取位 → 夹爪合 → 抬升 → 放置位上方 → 放置位
-    → 夹爪开 → 抬升 → 完成
+    回复位点 → 抓取位上方 → 抓取位 → 夹爪合 → 抬升 → 放置位上方 → 放置位
+    → 夹爪开 → 抬升 → 回复位点 → 完成
 速度默认 100 mm/s（= 传送面板同一档，实测 ±0.01mm 级）。
 
 急停：面板【急停】直发 0x2314（jog 的 _estop_lock 通道，不排队），
@@ -12,13 +12,23 @@
 更新控件（禁止非主线程 setValue/setText，会闪退）。
 """
 
+import json
+import os
+import subprocess
+import tempfile
 import threading
 import time
+from pathlib import Path
 
+import cv2
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import (
-    QDoubleSpinBox, QGridLayout, QGroupBox, QLabel, QPushButton,
+    QDoubleSpinBox, QGridLayout, QGroupBox, QLabel, QMessageBox, QPushButton,
+)
+
+from competition_pipeline.geometry import (
+    rotation_angle_deg, transform_from_inexbot_abc,
 )
 
 
@@ -28,7 +38,8 @@ class GraspDemoWorker(QThread):
     done = pyqtSignal(bool, str)
 
     def __init__(self, jog_provider, grasp, place, lift_mm=60.0,
-                 vel_mm_s=100.0, tolerance_mm=1.2, parent=None):
+                 vel_mm_s=100.0, tolerance_mm=1.2,
+                 rotation_tolerance_deg=3.0, parent=None):
         super().__init__(parent)
         self.jog_provider = jog_provider
         self.grasp = list(grasp)          # [xyz_mm(3), abc_rad(3)]
@@ -36,17 +47,27 @@ class GraspDemoWorker(QThread):
         self.lift = float(lift_mm)
         self.vel = float(vel_mm_s)
         self.tolerance = float(tolerance_mm)
+        self.rotation_tolerance_deg = float(rotation_tolerance_deg)
         self.abort = threading.Event()
 
     def run(self):
         jog = self.jog_provider()
         try:
+            # The controller's reset-point "safe enable" requires every new
+            # run to start inside the configured joint tolerance.  Recover
+            # first so a previous/manual pose cannot make the next run fail
+            # with "robot 1 is not at the safe position".
+            jog.go_reset_position()
+            if self.abort.is_set():
+                self.done.emit(False, "已急停中止（跳过抓取）")
+                return
             g_xyz, g_abc = self.grasp
             p_xyz, p_abc = self.place
             up = np.array([0.0, 0.0, self.lift])
             g_up = list(np.asarray(g_xyz, dtype=float) + up)
             p_up = list(np.asarray(p_xyz, dtype=float) + up)
             steps = [
+                ("夹爪开(准备)", None, None),
                 ("运动到抓取位上方", g_up, g_abc),
                 ("下降到抓取位", g_xyz, g_abc),
                 ("夹爪合(抓取)", None, None),
@@ -66,11 +87,157 @@ class GraspDemoWorker(QThread):
                     continue
                 jog.move_to_ucs(xyz, abc, vel_mm_s=self.vel,
                                 tolerance_mm=self.tolerance)
+                actual_xyz, actual_abc_deg = jog.current_pose()
+                expected_pose = transform_from_inexbot_abc(
+                    np.asarray(xyz, dtype=np.float64) / 1000.0,
+                    np.asarray(abc, dtype=np.float64),
+                )
+                actual_pose = transform_from_inexbot_abc(
+                    np.asarray(actual_xyz, dtype=np.float64) / 1000.0,
+                    np.radians(np.asarray(actual_abc_deg, dtype=np.float64)),
+                )
+                rotation_error = rotation_angle_deg(expected_pose, actual_pose)
+                if rotation_error > self.rotation_tolerance_deg:
+                    raise RuntimeError(
+                        "{} 姿态偏差 {:.2f}° 超过 {:.1f}°".format(
+                            name, rotation_error, self.rotation_tolerance_deg
+                        )
+                    )
+            # Do not leave the arm at place-above.  With controller reset-point
+            # safety enabled, that pose is not a legal start for the next run.
+            jog.go_reset_position()
             self.done.emit(True, "✅ 一键抓取完成：抓取({:.1f},{:.1f},{:.1f}) → "
-                                 "放置({:.1f},{:.1f},{:.1f}) mm".format(
+                                 "放置({:.1f},{:.1f},{:.1f}) mm → 已回复位点".format(
                                      *g_xyz, *p_xyz))
         except Exception as error:
             self.done.emit(False, "抓取失败：{}".format(error))
+
+
+class VisualPlanWorker(QThread):
+    """Move to the reset/photo point and compute one frozen lemon plan."""
+
+    done = pyqtSignal(bool, object)
+
+    def __init__(self, jog_provider, snapshot_provider, settings, parent=None):
+        super().__init__(parent)
+        self.jog_provider = jog_provider
+        self.snapshot_provider = snapshot_provider
+        self.settings = dict(settings or {})
+        self.cancel = threading.Event()
+        self.process = None
+
+    def stop(self):
+        self.cancel.set()
+        process = self.process
+        if process is not None and process.poll() is None:
+            process.terminate()
+
+    def run(self):
+        try:
+            jog = self.jog_provider()
+            # Validate camera availability before commanding the reset move.
+            snapshot = self.snapshot_provider()
+            if bool(self.settings.get("reset_before_capture", True)):
+                previous_stamp = float(snapshot.get("image_timestamp_s", 0.0))
+                jog.go_reset_position()
+                deadline = time.monotonic() + 3.0
+                while time.monotonic() < deadline:
+                    candidate = self.snapshot_provider()
+                    if float(candidate.get("image_timestamp_s", 0.0)) != previous_stamp:
+                        snapshot = candidate
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise RuntimeError("机器人复位后 3s 内没有新 RGB-D 帧")
+            if self.cancel.is_set():
+                raise RuntimeError("视觉计算已取消")
+            xyz_mm, abc_deg = jog.current_pose()
+            abc_rad = np.radians(np.asarray(abc_deg, dtype=np.float64))
+
+            with tempfile.TemporaryDirectory(prefix="lemon-visual-plan-") as directory:
+                root = Path(directory)
+                snapshot_path = root / "snapshot.npz"
+                tcp_path = root / "tcp.json"
+                result_path = root / "plan.json"
+                overlay_path = root / "overlay.png"
+                np.savez_compressed(
+                    str(snapshot_path),
+                    color_bgr=np.asarray(snapshot["color_bgr"], dtype=np.uint8),
+                    depth_m=np.asarray(snapshot["depth_m"], dtype=np.float32),
+                    camera_matrix=np.asarray(
+                        snapshot["camera_matrix"], dtype=np.float64
+                    ),
+                )
+                tcp_path.write_text(
+                    json.dumps(
+                        {
+                            "xyz_mm": [float(value) for value in xyz_mm],
+                            "abc_rad": [float(value) for value in abc_rad],
+                            "image_timestamp_s": float(
+                                snapshot.get("image_timestamp_s", 0.0)
+                            ),
+                            "sync_delta_s": float(snapshot.get("sync_delta_s", 0.0)),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                command = [
+                    str(self.settings["foundationpose_python"]),
+                    "-m", "competition_pipeline.visual_grasp_bridge",
+                    "--snapshot", str(snapshot_path),
+                    "--tcp-pose", str(tcp_path),
+                    "--visual-config", str(self.settings["visual_config"]),
+                    "--competition-config", str(self.settings["competition_config"]),
+                    "--output", str(result_path),
+                    "--overlay", str(overlay_path),
+                    "--target-label", str(self.settings.get("target_label", "lemon")),
+                    "--place-offset-user-mm",
+                    *[str(value) for value in self.settings.get(
+                        "place_offset_user_mm", [0.0, -50.0, 0.0]
+                    )],
+                    "--origin-xy-tolerance-mm",
+                    str(self.settings.get("origin_xy_tolerance_mm", 50.0)),
+                    "--lift-mm", str(self.settings.get("lift_mm", 80.0)),
+                    "--minimum-depth-coverage",
+                    str(self.settings.get("minimum_depth_coverage", 0.15)),
+                    "--maximum-depth-center-delta-mm",
+                    str(self.settings.get("maximum_depth_center_delta_mm", 80.0)),
+                ]
+                environment = os.environ.copy()
+                environment.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+                environment.setdefault("CUDA_MODULE_LOADING", "LAZY")
+                if self.cancel.is_set():
+                    raise RuntimeError("视觉计算已取消")
+                self.process = subprocess.Popen(
+                    command,
+                    cwd=str(Path(__file__).resolve().parents[1]),
+                    env=environment,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                try:
+                    stdout, stderr = self.process.communicate(
+                        timeout=float(self.settings.get("vision_timeout_s", 240.0))
+                    )
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.communicate()
+                    raise RuntimeError("FoundationPose 视觉计算超时")
+                returncode = self.process.returncode
+                self.process = None
+                if self.cancel.is_set():
+                    raise RuntimeError("视觉计算已取消")
+                if returncode != 0:
+                    detail = (stderr or stdout).strip()
+                    raise RuntimeError(detail[-2000:] or "视觉子进程失败")
+                payload = json.loads(result_path.read_text(encoding="utf-8"))
+                overlay = cv2.imread(str(overlay_path))
+                if overlay is not None:
+                    payload["overlay_bgr"] = overlay
+                self.done.emit(True, payload)
+        except Exception as error:
+            self.done.emit(False, str(error))
 
 
 class _ReadbackThread(QThread):
@@ -143,15 +310,39 @@ def _pose_rows(group):
 class GraspDemoPanel(QGroupBox):
     """一键抓取（用户坐标系1）：移到目标后【设为当前…】，再一键执行。"""
 
-    def __init__(self, jog_provider, parent=None):
-        super().__init__("一键抓取（用户坐标系1）· 移到目标后【设为当前…】再一键执行", parent)
+    def __init__(self, jog_provider, snapshot_provider=None, settings=None,
+                 motion_authorized=None, motion_revoke=None,
+                 preview_callback=None, parent=None):
+        super().__init__("视觉抓取（用户坐标系1）· 识别预览 → 人工确认 → 抓取放左侧50mm", parent)
         self.jog_provider = jog_provider
+        self.snapshot_provider = snapshot_provider
+        self.settings = dict(settings or {})
+        self.motion_authorized = motion_authorized or (lambda: True)
+        self.motion_revoke = motion_revoke or (lambda: None)
+        self.preview_callback = preview_callback
         self._workers = []
         self._busy = False
+        self._visual_plan = None
+        self._visual_plan_created_s = None
+        self._grasp_confirmed = False
+        self._place_confirmed = False
 
         grid = QGridLayout(self)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
+
+        self.btn_visual = QPushButton("① 回复位点并识别柠檬（只计算，不抓取）")
+        self.btn_visual.clicked.connect(self._on_visual_plan)
+        grid.addWidget(self.btn_visual, 0, 0, 1, 4)
+
+        self.visual_result = QLabel(
+            "待识别：柠檬放在用户系原点，识别后会显示物体/抓取/放置坐标。"
+        )
+        self.visual_result.setWordWrap(True)
+        self.visual_result.setStyleSheet(
+            "background:#eef5f3; border:1px solid #c8ddd8; padding:7px;"
+        )
+        grid.addWidget(self.visual_result, 1, 0, 1, 4)
 
         g_box = QGroupBox("抓取位（先移到目标处再点【设为当前抓取位】）")
         g_layout = QGridLayout(g_box)
@@ -159,7 +350,7 @@ class GraspDemoPanel(QGroupBox):
         self.g_set = QPushButton("设为当前抓取位")
         self.g_set.clicked.connect(lambda: self._read_into(self.g_spins, "抓取位"))
         g_layout.addWidget(self.g_set, 2, 0, 1, 6)
-        grid.addWidget(g_box, 0, 0, 1, 4)
+        grid.addWidget(g_box, 2, 0, 1, 4)
 
         p_box = QGroupBox("放置位（先移到目标处再点【设为当前放置位】）")
         p_layout = QGridLayout(p_box)
@@ -167,33 +358,34 @@ class GraspDemoPanel(QGroupBox):
         self.p_set = QPushButton("设为当前放置位")
         self.p_set.clicked.connect(lambda: self._read_into(self.p_spins, "放置位"))
         p_layout.addWidget(self.p_set, 2, 0, 1, 6)
-        grid.addWidget(p_box, 1, 0, 1, 4)
+        grid.addWidget(p_box, 3, 0, 1, 4)
 
         self.lift = QDoubleSpinBox()
         self.lift.setRange(10.0, 500.0)
-        self.lift.setValue(60.0)
+        self.lift.setValue(float(self.settings.get("lift_mm", 80.0)))
         self.lift.setSuffix(" mm")
         self.vel = QDoubleSpinBox()
         self.vel.setRange(10.0, 250.0)
-        self.vel.setValue(100.0)
+        self.vel.setValue(float(self.settings.get("speed_mm_s", 50.0)))
         self.vel.setSuffix(" mm/s")
-        grid.addWidget(QLabel("抬起"), 2, 0)
-        grid.addWidget(self.lift, 2, 1)
-        grid.addWidget(QLabel("速度"), 2, 2)
-        grid.addWidget(self.vel, 2, 3)
+        grid.addWidget(QLabel("抬起"), 4, 0)
+        grid.addWidget(self.lift, 4, 1)
+        grid.addWidget(QLabel("速度"), 4, 2)
+        grid.addWidget(self.vel, 4, 3)
 
         self.btn_go = QPushButton("一键抓取")
+        self.btn_go.setEnabled(False)
         self.btn_estop = QPushButton("急停")
         self.btn_estop.setStyleSheet(
             "background:#c0392b; color:white; font-weight:bold;"
         )
         self.btn_go.clicked.connect(self._on_go)
         self.btn_estop.clicked.connect(self._on_estop)
-        grid.addWidget(self.btn_go, 3, 0, 1, 2)
-        grid.addWidget(self.btn_estop, 3, 2, 1, 2)
+        grid.addWidget(self.btn_go, 5, 0, 1, 2)
+        grid.addWidget(self.btn_estop, 5, 2, 1, 2)
 
         self.status = QLabel("就绪：把机器人移到抓取位/放置位，各点一次【设为当前…】")
-        grid.addWidget(self.status, 4, 0, 1, 4)
+        grid.addWidget(self.status, 6, 0, 1, 4)
 
     # -- helpers ------------------------------------------------------------
     def _pose_of(self, spins):
@@ -202,6 +394,7 @@ class GraspDemoPanel(QGroupBox):
         return list(xyz), list(np.asarray(abc, dtype=float))
 
     def _read_into(self, spins, label):
+        self._clear_visual_plan()
         self.status.setText("⏳ 回读当前位姿…")
         worker = _ReadbackThread(self.jog_provider)
 
@@ -214,6 +407,13 @@ class GraspDemoPanel(QGroupBox):
                 spins[k].setValue(float(v))
             for k, v in zip(("A", "B", "C"), abc_deg):
                 spins[k].setValue(float(v))
+            if spins is self.g_spins:
+                self._grasp_confirmed = True
+            if spins is self.p_spins:
+                self._place_confirmed = True
+            self.btn_go.setEnabled(
+                self._grasp_confirmed and self._place_confirmed and not self._busy
+            )
             self.status.setText(
                 "✅ {}已填入当前位姿 X={:.2f} Y={:.2f} Z={:.2f} mm".format(
                     label, *xyz)
@@ -231,25 +431,175 @@ class GraspDemoPanel(QGroupBox):
         if worker in self._workers:
             self._workers.remove(worker)
 
+    def stop_workers(self):
+        """Request cancellation without blocking the Qt main thread."""
+        for worker in list(self._workers):
+            if isinstance(worker, VisualPlanWorker):
+                worker.stop()
+            elif isinstance(worker, GraspDemoWorker):
+                worker.abort.set()
+
+    def wait_workers(self, timeout_ms=5000):
+        for worker in list(self._workers):
+            worker.wait(int(timeout_ms))
+
+    def _motion_ok(self):
+        if not bool(self.motion_authorized()):
+            self.status.setText("⛔ 请先确认现场急停有效并勾选运动授权")
+            return False
+        return True
+
+    @staticmethod
+    def _fill_pose(spins, mapping):
+        for key, value in zip(("X", "Y", "Z"), mapping["xyz_mm"]):
+            spins[key].setValue(float(value))
+        for key, value in zip(("A", "B", "C"), mapping["abc_deg"]):
+            spins[key].setValue(float(value))
+
+    def _clear_visual_plan(self):
+        self._visual_plan = None
+        self._visual_plan_created_s = None
+        self.btn_go.setText("一键抓取（手动位姿）")
+        self.btn_go.setEnabled(
+            self._grasp_confirmed and self._place_confirmed and not self._busy
+        )
+
+    def _on_visual_plan(self):
+        if self._busy:
+            self.status.setText("⏳ 当前任务尚未完成")
+            return
+        if self.snapshot_provider is None:
+            self.status.setText("视觉快照接口未配置")
+            return
+        if not self._motion_ok():
+            return
+        self._clear_visual_plan()
+        self._grasp_confirmed = False
+        self._place_confirmed = False
+        self._busy = True
+        self.btn_visual.setEnabled(False)
+        self.btn_go.setEnabled(False)
+        self.status.setText("⏳ 正在回复位点、拍照并计算柠檬用户系坐标…")
+        worker = VisualPlanWorker(
+            self.jog_provider, self.snapshot_provider, self.settings
+        )
+
+        def _done(ok, payload):
+            self._busy = False
+            self.btn_visual.setEnabled(True)
+            if not ok:
+                self.btn_go.setEnabled(False)
+                self.visual_result.setText("❌ 视觉计算失败：{}".format(payload))
+                self.status.setText("识别失败，未生成任何运动目标")
+                return
+            if self.preview_callback is not None and payload.get("overlay_bgr") is not None:
+                self.preview_callback(payload["overlay_bgr"])
+            plan = payload["plan"]
+            quality = payload["quality"]
+            obj = plan["object"]["xyz_mm"]
+            grasp = plan["grasp_tcp"]["xyz_mm"]
+            place = plan["place_tcp"]["xyz_mm"]
+            reasons = payload.get("blocked_reasons") or []
+            text = (
+                "目标 {name} conf={conf:.3f} · Depth={coverage:.1%} · 估计夹持宽={width}mm\n"
+                "物体 UCS1 XYZ={obj} mm（原点XY误差 {origin:.1f}mm）\n"
+                "TCP抓取={grasp} mm → TCP放置={place} mm（Y- 50mm）"
+            ).format(
+                name=payload["target"]["name"],
+                conf=payload["target"]["confidence"],
+                coverage=quality["depth_coverage"],
+                width=quality.get("estimated_grasp_width_mm"),
+                obj=[round(value, 2) for value in obj],
+                origin=plan["origin_xy_error_mm"],
+                grasp=[round(value, 2) for value in grasp],
+                place=[round(value, 2) for value in place],
+            )
+            if reasons:
+                self.visual_result.setText(text + "\n⛔ 禁止执行：" + "；".join(reasons))
+                self.btn_go.setEnabled(False)
+                self.status.setText("坐标已显示，但质量/原点校验未通过")
+                return
+            self._fill_pose(self.g_spins, plan["grasp_tcp"])
+            self._fill_pose(self.p_spins, plan["place_tcp"])
+            self._grasp_confirmed = True
+            self._place_confirmed = True
+            self._visual_plan = payload
+            self._visual_plan_created_s = time.monotonic()
+            self.btn_go.setText("② 确认执行视觉抓取（放左侧50mm）")
+            self.btn_go.setEnabled(True)
+            self.visual_result.setText(text + "\n✅ 校验通过，请核对后点击确认执行。")
+            self.status.setText("视觉只计算完成；机器人尚未执行抓取")
+
+        worker.done.connect(_done)
+        self._keep(worker)
+
     # -- actions ------------------------------------------------------------
     def _on_go(self):
         if self._busy:
             self.status.setText("⏳ 抓取序列执行中……")
             return
+        if not self._motion_ok():
+            return
+        if not (self._grasp_confirmed and self._place_confirmed):
+            self.status.setText("⛔ 抓取位和放置位尚未经视觉或当前位姿确认")
+            return
         grasp = self._pose_of(self.g_spins)
         place = self._pose_of(self.p_spins)
+        if self._visual_plan is not None:
+            maximum_age = float(self.settings.get("maximum_plan_age_s", 60.0))
+            age = time.monotonic() - self._visual_plan_created_s
+            expected_g = self._visual_plan["plan"]["grasp_tcp"]
+            expected_p = self._visual_plan["plan"]["place_tcp"]
+            current = np.asarray(grasp[0] + list(np.degrees(grasp[1]))
+                                 + place[0] + list(np.degrees(place[1])))
+            expected = np.asarray(
+                expected_g["xyz_mm"] + expected_g["abc_deg"]
+                + expected_p["xyz_mm"] + expected_p["abc_deg"]
+            )
+            if age > maximum_age:
+                self.status.setText("⛔ 视觉计划已超过 {:.0f}s，请重新识别".format(maximum_age))
+                return
+            if not np.allclose(current, expected, atol=0.02, rtol=0.0):
+                self.status.setText("⛔ 视觉坐标已被修改，请重新识别后执行")
+                return
+            answer = QMessageBox.question(
+                self,
+                "确认视觉抓取",
+                "即将抓取柠檬：\n"
+                "物体 UCS1 XYZ={} mm\n"
+                "抓取 TCP XYZ={} mm\n"
+                "放置 TCP XYZ={} mm（用户系 Y- 50mm）\n\n"
+                "已确认路径无障碍且实体急停可用吗？".format(
+                    self._visual_plan["plan"]["object"]["xyz_mm"],
+                    expected_g["xyz_mm"], expected_p["xyz_mm"],
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                self.status.setText("已取消，未发送抓取指令")
+                return
         self._busy = True
         self.btn_go.setEnabled(False)
         self.status.setText("⏳ 一键抓取执行中…（急停可随时中止）")
         worker = GraspDemoWorker(
             self.jog_provider, grasp, place,
             lift_mm=self.lift.value(), vel_mm_s=self.vel.value(),
+            tolerance_mm=float(self.settings.get("arrival_tolerance_mm", 2.0)),
+            rotation_tolerance_deg=float(
+                self.settings.get("arrival_rotation_tolerance_deg", 3.0)
+            ),
         )
 
         def _done(ok, message):
             self._busy = False
             self.btn_go.setEnabled(True)
             self.status.setText(message)
+            if self._visual_plan is not None:
+                self._clear_visual_plan()
+            self._grasp_confirmed = False
+            self._place_confirmed = False
+            self.btn_go.setEnabled(False)
 
         worker.done.connect(_done)
         self._keep(worker)
@@ -265,6 +615,7 @@ class GraspDemoPanel(QGroupBox):
             if payload[0] == "ERR":
                 self.status.setText("急停失败：{}".format(payload[1]))
             else:
+                self.motion_revoke()
                 self.status.setText("🚨 急停已发送并中止序列（现场确认机器人已停）")
 
         worker.done.connect(_done)

@@ -30,6 +30,9 @@ from tool.object_model_builder.camera_source import (
     AstraRosSource, OakDProSource, OrbbecRosSource,
 )
 from tool.object_model_builder.rgbd_geometry import RgbdCalibration
+from tool.object_model_builder.rgbd_geometry import (
+    rectified_intrinsics, rectify_aligned_depth_image, rectify_color_image,
+)
 
 from .configuration import CompetitionConfig, load_camera_intrinsics
 from .checkerboard_target import CHECKERBOARD_TARGET, CheckerboardTarget
@@ -3632,11 +3635,58 @@ state_codec:
         grid.addWidget(self.teleport_panel, 7, 0, 1, 3)
 
         from competition_pipeline.grasp_demo import GraspDemoPanel
+        visual_settings = dict(self.config.data.get("visual_grasp_demo", {}) or {})
+        visual_settings["visual_config"] = str(
+            self.config.resolve_path(visual_settings["visual_config"])
+        )
+        visual_settings["competition_config"] = str(self.config.path)
         self.grasp_demo_panel = GraspDemoPanel(
-            jog_provider=lambda: self._get_robot_jog()
+            jog_provider=lambda: self._get_robot_jog(),
+            snapshot_provider=self._visual_grasp_snapshot,
+            settings=visual_settings,
+            motion_authorized=lambda: self.robot_ctrl_enable.isChecked(),
+            motion_revoke=lambda: self.robot_ctrl_enable.setChecked(False),
+            preview_callback=lambda frame: self.color_canvas.set_frame(frame),
         )
         grid.addWidget(self.grasp_demo_panel, 8, 0, 1, 3)
         return box
+
+    def _visual_grasp_snapshot(self):
+        """Freeze one rectified, hardware-aligned RGB-D frame for FP."""
+        bundle = self.bundle
+        if bundle is None or bundle.depth_m is None:
+            raise RuntimeError("请先连接 OAK 并等待 RGB-D 图像")
+        if not bool(bundle.depth_aligned_to_color):
+            raise RuntimeError("视觉抓取要求 Depth 已硬件对齐到 RGB")
+        intrinsics = bundle.color_intrinsics
+        if intrinsics is None:
+            raise RuntimeError("OAK EEPROM RGB 内参不可用")
+        sync_delta = bundle.sync_delta_s
+        maximum_sync = float(
+            self.config.camera.get("maximum_sync_delta_s", 0.03)
+        )
+        if sync_delta is None or float(sync_delta) > maximum_sync:
+            raise RuntimeError(
+                "RGB-D 时间差 {:.1f}ms 超过 {:.1f}ms".format(
+                    -1.0 if sync_delta is None else float(sync_delta) * 1000.0,
+                    maximum_sync * 1000.0,
+                )
+            )
+        if bool(bundle.color_is_rectified):
+            color = np.asarray(bundle.color_bgr).copy()
+            depth = np.asarray(bundle.depth_m, dtype=np.float32).copy()
+            use_intrinsics = rectified_intrinsics(intrinsics)
+        else:
+            color = rectify_color_image(bundle.color_bgr, intrinsics)
+            depth = rectify_aligned_depth_image(bundle.depth_m, intrinsics)
+            use_intrinsics = rectified_intrinsics(intrinsics)
+        return {
+            "color_bgr": color,
+            "depth_m": depth,
+            "camera_matrix": use_intrinsics.matrix.copy(),
+            "image_timestamp_s": float(bundle.color_timestamp_s),
+            "sync_delta_s": float(sync_delta),
+        }
 
     def _motion_enabled(self):
         if not self.robot_ctrl_enable.isChecked():
@@ -4118,10 +4168,15 @@ state_codec:
         """)
 
     def closeEvent(self, event):
+        grasp_panel = getattr(self, "grasp_demo_panel", None)
+        if grasp_panel is not None:
+            grasp_panel.stop_workers()
         pose_worker = getattr(self, "nexbot_pose_worker", None)
         if pose_worker is not None:
             pose_worker.stop()
         self._close_robot_jog()
+        if grasp_panel is not None:
+            grasp_panel.wait_workers(5000)
         if pose_worker is not None:
             pose_worker.wait(5000)
         for worker in list(getattr(self, "_jog_workers", ())):

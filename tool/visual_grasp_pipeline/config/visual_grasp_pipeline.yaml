@@ -3,47 +3,55 @@ schema_version: 1
 paths:
   # The migrated release keeps large weights/meshes outside Git.  These defaults
   # match the local workspace used for verification; change them on other hosts.
-  yolo_weights: /home/throne/workspaces/fp_release_20260821_155930/models/yolo_model.pt
+  yolo_weights: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/yolo_model.pt
   foundationpose_root: /home/throne/workspaces/arm_data/third_party/FoundationPose-plus-plus
-  static_frame_dir: /home/throne/workspaces/fp_release_20260821_155930/static_frame
+  static_frame_dir: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/static_frame
   debug_dir: /home/throne/workspaces/arm_data/foundationpose_gemini_debug/runtime
 
 object_models:
-  wangzai: /home/throne/workspaces/fp_release_20260821_155930/models/can/mesh/can.obj
-  sprite: /home/throne/workspaces/fp_release_20260821_155930/models/can2/mesh/can.obj
-  banana: /home/throne/workspaces/fp_release_20260821_155930/models/banana/mesh/banana.glb
-  red_apple: /home/throne/workspaces/fp_release_20260821_155930/models/apple/mesh/apple.glb
-  green_apple: /home/throne/workspaces/fp_release_20260821_155930/models/apple/mesh/apple.glb
-  orange: ''
+  wangzai: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/can/mesh/can.obj
+  sprite: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/can2/mesh/can.obj
+  banana: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/banana/mesh/banana.glb
+  apple: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/apple/mesh/apple.obj
+  orange: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/orange/mesh/orange_fixed.obj
+  lemon: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/lemon/mesh/lemon.obj
+  red_apple: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/apple/mesh/apple.obj
+  green_apple: /home/throne/workspaces/arm/tool/arm_project_20260822/fp_release_20260821_155930/models/apple/mesh/apple.obj
   bottle: ''
 
 object_model_scales:
   wangzai: 0.001
   sprite: 0.001
   banana: 1.0
-  red_apple: 1.0
-  green_apple: 1.0
+  apple: 0.0213
+  orange: 1.0
+  lemon: 0.0343
+  red_apple: 0.0213
+  green_apple: 0.0213
 
 yolo_to_object:
+  apple: apple
   orange: orange
-  banana: banana
-  red_apple: red_apple
-  green_apple: green_apple
-  bottle: bottle
-  can: sprite
+  lemon: lemon
+  red_can: sprite
+  green_can: sprite
+  brown_bottle: bottle
+  black_cola_bottle: bottle
 
 grasp_rules:
   wangzai: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
   sprite: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
   orange: {type: sphere, offset_mm: 0.0, yaw_align: any}
   banana: {type: elongated, offset_mm: 0.0, yaw_align: "y+"}
+  apple: {type: sphere, offset_mm: 0.0, yaw_align: any}
   red_apple: {type: sphere, offset_mm: 0.0, yaw_align: any}
   green_apple: {type: sphere, offset_mm: 0.0, yaw_align: any}
+  lemon: {type: elongated, offset_mm: 0.0, yaw_align: "y+"}
   bottle: {type: cylinder, offset_mm: 5.0, yaw_align: "y+"}
 
 pipeline:
   default_object: sprite
-  target_label: null
+  target_label: lemon
   force_object: null
   tag_size_mm: 80.0
   yolo_conf: 0.85

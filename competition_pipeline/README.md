@@ -271,6 +271,28 @@ python3 -m competition_pipeline.cli hand-eye-target \
 `SafeRobotController` 默认 `dry_run: true`
 且禁止运动，必须在现场完成独立安全联锁验收后再打开。
 
+## 柠檬视觉抓取演示
+
+“控制器/TCP 测试”页的视觉抓取面板使用 U 盘备份中的新 YOLO 权重和
+柠檬 CAD，坐标只使用眼在手上链路：
+
+```text
+T_user1_object = T_user1_tcp × T_tcp_color_camera × T_camera_object
+```
+
+操作顺序：
+
+1. 连接 OAK，确认实体急停有效，勾选运动授权；
+2. 把柠檬放在用户坐标系原点，点“回复位点并识别柠檬”；
+3. 程序只计算并显示物体、抓取 TCP、放置 TCP 坐标，此时不执行抓取；
+4. 原点误差、YOLO 置信度、Depth 覆盖率和工作空间校验全部通过后，
+   点“确认执行视觉抓取”并在弹窗再次确认；
+5. 机器人抓取后将抓取坐标沿用户系 `Y-` 平移 50 mm 作为放置点，
+   放置撤离后自动回复位点，保证下一轮满足控制器“安全使能”的起始条件。
+
+视觉计划默认 60 s 过期，且坐标框被人工修改后必须重新识别。所有参数在
+`config/competition.yaml` 的 `visual_grasp_demo` 中。
+
 UR5e+Robotiq 的开源仿真、上游复现、比赛 bridge 和闭环执行说明见 `sim/README.md`。
 
 真实控制器的基础通信边界见

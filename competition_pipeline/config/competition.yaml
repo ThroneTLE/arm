@@ -351,6 +351,20 @@ grasp_execution:
   minimum_verified_lift_mm: 30.0
   placement_tolerance_mm: 80.0
   maximum_object_pose_age_s: 0.5
+visual_grasp_demo:
+  visual_config: ../../tool/visual_grasp_pipeline/config/visual_grasp_pipeline.yaml
+  foundationpose_python: /home/throne/miniconda3/envs/foundationpose/bin/python
+  target_label: lemon
+  reset_before_capture: true
+  place_offset_user_mm: [0.0, -50.0, 0.0]
+  origin_xy_tolerance_mm: 50.0
+  minimum_depth_coverage: 0.15
+  maximum_depth_center_delta_mm: 80.0
+  maximum_plan_age_s: 60.0
+  lift_mm: 80.0
+  speed_mm_s: 50.0
+  arrival_tolerance_mm: 2.0
+  arrival_rotation_tolerance_deg: 3.0
 hand_eye:
   calibration_target:
     type: checkerboard
