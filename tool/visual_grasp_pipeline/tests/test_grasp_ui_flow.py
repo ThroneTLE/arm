@@ -114,13 +114,20 @@ class _FakeSelf:
     """带齐 _grasp_worker 需要的属性，不牵扯 Tk。"""
 
     def __init__(self):
+        from competition_pipeline.place_layout import PlaceLayout
+
         self.ui_queue = queue.Queue()
         self._jog = FakeJog()
         self._live_reader = None
         self._competition_yaml = "unused-because-jog-is-preset"
         self._controller_host = ""
-        self.place_x_mm = -100.0
-        self.place_y_mm = 100.0
+        self._place_layout = PlaceLayout(
+            origin_xy_mm=(-170.0, 170.0), direction=(0.0, -1.0),
+            pitch_mm=100.0, count=4, exclusion_radius_mm=45.0,
+        )
+        self._occupied_slots = []
+        self.place_x_mm = -170.0
+        self.place_y_mm = 170.0
 
     def _grasp_error_with_hint(self, error):
         return OakVisionNode._grasp_error_with_hint(self, error)
@@ -175,12 +182,56 @@ class GraspWorkerGlueTest(unittest.TestCase):
         joined = " ".join(str(item[1]) for item in messages if item[0] == "status")
         self.assertIn("未发送运动", joined)
 
-    def test_the_runner_gets_the_configured_place_point(self):
+    def test_the_runner_gets_the_next_free_place_slot(self):
         self._run(dry_run=True)
         self.assertEqual(len(FakeRunner.instances), 1)
         runner = FakeRunner.instances[0]
-        self.assertAlmostEqual(runner.place_x_mm, -100.0)
-        self.assertAlmostEqual(runner.place_y_mm, 100.0)
+        self.assertAlmostEqual(runner.place_x_mm, -170.0)
+        self.assertAlmostEqual(runner.place_y_mm, 170.0)
+
+    def test_a_successful_place_advances_to_the_next_slot(self):
+        """连抓多个时必须换槽位；都放同一点会堆叠，第二个落在第一个上面必倒。"""
+        target = _FakeSelf()
+        for expected_slot, expected_y in enumerate((170.0, 70.0, -30.0)):
+            with self.subTest(slot=expected_slot):
+                FakeRunner.instances = []
+                OakVisionNode._grasp_worker(target, [0.0, 0.0, 60.0], False)
+                runner = FakeRunner.instances[0]
+                self.assertAlmostEqual(runner.place_y_mm, expected_y)
+                self.assertEqual(
+                    target._occupied_slots, list(range(expected_slot + 1))
+                )
+
+    def test_a_dry_run_does_not_consume_a_slot(self):
+        """dry-run 没真放东西。占用槽位会让下一次跳过一个空位。"""
+        target = _FakeSelf()
+        OakVisionNode._grasp_worker(target, [0.0, 0.0, 60.0], True)
+        self.assertEqual(target._occupied_slots, [])
+
+    def test_a_failed_run_does_not_consume_a_slot(self):
+        """失败也没放成。占了槽位会把空位当成"已放置"，后续目标被误剔除。"""
+        target = _FakeSelf()
+
+        original_init = FakeRunner.__init__
+
+        def _init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            self.raises = UcsGraspExecutorError("控制器拒绝")
+
+        FakeRunner.__init__ = _init
+        try:
+            OakVisionNode._grasp_worker(target, [0.0, 0.0, 60.0], False)
+        finally:
+            FakeRunner.__init__ = original_init
+        self.assertEqual(target._occupied_slots, [])
+
+    def test_running_out_of_slots_is_reported_instead_of_wrapping(self):
+        target = _FakeSelf()
+        target._occupied_slots = [0, 1, 2, 3]
+        OakVisionNode._grasp_worker(target, [0.0, 0.0, 60.0], False)
+        errors = [item[1] for item in target.drain() if item[0] == "error"]
+        self.assertTrue(errors)
+        self.assertIn("放置区已经用满", errors[0][1])
 
     def test_a_safety_error_is_surfaced_as_an_error_dialog(self):
         _target, messages = self._run(

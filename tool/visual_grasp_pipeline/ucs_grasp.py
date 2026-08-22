@@ -51,9 +51,11 @@ import yaml
 TABLE_HALF_MM = 246.5
 
 #: 放置点默认值（用户坐标系1, mm）；Z 由抓取几何决定（见 build_ucs_grasp_plan）。
-#: 放在**X 负半边的左侧**：X 负 = 桌子近端，Y 正 = 左方。远离杂物堆放区。
-UCS_PLACE_X_MM = -100.0
-UCS_PLACE_Y_MM = 100.0
+#: 既是单目标放置点，也是多目标的第 0 号槽位（见
+#: :mod:`competition_pipeline.place_layout`）。放在 X 负半轴**外侧**的近端左角，
+#: 远离桌面中央杂物区，减少"放好的物体挡住还没抓的目标"。
+UCS_PLACE_X_MM = -170.0
+UCS_PLACE_Y_MM = 170.0
 
 #: 安全硬限（用户坐标系1, mm）。XY 收到桌面范围内 —— 目标点跑出桌子一定是错的。
 SAFE_XY_MM = TABLE_HALF_MM

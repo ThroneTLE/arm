@@ -315,6 +315,14 @@ def load_hand_eye_tcp_from_camera(competition_yaml: Path) -> np.ndarray:
     )
 
 
+def load_place_layout(competition_yaml: Path):
+    """读 competition.yaml 的 ``workspace`` 段构建放置槽位布局。"""
+    from competition_pipeline.place_layout import layout_from_config
+
+    data = yaml.safe_load(competition_yaml.read_text(encoding="utf-8")) or {}
+    return layout_from_config(data.get("workspace"))
+
+
 def load_gripper_geometry(competition_yaml: Path) -> dict:
     """读 competition.yaml 的 ``gripper_geometry``；缺省用 grasp_geometry 的默认值。"""
     from competition_pipeline.grasp_geometry import (
@@ -441,6 +449,67 @@ def apply_grasp_height_rule(user1_grasp, user1_from_object, mesh_bounds_m,
         "cloud_points_used": cloud_points_used,
         "reasons": reasons,
     }
+
+
+def display_to_image_pixel(click_xy, label_size, displayed_size, image_size):
+    """把在 Tk Label 上的点击换算成原图像素；点在图外返回 ``None``。
+
+    ``_show_image`` 会把画面等比缩小到 920x690 以内，而 ``tk.Label`` 又会把图片
+    在自己的区域里**居中**。所以点击坐标要先减去居中留白，再除以缩放比 —— 少做
+    任何一步，点到的物体都会系统性偏移。
+
+    参数都是 ``(宽, 高)``。``displayed_size`` 是缩放后实际贴出来的尺寸。
+    """
+    click_x, click_y = float(click_xy[0]), float(click_xy[1])
+    label_w, label_h = float(label_size[0]), float(label_size[1])
+    shown_w, shown_h = float(displayed_size[0]), float(displayed_size[1])
+    image_w, image_h = float(image_size[0]), float(image_size[1])
+    if shown_w <= 0 or shown_h <= 0 or image_w <= 0 or image_h <= 0:
+        return None
+    offset_x = max(0.0, (label_w - shown_w) / 2.0)
+    offset_y = max(0.0, (label_h - shown_h) / 2.0)
+    local_x = click_x - offset_x
+    local_y = click_y - offset_y
+    if not (0.0 <= local_x < shown_w and 0.0 <= local_y < shown_h):
+        return None
+    return (
+        int(local_x * image_w / shown_w),
+        int(local_y * image_h / shown_h),
+    )
+
+
+def pick_object_at_pixel(objects, x, y):
+    """返回包含该像素的检测框下标；没有则 ``None``。
+
+    多个框重叠时取**面积最小**的那个。赛题第二/三档正是遮挡场景：水果压在瓶子
+    前面时两个框重叠，点瓶子露出来的上半部分应该选到瓶子，而"最小框"在这种
+    情况下选的就是点中的那个更贴身的目标。
+    """
+    best_index = None
+    best_area = None
+    for index, item in enumerate(objects or []):
+        box = item.get("xyxy")
+        if not box or len(box) < 4:
+            continue
+        x1, y1, x2, y2 = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+        if not (x1 <= x <= x2 and y1 <= y <= y2):
+            continue
+        area = max(1, (x2 - x1)) * max(1, (y2 - y1))
+        if best_area is None or area < best_area:
+            best_area = area
+            best_index = index
+    return best_index
+
+
+def sort_objects_for_picking(objects):
+    """按置信度从高到低排序，返回 ``(排序后的列表, 原下标列表)``。
+
+    下拉框原来按检测顺序排、默认选中第 0 个 —— 那个"第 0 个"跟置信度无关，
+    操作者不看清楚就点，很容易算了个不想要的目标。
+    """
+    indexed = list(enumerate(objects or []))
+    indexed.sort(key=lambda pair: float(pair[1].get("conf", 0.0)), reverse=True)
+    return [item for _index, item in indexed], [index for index, _item in indexed]
 
 
 def format_grasp_summary(grasp_xyz_mm, place_xyz_mm, info, jaw_cavity_depth_mm):
@@ -829,7 +898,14 @@ class OakVisionNode:
         self._last_place_xyz_mm = None
         #: 最近一次抓取高度后处理的说明（见 apply_grasp_height_rule）
         self._last_grasp_height_info = None
+        #: 点图选物用：原图尺寸与实际贴出尺寸（_show_image 会更新）
+        self._image_size = (0, 0)
+        self._displayed_size = (0, 0)
         self._gripper_geometry = load_gripper_geometry(competition_yaml)
+        # 多物体放置：每放一个前进一格，避免堆叠(会倒，违反"放置时需要直立")；
+        # 已占用槽位附近的检测结果不再当作抓取目标，避免把刚放好的又抓回来。
+        self._place_layout = load_place_layout(competition_yaml)
+        self._occupied_slots = []
         self._hand_eye = load_hand_eye_tcp_from_camera(competition_yaml)
         self._live_reader = None
         self._tcp_user1 = None
@@ -935,10 +1011,28 @@ class OakVisionNode:
         self.capture_button.pack(side="left")
         self.object_combo = ttk.Combobox(toolbar, state="readonly", width=28)
         self.object_combo.pack(side="left", padx=8)
-        ttk.Button(toolbar, text="＋加入序列", command=self.on_add).pack(side="left")
+        # 两条路径都要顺手：
+        #   单目标 —— 点画面选中 -> 【计算选中目标】
+        #   多目标 —— 双击画面逐个加入序列 -> 【开始算法序列】
+        self.compute_button = ttk.Button(
+            toolbar, text="计算选中目标", command=self.on_compute_selected
+        )
+        self.compute_button.pack(side="left")
+        ttk.Button(toolbar, text="＋加入序列", command=self.on_add).pack(
+            side="left", padx=(16, 0)
+        )
+        ttk.Button(toolbar, text="− 撤销末项", command=self.on_undo).pack(
+            side="left"
+        )
         ttk.Button(toolbar, text="清空序列", command=self.on_clear).pack(
             side="left", padx=8
         )
+        ttk.Button(
+            toolbar, text="重置放置区", command=self.on_reset_place_slots
+        ).pack(side="left")
+        ttk.Label(
+            toolbar, text="提示：单击画面选中物体，双击加入序列"
+        ).pack(side="left", padx=8)
 
         sequence_row = ttk.Frame(self.root, padding=(10, 0, 10, 8))
         sequence_row.pack(fill="x")
@@ -974,6 +1068,9 @@ class OakVisionNode:
         content.pack(fill="both", expand=True)
         self.image_label = tk.Label(content, bg="#11181c")
         self.image_label.pack(side="left", fill="both", expand=True)
+        # 单击选中、双击加入序列（映射由 display_to_image_pixel 负责）
+        self.image_label.bind("<Button-1>", self.on_image_click)
+        self.image_label.bind("<Double-Button-1>", self.on_image_double_click)
         self.image3d_label = tk.Label(content, bg="#14171a")
         self.image3d_label.pack(side="left", fill="both", expand=True, padx=(10, 0))
         result_frame = ttk.Frame(content, width=410)
@@ -1092,6 +1189,29 @@ class OakVisionNode:
         self.sequence_items.append("{}#{}".format(item["name"], item.get("id")))
         self.sequence_entry.delete(0, tk.END)
         self.sequence_entry.insert(0, ", ".join(self.sequence_items))
+
+    def _next_place_slot_xy(self):
+        """下一个空槽位的 XY。用满时抛 ``IndexError``（不回绕，回绕会堆叠）。"""
+        return self._place_layout.slot_xy_mm(len(self._occupied_slots))
+
+    def on_reset_place_slots(self):
+        """把放置区标记为已清空 —— 手动把放好的物体拿走之后点这个。"""
+        count = len(self._occupied_slots)
+        self._occupied_slots = []
+        self.status.configure(
+            text="放置区已重置（原有 {} 个占用），下次从 0 号槽位开始".format(count)
+        )
+
+    def on_undo(self):
+        """撤销序列末项 —— 点错一个不必整条清空重来。"""
+        if not self.sequence_items:
+            self.status.configure(text="序列已经是空的")
+            return
+        removed = self.sequence_items.pop()
+        self.sequence_entry.delete(0, tk.END)
+        self.sequence_entry.insert(0, ", ".join(self.sequence_items))
+        self.status.configure(text="已移除 {}；当前序列 {} 项".format(
+            removed, len(self.sequence_items)))
 
     def on_clear(self):
         self.sequence_items = []
@@ -1482,6 +1602,20 @@ class OakVisionNode:
                     ).tolist()
                     info = self._last_grasp_height_info or {}
                     blocked = list(info.get("reasons") or [])
+                    # 重新拍照时刚放好的物体还在桌上，会被再检测一遍。落在已占用
+                    # 槽位附近的，不能再当抓取目标 —— 否则会把自己刚放好的又抓回来。
+                    from competition_pipeline.place_layout import (
+                        is_in_placed_region,
+                    )
+                    if is_in_placed_region(
+                        grasp[:2], self._place_layout, self._occupied_slots
+                    ):
+                        blocked.append(
+                            "该目标位于**已放置区域**（槽位 {}），是本轮已经放好的物体，"
+                            "不再重复抓取。若已把它拿走，请点【重置放置区】。".format(
+                                self._occupied_slots
+                            )
+                        )
                     if not info.get("available", False):
                         # 没有物体尺寸就无法保证伸入深度不超过腔体 —— 那正是压爆
                         # 的成因，宁可不放行也不要"尽力而为"。
@@ -1547,7 +1681,12 @@ class OakVisionNode:
             )
             return
         grasp = list(self._last_grasp_xyz_mm)
-        place = [self.place_x_mm, self.place_y_mm, float(grasp[2])]
+        try:
+            place_xy = self._next_place_slot_xy()
+        except IndexError as error:
+            messagebox.showerror("放置区已满", str(error), parent=self.root)
+            return
+        place = [place_xy[0], place_xy[1], float(grasp[2])]
         dry_run = not self.enable_robot_motion
         if dry_run:
             proceed = messagebox.askokcancel(
@@ -1602,18 +1741,27 @@ class OakVisionNode:
                     host=self._controller_host,
                     controller=shared_controller,
                 )
+            slot_index = len(self._occupied_slots)
+            place_xy = self._place_layout.slot_xy_mm(slot_index)
             runner = UcsGraspRunner(
                 self._jog,
-                place_x_mm=self.place_x_mm,
-                place_y_mm=self.place_y_mm,
+                place_x_mm=place_xy[0],
+                place_y_mm=place_xy[1],
                 on_event=lambda message: self.ui_queue.put(("status", message)),
             )
             result = runner.execute(grasp_mm, dry_run=dry_run)
             if result["status"] == "ok":
+                # 只有真的放成功才占用槽位；dry-run 与失败都不推进，
+                # 否则下一次会跳过一个空位、并把没放东西的地方当成"已放置"。
+                self._occupied_slots.append(slot_index)
+                remaining = self._place_layout.count - len(self._occupied_slots)
                 self.ui_queue.put((
                     "status",
-                    "✅ 抓取-放置完成，已回到复位位置；放置实际 XYZ(mm)={}".format(
-                        np.round(result["place_xyz_mm"], 2).tolist()
+                    "✅ 抓取-放置完成，已回到复位位置；放置实际 XYZ(mm)={}"
+                    "；已用槽位 {}/{}，还剩 {} 个".format(
+                        np.round(result["place_xyz_mm"], 2).tolist(),
+                        len(self._occupied_slots), self._place_layout.count,
+                        remaining,
                     ),
                 ))
             else:
@@ -1652,7 +1800,8 @@ class OakVisionNode:
         threading.Thread(target=_stop, daemon=True).start()
 
     def _show_image(self, frame):
-        rgb = cv2.cvtColor(np.asarray(frame), cv2.COLOR_BGR2RGB)
+        source = np.asarray(frame)
+        rgb = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(rgb)
         max_width, max_height = 920, 690
         scale = min(max_width / image.width, max_height / image.height, 1.0)
@@ -1663,6 +1812,63 @@ class OakVisionNode:
         photo = ImageTk.PhotoImage(image)
         self.image_label.configure(image=photo)
         self.image_label.image = photo
+        # 点图选物要用：原图尺寸 + 实际贴出来的尺寸（见 display_to_image_pixel）
+        self._image_size = (source.shape[1], source.shape[0])
+        self._displayed_size = (image.width, image.height)
+
+    def on_image_click(self, event):
+        """点画面里的物体直接选中它 —— 不用在下拉框里对号入座。"""
+        if not self.objects:
+            self.status.configure(text="先点【拍照识别】")
+            return
+        pixel = display_to_image_pixel(
+            (event.x, event.y),
+            (self.image_label.winfo_width(), self.image_label.winfo_height()),
+            self._displayed_size,
+            self._image_size,
+        )
+        if pixel is None:
+            return
+        index = pick_object_at_pixel(self.objects, pixel[0], pixel[1])
+        if index is None:
+            self.status.configure(text="该位置没有检测到物体，请点在识别框内")
+            return
+        self.object_combo.current(index)
+        item = self.objects[index]
+        self.status.configure(text="已选中 {} #{}（置信度 {:.3f}）— 点【计算选中目标】"
+                                   "，或双击画面加入序列".format(
+            item["name"], item.get("id"), float(item.get("conf", 0.0))
+        ))
+        return index
+
+    def on_image_double_click(self, event):
+        """双击画面里的物体 = 选中并加入序列，用来快速排多目标顺序。"""
+        if self.on_image_click(event) is None:
+            return
+        self.on_add()
+
+    def on_compute_selected(self):
+        """只算当前选中的这一个目标，不经过"序列"。
+
+        比赛每一档只抓一个物体，"下拉选物 -> ＋加入序列 -> 开始算法序列"这两步
+        纯属多余。这里一步到位。
+        """
+        if self.busy:
+            return
+        index = self.object_combo.current()
+        if index < 0 or index >= len(self.objects):
+            self.status.configure(text="先点【拍照识别】，再点画面里的物体")
+            return
+        item = self.objects[index]
+        sequence = [(item["name"], item.get("id"))]
+        self.sequence_items = ["{}#{}".format(item["name"], item.get("id"))]
+        self.sequence_entry.delete(0, tk.END)
+        self.sequence_entry.insert(0, ", ".join(self.sequence_items))
+        self._set_busy(True, "计算 {} #{} 的用户1坐标……".format(
+            item["name"], item.get("id")))
+        threading.Thread(
+            target=self._sequence_worker, args=(sequence,), daemon=True
+        ).start()
 
     def _show_image_3d(self, frame):
         """显示 3D 工作台视图(用户1坐标系), 同旧版 vision_node 的右侧 3D 画面。"""
@@ -1698,7 +1904,10 @@ class OakVisionNode:
                     ]
                     self.object_combo["values"] = labels
                     if labels:
-                        self.object_combo.current(0)
+                        # 默认选置信度最高的那个。原来选的是检测顺序第 0 个，
+                        # 跟置信度无关，操作者不看清楚就点很容易算错目标。
+                        _sorted, original = sort_objects_for_picking(self.objects)
+                        self.object_combo.current(original[0])
                 elif kind == "result":
                     self.result_text.delete("1.0", tk.END)
                     self.result_text.insert("1.0", value)
